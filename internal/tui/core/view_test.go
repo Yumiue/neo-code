@@ -59,7 +59,7 @@ func TestViewShowsSmallWindowMessage(t *testing.T) {
 }
 
 func TestViewRendersHelpPanelInHelpMode(t *testing.T) {
-	m := NewModel(fakeChatClient{}, "persona", 6, "config.yaml", "workspace")
+	m := NewModel(&fakeChatClient{}, "persona", 6, "config.yaml", "workspace")
 	m.ui.Width = 80
 	m.ui.Height = 30
 	m.ui.Mode = state.ModeHelp

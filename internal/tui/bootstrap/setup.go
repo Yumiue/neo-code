@@ -19,19 +19,27 @@ const (
 	setupExit
 )
 
+var (
+	resolveWorkspaceRoot = services.ResolveWorkspaceRoot
+	setWorkspaceRoot     = services.SetWorkspaceRoot
+	ensureConfigFile     = configs.EnsureConfigFile
+	validateChatAPIKey   = services.ValidateChatAPIKey
+	writeAppConfig       = configs.WriteAppConfig
+)
+
 func PrepareWorkspace(workspaceFlag string) (string, error) {
-	workspaceRoot, err := services.ResolveWorkspaceRoot(workspaceFlag)
+	workspaceRoot, err := resolveWorkspaceRoot(workspaceFlag)
 	if err != nil {
 		return "", err
 	}
-	if err := services.SetWorkspaceRoot(workspaceRoot); err != nil {
+	if err := setWorkspaceRoot(workspaceRoot); err != nil {
 		return "", err
 	}
 	return workspaceRoot, nil
 }
 
 func EnsureAPIKeyInteractive(ctx context.Context, scanner *bufio.Scanner, configPath string) (bool, error) {
-	cfg, created, err := configs.EnsureConfigFile(configPath)
+	cfg, created, err := ensureConfigFile(configPath)
 	if err != nil {
 		return false, err
 	}
@@ -54,8 +62,8 @@ func EnsureAPIKeyInteractive(ctx context.Context, scanner *bufio.Scanner, config
 			continue
 		}
 
-		if err := services.ValidateChatAPIKey(ctx, cfg); err == nil {
-			if saveErr := configs.WriteAppConfig(configPath, cfg); saveErr != nil {
+		if err := validateChatAPIKey(ctx, cfg); err == nil {
+			if saveErr := writeAppConfig(configPath, cfg); saveErr != nil {
 				return false, saveErr
 			}
 			configs.GlobalAppConfig = cfg
@@ -137,7 +145,7 @@ func handleSetupDecision(scanner *bufio.Scanner, cfg *configs.AppConfiguration, 
 				fmt.Println("/continue 仅在网络或服务问题导致无法确认时可用。")
 				continue
 			}
-			if saveErr := configs.WriteAppConfig(configPath, cfg); saveErr != nil {
+			if saveErr := writeAppConfig(configPath, cfg); saveErr != nil {
 				return setupExit, saveErr
 			}
 			fmt.Println("继续启动，使用当前 API key 和模型。")
