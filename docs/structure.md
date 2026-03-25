@@ -1,14 +1,14 @@
 ### 一、 整体架构设计说明
 本架构采用 “契约驱动 + 领域解耦” 的设计思路：
 
-1. 物理隔离解耦 ：后端服务（Server）与终端客户端（TUI）在 internal 目录下物理分离。TUI 严禁调用后端业务逻辑，仅通过 api/proto 定义的契约进行通信。
+1. 物理隔离解耦 ：后端服务（Server）与终端客户端（TUI）在 internal 目录下物理分离。当前 TUI 通过 `internal/tui/services` 统一适配后端能力；`core`/`components` 不直接依赖 `internal/server` 的具体实现。
 2. 四层分层模型 ：后端遵循 Transport -> Service -> Domain <- Infra 。利用 依赖倒置（DIP） ，核心业务逻辑（Domain）定义接口，基础设施（Infra）实现接口，彻底规避新手常见的“代码一锅端”和循环依赖。
 3. 约束重于灵活 ：通过 internal 目录特性保护核心代码，确保所有组件必须显式依赖接口。这种结构天然支持单元测试（Mocking），且代码流向单一（自顶向下），极大地降低了心智负担。
 
 ### 二、 完整项目目录树结构
 
-    - api/                # API 契约：定义前后端通信协议 (.proto, .yaml)
-        - proto/            # gRPC/Protobuf 原始定义文件，暂时不使用，保留等待迭代
+    - api/                # API 契约：保留未来远程通信所需的协议定义
+        - proto/            # Protobuf 契约与生成结果
     - cmd/                # 程序入口：仅负责依赖注入与启动，不含业务逻辑
         - server/           # 后端服务入口 (main.go)
         - tui/              # TUI 客户端入口 (main.go)
@@ -21,9 +21,11 @@
             - transport/      # 接入层：gRPC/HTTP/LSP 路由与参数解析，暂时不使用，保留等待迭代
             - infra/          # 基础设施：LLM 适配器、数据库、代码仓库实现
         - tui/              # TUI 客户端核心
+            - bootstrap/      # 启动准备、工作区与配置装配
             - core/           # 状态管理：Bubble Tea Model 与消息循环
+            - state/          # 纯状态定义
             - components/     # UI 组件：可复用的终端视图组件
-            - infra/          # 通信实现：后端 API 的 gRPC 客户端封装
+            - services/       # 本地服务适配、工具桥接与工作区能力
         - pkg/              # 内部公共库：仅限本项目内部使用的通用工具
     - pkg/                # 外部公共库：可被其他项目引用的通用工具 (如 Logger)
     - scripts/            # 脚本：编译、Proto 生成、代码质量检查
@@ -47,7 +49,7 @@
 - 【禁止规则】 ：禁止出现具体的数据库 SQL 或 HTTP 请求代码。
 - 【依赖规则】 ：依赖 domain 。 
 4. internal/tui/core (TUI 状态机)
-- 【目录职责】 ：基于 Bubble Tea 的 ELM 架构，管理终端交互的全局状态。
-- 【准入规则】 ：存放 Update 、 View 、 Model 函数。
-- 【禁止规则】 ：禁止直接编写复杂的 UI 渲染代码（应拆分到 components）。
-- 【依赖规则】 ：依赖 tui/components 和 tui/infra （API 客户端）。
+- 【目录职责】 ：基于 Bubble Tea 的 ELM 架构，管理终端交互、流式响应、工具调用和命令解析。
+- 【准入规则】 ：存放 Update、View、Model 以及内部消息定义。
+- 【禁止规则】 ：禁止直接依赖 `internal/server/...`；复杂 UI 渲染应拆分到 `components`。
+- 【依赖规则】 ：依赖 `tui/components`、`tui/state` 和 `tui/services`。

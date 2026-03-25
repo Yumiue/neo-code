@@ -3,8 +3,10 @@
 ## Project Structure & Module Organization
 - `cmd/tui/main.go` 是TUI模式的主要入口，负责初始化配置和启动终端用户界面。
 - `cmd/server/main.go` 是服务器模式的入口，用于验证服务组装，目前仅作为占位符存在。
+- `internal/tui/bootstrap/` 负责TUI启动前准备，包括工作区解析、配置初始化和程序装配。
 - `internal/tui/core/` 包含TUI的核心逻辑，实现了Bubble Tea ELM架构（Model-Update-View）。
-- `internal/tui/infra/` 包含TUI的基础设施层，负责与后端服务交互。
+- `internal/tui/state/` 保存TUI纯状态结构，如聊天历史、窗口尺寸和运行时标记。
+- `internal/tui/services/` 提供TUI的本地服务适配层，负责组装后端 service/provider/repository/tools 并暴露统一接口。
 - `internal/server/domain/` 定义了核心领域模型和接口，遵循依赖倒置原则。
 - `internal/server/service/` 实现了应用服务层，负责编排业务流程。
 - `internal/server/infra/provider/` 包含具体的外部服务提供方实现，如ModelScopeProvider。
