@@ -14,15 +14,37 @@ NeoCode 是一个基于 Go 和 Bubble Tea 构建的本地 Coding Agent MVP。它
 - 至少一个可用的模型 Provider API Key，例如 `OPENAI_API_KEY`
 
 ## 快速开始
-1. 克隆仓库。
+
+### 一键开箱即用（推荐，无需 Go 环境）
+无论你是哪种操作系统，只需在终端执行一行命令，即可自动下载并配置好 NeoCode：
+
+**Linux / macOS 用户：**
+
+```bash
+curl -sSL [https://raw.githubusercontent.com/1024XEngineer/neocode/main/install.sh](https://raw.githubusercontent.com/1024XEngineer/neocode/main/install.sh) | bash
+```
+
+**Windows 用户 (在 PowerShell 中运行)：**
+
+```PowerShell
+irm [https://raw.githubusercontent.com/1024XEngineer/neocode/main/install.ps1](https://raw.githubusercontent.com/1024XEngineer/neocode/main/install.ps1) | iex
+```
+
+### 源码运行（面向开发者）
+
+如果你希望参与二次开发，可以从源码启动：
+
+1. 确保已安装 Go 1.21 及以上环境，然后克隆仓库。
 2. 准备 Provider 的 API Key，可以通过环境变量或 NeoCode 托管的 `.env` 文件提供。
 3. 运行应用：
 
-```bash
+```Bash
 go run ./cmd/neocode
 ```
 
 首次启动时，NeoCode 会在当前用户主目录下创建自己的托管目录、默认配置和会话存储结构。
+
+
 
 ## Slash Command
 - `/set url <url>`：更新当前选中 Provider 的 Base URL。
