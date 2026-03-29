@@ -49,6 +49,55 @@ tool_timeout_sec: 20
 - `/provider`：打开 provider 选择器。
 - `/model`：打开当前 provider 的模型选择器。
 
+
+
+## 安装指南 (快速开始)
+
+NeoCode 提供了极其原生的系统级安装体验，真正的开箱即用（无需 Go 环境）。请根据你的操作系统选择最适合的安装方式：
+
+### 🍎 macOS / Linux (推荐 Homebrew)
+
+对于习惯使用 Homebrew 的用户，只需一行命令即可接入官方 Tap 并安装：
+
+```bash
+brew install 1024XEngineer/homebrew-neocode/neocode
+```
+
+### 🪟 Windows (推荐 Scoop)
+
+对于 Windows 极客玩家，我们提供了官方的 Scoop 分发源：
+
+```PowerShell
+scoop bucket add neocode https://github.com/1024XEngineer/scoop-bucket.git
+scoop install neocode
+```
+
+### 🐧 Ubuntu / Debian (.deb)
+
+前往项目的 [Releases 页面](https://www.google.com/search?q=https://github.com/pionxe/neo-code/releases) 下载最新版本的 `.deb` 安装包，然后在终端执行：
+
+```Bash
+sudo dpkg -i neo-code_*_linux_amd64.deb
+```
+
+### 🚀 兜底方案：一键安装脚本
+
+如果你的系统没有安装上述包管理器，也可以使用我们提供的自动化脚本一键下载并配置：
+
+**Linux / macOS:**
+
+```Bash
+curl -sSL https://raw.githubusercontent.com/1024XEngineer/neo-code/main/scripts/install.sh | bash
+```
+
+**Windows (PowerShell):**
+
+```PowerShell
+irm https://raw.githubusercontent.com/1024XEngineer/neo-code/main/scripts/install.ps1 | iex
+```
+
+
+
 ## 运行
 
 ```bash
