@@ -60,10 +60,11 @@ func (r *Registry) ListSchemas() []provider.ToolSpec {
 func (r *Registry) Execute(ctx context.Context, input ToolCallInput) (ToolResult, error) {
 	tool, err := r.Get(input.Name)
 	if err != nil {
+		content := FormatError(input.Name, NormalizeErrorReason(input.Name, err), "")
 		return ToolResult{
 			ToolCallID: input.ID,
 			Name:       input.Name,
-			Content:    err.Error(),
+			Content:    content,
 			IsError:    true,
 		}, err
 	}
@@ -73,7 +74,7 @@ func (r *Registry) Execute(ctx context.Context, input ToolCallInput) (ToolResult
 	if execErr != nil {
 		result.IsError = true
 		if strings.TrimSpace(result.Content) == "" {
-			result.Content = execErr.Error()
+			result.Content = FormatError(result.Name, NormalizeErrorReason(result.Name, execErr), "")
 		}
 		return result, execErr
 	}
