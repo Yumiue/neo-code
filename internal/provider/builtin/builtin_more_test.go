@@ -10,7 +10,7 @@ import (
 	"neo-code/internal/provider/openai"
 )
 
-func TestRegister(t *testing.T) {
+func TestRegisterRegistersOpenAIDriver(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -44,14 +44,14 @@ func TestRegister(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if !tt.reg.Supports(openai.Name) {
-				t.Fatalf("expected registry to support %q", openai.Name)
+			if !tt.reg.Supports(openai.DriverName) {
+				t.Fatalf("expected registry to support %q", openai.DriverName)
 			}
 		})
 	}
 }
 
-func TestNewRegistry(t *testing.T) {
+func TestNewRegistryIncludesOpenAIDriver(t *testing.T) {
 	t.Parallel()
 
 	reg, err := NewRegistry()
@@ -61,8 +61,8 @@ func TestNewRegistry(t *testing.T) {
 	if reg == nil {
 		t.Fatal("expected registry")
 	}
-	if !reg.Supports(openai.Name) {
-		t.Fatalf("expected builtin registry to support %q", openai.Name)
+	if !reg.Supports(openai.DriverName) {
+		t.Fatalf("expected builtin registry to support %q", openai.DriverName)
 	}
 }
 
@@ -76,7 +76,7 @@ func TestNewRegistryBuildsRegisteredDriver(t *testing.T) {
 
 	_, err = reg.Build(context.Background(), config.ResolvedProviderConfig{
 		ProviderConfig: config.ProviderConfig{
-			Driver: openai.Name,
+			Driver: openai.DriverName,
 		},
 	})
 	if err == nil {
