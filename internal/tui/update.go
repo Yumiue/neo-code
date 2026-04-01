@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -139,18 +138,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, tea.Batch(cmds...)
 		}
 		if key.Matches(typed, a.keys.NewSession) && !a.state.IsAgentRunning {
-			a.state.ActiveSessionID = ""
-			a.state.ActiveSessionTitle = draftSessionTitle
-			a.activeMessages = nil
-			a.state.StatusText = statusDraft
-			a.state.ExecutionError = ""
-			a.state.CurrentTool = ""
-			a.input.Reset()
-			a.state.InputText = ""
-			a.focus = panelInput
-			a.applyFocus()
-			a.resizeComponents()
-			a.rebuildTranscript()
+			a.startDraftSession()
 			return a, tea.Batch(cmds...)
 		}
 
@@ -194,8 +182,15 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 		a.state.InputText = ""
 		a.resizeComponents()
 
+		if handled, cmd := a.handleImmediateSlashCommand(input); handled {
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			return a, tea.Batch(cmds...)
+		}
+
 		switch strings.ToLower(input) {
-		case slashCommandProviderPick:
+		case slashCommandProvider:
 			if err := a.refreshProviderPicker(); err != nil {
 				a.state.ExecutionError = err.Error()
 				a.state.StatusText = err.Error()
@@ -205,7 +200,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			}
 			a.openProviderPicker()
 			return a, tea.Batch(cmds...)
-		case slashCommandModelPicker:
+		case slashCommandModelPick:
 			if err := a.refreshModelPicker(); err != nil {
 				a.state.ExecutionError = err.Error()
 				a.state.StatusText = err.Error()
@@ -218,11 +213,8 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 		}
 
 		if strings.HasPrefix(input, slashPrefix) {
-			err := fmt.Sprintf("unknown command %q", input)
-			a.state.ExecutionError = err
-			a.state.StatusText = err
-			a.appendInlineMessage(roleError, err)
-			a.rebuildTranscript()
+			a.state.StatusText = statusApplyingCommand
+			cmds = append(cmds, runLocalCommand(a.configManager, a.providerSvc, input))
 			return a, tea.Batch(cmds...)
 		}
 
@@ -246,7 +238,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 	a.input, cmd = a.input.Update(msg)
 	a.state.InputText = a.input.Value()
 	a.normalizeComposerHeight()
-	a.resizeComponents()
+	a.resizeComposerLayout()
 	cmds = append(cmds, cmd)
 	return a, tea.Batch(cmds...)
 }
@@ -406,6 +398,11 @@ func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) {
 		if payload, ok := event.Payload.(string); ok {
 			a.appendAssistantChunk(payload)
 		}
+	case agentruntime.EventToolChunk:
+		if payload, ok := event.Payload.(string); ok && strings.TrimSpace(payload) != "" {
+			a.state.StatusText = statusRunningTool
+			a.appendInlineMessage(roleEvent, preview(payload, 88, 4))
+		}
 	case agentruntime.EventAgentDone:
 		a.state.IsAgentRunning = false
 		a.state.StreamingReply = false
@@ -527,8 +524,17 @@ func (a *App) applyFocus() {
 	a.input.Blur()
 }
 
+func (a *App) resizeComposerLayout() {
+	a.applyComponentLayout(false)
+}
+
 func (a *App) resizeComponents() {
+	a.applyComponentLayout(true)
+}
+
+func (a *App) applyComponentLayout(rebuildTranscript bool) {
 	lay := a.computeLayout()
+	prevTranscriptWidth := a.transcript.Width
 	a.help.ShowAll = a.state.ShowHelp
 	sidebarFrameWidth := a.styles.panelFocused.GetHorizontalFrameSize()
 	sidebarFrameHeight := a.styles.panelFocused.GetVerticalFrameSize()
@@ -543,7 +549,13 @@ func (a *App) resizeComponents() {
 	a.transcript.Height = max(6, lay.rightHeight-menuHeight-promptHeight)
 	a.providerPicker.SetSize(max(24, clamp(lay.rightWidth-14, 28, 52)), max(4, clamp(lay.rightHeight-10, 6, 10)))
 	a.modelPicker.SetSize(max(24, clamp(lay.rightWidth-14, 28, 52)), max(4, clamp(lay.rightHeight-10, 6, 10)))
-	a.rebuildTranscript()
+	if rebuildTranscript || prevTranscriptWidth != a.transcript.Width {
+		a.rebuildTranscript()
+		return
+	}
+	if a.transcript.AtBottom() || a.state.IsAgentRunning {
+		a.transcript.GotoBottom()
+	}
 }
 
 func (a App) composerBoxWidth(totalWidth int) int {
@@ -590,6 +602,48 @@ func (a *App) rebuildTranscript() {
 	if atBottom || a.state.IsAgentRunning {
 		a.transcript.GotoBottom()
 	}
+}
+
+func (a *App) handleImmediateSlashCommand(input string) (bool, tea.Cmd) {
+	command, _ := splitFirstWord(strings.ToLower(strings.TrimSpace(input)))
+	switch command {
+	case slashCommandExit:
+		return true, tea.Quit
+	case slashCommandClear:
+		a.startDraftSession()
+		a.state.StatusText = "[System] Cleared current draft/history."
+		return true, nil
+	case slashCommandUndo:
+		if len(a.activeMessages) == 0 {
+			a.state.StatusText = "[System] Nothing to undo."
+			return true, nil
+		}
+		a.activeMessages = a.activeMessages[:len(a.activeMessages)-1]
+		if len(a.activeMessages) == 0 {
+			a.state.ActiveSessionID = ""
+			a.state.ActiveSessionTitle = draftSessionTitle
+		}
+		a.state.StatusText = "[System] Removed the last local entry."
+		a.rebuildTranscript()
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
+func (a *App) startDraftSession() {
+	a.state.ActiveSessionID = ""
+	a.state.ActiveSessionTitle = draftSessionTitle
+	a.activeMessages = nil
+	a.state.StatusText = statusDraft
+	a.state.ExecutionError = ""
+	a.state.CurrentTool = ""
+	a.input.Reset()
+	a.state.InputText = ""
+	a.focus = panelInput
+	a.applyFocus()
+	a.resizeComponents()
+	a.rebuildTranscript()
 }
 
 func ListenForRuntimeEvent(sub <-chan agentruntime.RuntimeEvent) tea.Cmd {

@@ -332,7 +332,12 @@ func (a App) renderMessageContent(content string, width int, bodyStyle lipgloss.
 		if len(lines) > 1 && !strings.Contains(lines[0], " ") && !strings.Contains(lines[0], "\t") {
 			code = strings.Join(lines[1:], "\n")
 		}
-		blocks = append(blocks, a.styles.codeBlock.Width(width).Render(a.styles.codeText.Width(max(10, width-4)).Render(code)))
+		codeWidth := max(10, width-4)
+		renderedCode := wrapCodeBlock(code, codeWidth)
+		if strings.TrimSpace(renderedCode) == "" {
+			renderedCode = emptyMessageText
+		}
+		blocks = append(blocks, a.styles.codeBlock.Width(width).Render(a.styles.codeText.Width(codeWidth).Render(renderedCode)))
 	}
 
 	if len(blocks) == 0 {
