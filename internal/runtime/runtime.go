@@ -16,7 +16,6 @@ import (
 	"neo-code/internal/tools"
 )
 
-<<<<<<< main
 const maxContextTurns = 10
 
 const (
@@ -29,8 +28,6 @@ const (
 	providerRetryMaxWait = 5 * time.Second
 )
 
-=======
->>>>>>> main
 type Runtime interface {
 	Run(ctx context.Context, input UserInput) error
 	CancelActiveRun() bool
@@ -131,19 +128,12 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			return err
 		}
 
-<<<<<<< main
-		resp, err := s.callProviderWithRetry(ctx, input.RunID, session.ID, provider.ChatRequest{
-=======
-		resolvedProvider, err := s.configManager.ResolvedSelectedProvider()
+		builtContext, err := s.contextBuilder.Build(ctx, agentcontext.BuildInput{
+			Messages: session.Messages,
+			Workdir:  cfg.Workdir,
+		})
 		if err != nil {
-			s.emit(ctx, EventError, input.RunID, session.ID, err.Error())
-			return err
-		}
-
-		modelProvider, err := s.providerFactory.Build(ctx, resolvedProvider)
-		if err != nil {
-			s.emit(ctx, EventError, input.RunID, session.ID, err.Error())
-			return err
+			return s.handleRunError(ctx, input.RunID, session.ID, err)
 		}
 
 		builtContext, err := s.contextBuilder.Build(ctx, agentcontext.BuildInput{
@@ -154,12 +144,13 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			return s.handleRunError(ctx, input.RunID, session.ID, err)
 		}
 
-		streamEvents := make(chan provider.StreamEvent, 32)
-		streamDone := make(chan struct{})
-		go s.forwardProviderEvents(ctx, input.RunID, session.ID, streamEvents, streamDone)
+		systemPrompt := builtContext.SystemPrompt
+		if systemPrompt == "" {
+			systemPrompt = s.systemPrompt()
+		}
 
-		resp, err := modelProvider.Chat(ctx, provider.ChatRequest{
->>>>>>> main
+		resp, err := s.callProviderWithRetry(ctx, input.RunID, session.ID, provider.ChatRequest{
+
 			Model:        cfg.CurrentModel,
 			SystemPrompt: builtContext.SystemPrompt,
 			Messages:     builtContext.Messages,
