@@ -21,6 +21,8 @@ type ruleDocument struct {
 	Truncated bool
 }
 
+type ruleFileFinder func(string) (string, error)
+
 func loadProjectRules(ctx context.Context, workdir string) ([]ruleDocument, error) {
 	paths, err := discoverRuleFiles(ctx, workdir)
 	if err != nil {
@@ -54,6 +56,10 @@ func loadRuleDocuments(ctx context.Context, paths []string, readFile func(string
 }
 
 func discoverRuleFiles(ctx context.Context, workdir string) ([]string, error) {
+	return discoverRuleFilesWithFinder(ctx, workdir, findExactRuleFile)
+}
+
+func discoverRuleFilesWithFinder(ctx context.Context, workdir string, finder ruleFileFinder) ([]string, error) {
 	workdir = strings.TrimSpace(workdir)
 	if workdir == "" {
 		return nil, nil
@@ -70,9 +76,9 @@ func discoverRuleFiles(ctx context.Context, workdir string) ([]string, error) {
 			return nil, err
 		}
 
-		match, err := findExactRuleFile(dir)
+		match, err := finder(dir)
 		if err != nil {
-			return nil, err
+			break
 		}
 		if match != "" {
 			paths = append(paths, match)
@@ -118,47 +124,102 @@ func renderProjectRulesSection(documents []ruleDocument) string {
 		return ""
 	}
 
+	const totalTruncationNotice = "\n[additional project rules truncated to fit total limit]\n"
+
 	var builder strings.Builder
 	builder.WriteString("## Project Rules\n")
 
 	remaining := maxTotalRuleRunes
-	totalTruncated := false
+	totalBudgetTruncated := false
 	for _, document := range documents {
 		if remaining <= 0 {
-			totalTruncated = true
+			totalBudgetTruncated = true
 			break
 		}
 
-		content := document.Content
-		if runeCount(content) > remaining {
-			content, _ = truncateRunes(content, remaining)
-			totalTruncated = true
-		}
-		remaining -= runeCount(content)
-
-		builder.WriteString("\n### ")
-		builder.WriteString(document.Path)
-		builder.WriteString("\n")
-		if content != "" {
-			builder.WriteString("\n")
-			builder.WriteString(content)
-			builder.WriteString("\n")
-		}
-		if document.Truncated {
-			builder.WriteString("\n[truncated to fit per-file limit]\n")
+		fullChunk := renderRuleDocumentChunk(document)
+		fullChunkRunes := runeCount(fullChunk)
+		if fullChunkRunes <= remaining {
+			builder.WriteString(fullChunk)
+			remaining -= fullChunkRunes
+			continue
 		}
 
-		if content != document.Content {
-			totalTruncated = true
-			break
+		totalBudgetTruncated = true
+		chunkBudget := remaining
+		if noticeRunes := runeCount(totalTruncationNotice); noticeRunes < chunkBudget {
+			chunkBudget -= noticeRunes
 		}
+		chunk := renderRuleDocumentChunkWithinBudget(document, chunkBudget)
+		builder.WriteString(chunk)
+		remaining -= runeCount(chunk)
+		break
 	}
 
-	if totalTruncated {
-		builder.WriteString("\n[additional project rules truncated to fit total limit]\n")
+	if totalBudgetTruncated {
+		if runeCount(totalTruncationNotice) <= remaining {
+			builder.WriteString(totalTruncationNotice)
+		}
 	}
 
 	return strings.TrimSpace(builder.String())
+}
+
+func renderRuleDocumentChunk(document ruleDocument) string {
+	var builder strings.Builder
+	builder.WriteString("\n### ")
+	builder.WriteString(document.Path)
+	builder.WriteString("\n")
+	if document.Content != "" {
+		builder.WriteString("\n")
+		builder.WriteString(document.Content)
+		builder.WriteString("\n")
+	}
+	if document.Truncated {
+		builder.WriteString("\n[truncated to fit per-file limit]\n")
+	}
+
+	return builder.String()
+}
+
+func renderRuleDocumentChunkWithinBudget(document ruleDocument, budget int) string {
+	if budget <= 0 {
+		return ""
+	}
+
+	header := "\n### " + document.Path + "\n"
+	headerRunes := runeCount(header)
+	if headerRunes > budget {
+		return ""
+	}
+
+	bodyBudget := budget - headerRunes
+	content := document.Content
+	if runeCount(content) > bodyBudget {
+		content, _ = truncateRunes(content, bodyBudget)
+	}
+
+	var body strings.Builder
+	if content != "" {
+		body.WriteString("\n")
+		body.WriteString(content)
+		body.WriteString("\n")
+	}
+	if document.Truncated {
+		perFileNotice := "\n[truncated to fit per-file limit]\n"
+		if runeCount(body.String())+runeCount(perFileNotice) <= bodyBudget {
+			body.WriteString(perFileNotice)
+		}
+	}
+
+	bodyRunes := runeCount(body.String())
+	if bodyRunes > bodyBudget {
+		bodyText, _ := truncateRunes(body.String(), bodyBudget)
+		body.Reset()
+		body.WriteString(bodyText)
+	}
+
+	return header + body.String()
 }
 
 func truncateRunes(input string, max int) (string, bool) {

@@ -25,7 +25,10 @@ func (b *DefaultBuilder) Build(ctx context.Context, input BuildInput) (BuildResu
 		return BuildResult{}, err
 	}
 
-	systemState := collectSystemState(ctx, input.Metadata, b.gitRunner)
+	systemState, err := collectSystemState(ctx, input.Metadata, b.gitRunner)
+	if err != nil {
+		return BuildResult{}, err
+	}
 
 	return BuildResult{
 		SystemPrompt: composeSystemPrompt(

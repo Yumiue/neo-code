@@ -2,6 +2,7 @@ package context
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -9,7 +10,7 @@ import (
 
 type gitCommandRunner func(ctx context.Context, workdir string, args ...string) (string, error)
 
-func collectSystemState(ctx context.Context, metadata Metadata, runner gitCommandRunner) SystemState {
+func collectSystemState(ctx context.Context, metadata Metadata, runner gitCommandRunner) (SystemState, error) {
 	state := SystemState{
 		Workdir:  strings.TrimSpace(metadata.Workdir),
 		Shell:    strings.TrimSpace(metadata.Shell),
@@ -18,19 +19,25 @@ func collectSystemState(ctx context.Context, metadata Metadata, runner gitComman
 	}
 
 	if err := ctx.Err(); err != nil {
-		return state
+		return state, err
 	}
 	if runner == nil || state.Workdir == "" {
-		return state
+		return state, nil
 	}
 
 	branch, err := runner(ctx, state.Workdir, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
-		return state
+		if isContextError(err) {
+			return state, err
+		}
+		return state, nil
 	}
 	dirty, err := runner(ctx, state.Workdir, "status", "--porcelain")
 	if err != nil {
-		return state
+		if isContextError(err) {
+			return state, err
+		}
+		return state, nil
 	}
 
 	state.Git = GitState{
@@ -38,7 +45,7 @@ func collectSystemState(ctx context.Context, metadata Metadata, runner gitComman
 		Branch:    strings.TrimSpace(branch),
 		Dirty:     strings.TrimSpace(dirty) != "",
 	}
-	return state
+	return state, nil
 }
 
 func renderSystemStateSection(state SystemState) string {
@@ -79,4 +86,8 @@ func promptValue(value string) string {
 		return "unknown"
 	}
 	return value
+}
+
+func isContextError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

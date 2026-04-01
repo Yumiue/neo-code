@@ -94,6 +94,45 @@ func TestLoadRuleDocumentsReturnsReadError(t *testing.T) {
 	}
 }
 
+func TestDiscoverRuleFilesStopsOnDirectoryReadError(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	nested := filepath.Join(root, "a", "b")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+
+	rootRules := filepath.Join(root, ruleFileName)
+	localRules := filepath.Join(root, "a", ruleFileName)
+	if err := os.WriteFile(rootRules, []byte("root-rules"), 0o644); err != nil {
+		t.Fatalf("write root rules: %v", err)
+	}
+	if err := os.WriteFile(localRules, []byte("local-rules"), 0o644); err != nil {
+		t.Fatalf("write local rules: %v", err)
+	}
+
+	permissionErr := errors.New("permission denied")
+	paths, err := discoverRuleFilesWithFinder(context.Background(), nested, func(dir string) (string, error) {
+		switch dir {
+		case nested:
+			return "", nil
+		case filepath.Join(root, "a"):
+			return localRules, nil
+		case root:
+			return "", permissionErr
+		default:
+			return "", nil
+		}
+	})
+	if err != nil {
+		t.Fatalf("discoverRuleFilesWithFinder() error = %v", err)
+	}
+	if len(paths) != 1 || paths[0] != localRules {
+		t.Fatalf("expected traversal to stop after read error and keep collected paths, got %+v", paths)
+	}
+}
+
 func TestRenderProjectRulesSectionTruncatesSingleFileAndTotalBudget(t *testing.T) {
 	t.Parallel()
 
@@ -117,5 +156,9 @@ func TestRenderProjectRulesSectionTruncatesSingleFileAndTotalBudget(t *testing.T
 	}
 	if strings.Contains(totalSection, strings.Repeat("c", 6500)) {
 		t.Fatalf("expected total rules section to be truncated")
+	}
+	body := strings.TrimPrefix(totalSection, "## Project Rules\n")
+	if runeCount(body) > maxTotalRuleRunes {
+		t.Fatalf("expected rendered rules body to respect total rune budget, got %d > %d", runeCount(body), maxTotalRuleRunes)
 	}
 }

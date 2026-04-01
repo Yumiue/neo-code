@@ -10,7 +10,7 @@ import (
 func TestCollectSystemStateHandlesGitUnavailable(t *testing.T) {
 	t.Parallel()
 
-	state := collectSystemState(context.Background(), Metadata{
+	state, err := collectSystemState(context.Background(), Metadata{
 		Workdir:  "/workspace",
 		Shell:    "bash",
 		Provider: "openai",
@@ -18,6 +18,9 @@ func TestCollectSystemStateHandlesGitUnavailable(t *testing.T) {
 	}, func(ctx context.Context, workdir string, args ...string) (string, error) {
 		return "", errors.New("git unavailable")
 	})
+	if err != nil {
+		t.Fatalf("collectSystemState() error = %v", err)
+	}
 
 	if state.Git.Available {
 		t.Fatalf("expected git to be unavailable")
@@ -43,12 +46,15 @@ func TestCollectSystemStateIncludesGitSummary(t *testing.T) {
 		}
 	}
 
-	state := collectSystemState(context.Background(), Metadata{
+	state, err := collectSystemState(context.Background(), Metadata{
 		Workdir:  "/workspace",
 		Shell:    "bash",
 		Provider: "openai",
 		Model:    "gpt-5.4",
 	}, runner)
+	if err != nil {
+		t.Fatalf("collectSystemState() error = %v", err)
+	}
 
 	if !state.Git.Available {
 		t.Fatalf("expected git to be available")
@@ -66,5 +72,21 @@ func TestCollectSystemStateIncludesGitSummary(t *testing.T) {
 	}
 	if !strings.Contains(section, "dirty=`dirty`") {
 		t.Fatalf("expected dirty marker in system section, got %q", section)
+	}
+}
+
+func TestCollectSystemStateReturnsContextError(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := collectSystemState(ctx, Metadata{
+		Workdir: "/workspace",
+	}, func(ctx context.Context, workdir string, args ...string) (string, error) {
+		return "", ctx.Err()
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context canceled error, got %v", err)
 	}
 }
