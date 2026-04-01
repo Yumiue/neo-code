@@ -1175,6 +1175,95 @@ func TestAppRefreshErrorPaths(t *testing.T) {
 	})
 }
 
+func TestImmediateSlashCommandsAndLayoutBranches(t *testing.T) {
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	handled, cmd := app.handleImmediateSlashCommand("/help")
+	if handled || cmd != nil {
+		t.Fatalf("expected /help to stay on normal slash flow")
+	}
+
+	handled, cmd = app.handleImmediateSlashCommand("/clear")
+	if !handled || cmd != nil {
+		t.Fatalf("expected /clear to be handled locally")
+	}
+	if app.state.ActiveSessionID != "" || len(app.activeMessages) != 0 {
+		t.Fatalf("expected /clear to reset draft state")
+	}
+
+	handled, cmd = app.handleImmediateSlashCommand("/exit")
+	if !handled || cmd == nil {
+		t.Fatalf("expected /exit to return a quit cmd")
+	}
+	foundQuit := false
+	for _, msg := range collectTeaMessages(cmd) {
+		if _, ok := msg.(tea.QuitMsg); ok {
+			foundQuit = true
+		}
+	}
+	if !foundQuit {
+		t.Fatalf("expected quit msg from /exit")
+	}
+
+	app.activeMessages = []provider.Message{{Role: roleUser, Content: "hello"}}
+	handled, cmd = app.handleImmediateSlashCommand("/undo")
+	if !handled || cmd != nil {
+		t.Fatalf("expected /undo to be handled locally")
+	}
+	if len(app.activeMessages) != 0 {
+		t.Fatalf("expected /undo to remove last entry")
+	}
+
+	app.state.IsAgentRunning = false
+	app.transcript.Width = 40
+	app.transcript.Height = 4
+	app.transcript.SetContent(strings.Repeat("line\n", 20))
+	app.transcript.GotoBottom()
+	app.resizeComposerLayout()
+	if app.transcript.Width <= 0 || app.transcript.Height <= 0 {
+		t.Fatalf("expected resizeComposerLayout to keep transcript dimensions positive")
+	}
+}
+
+func TestAdditionalRenderingAndToolChunkBranches(t *testing.T) {
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	app.state.ActiveSessionID = "session-tool"
+	app.handleRuntimeEvent(agentruntime.RuntimeEvent{
+		Type:      agentruntime.EventToolChunk,
+		SessionID: "session-tool",
+		Payload:   "chunk output",
+	})
+	if app.state.StatusText != statusRunningTool {
+		t.Fatalf("expected tool chunk to keep running status, got %q", app.state.StatusText)
+	}
+	if len(app.activeMessages) == 0 || !strings.Contains(app.activeMessages[len(app.activeMessages)-1].Content, "chunk output") {
+		t.Fatalf("expected tool chunk preview to append inline message")
+	}
+
+	if got := wrapCodeBlock("a\tb", 3); !strings.Contains(got, "\n") {
+		t.Fatalf("expected tabs to expand and wrap, got %q", got)
+	}
+	if got := wrapCodeBlock("abc", 0); got != "abc" {
+		t.Fatalf("expected width<=0 to return original text, got %q", got)
+	}
+
+	rendered := app.renderMessageContent("```\n```", 20, app.styles.messageBody)
+	if !strings.Contains(rendered, emptyMessageText) {
+		t.Fatalf("expected empty code block placeholder, got %q", rendered)
+	}
+}
+
 func newTestConfigManager(t *testing.T) *config.Manager {
 	t.Helper()
 	manager := config.NewManager(config.NewLoader(t.TempDir(), builtin.DefaultConfig()))
