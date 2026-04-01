@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"neo-code/internal/config"
 	agentcontext "neo-code/internal/context"
@@ -1363,16 +1364,41 @@ func TestIsRetryableProviderError(t *testing.T) {
 func TestProviderRetryBackoff(t *testing.T) {
 	t.Parallel()
 
-	first := providerRetryBackoff(1)
-	second := providerRetryBackoff(2)
-
-	if second <= first {
-		t.Fatalf("expected backoff to increase: first=%v second=%v", first, second)
+	tests := []struct {
+		name    string
+		attempt int
+		min     time.Duration
+		max     time.Duration
+	}{
+		{
+			name:    "first retry stays within jittered base window",
+			attempt: 1,
+			min:     500 * time.Millisecond,
+			max:     1500 * time.Millisecond,
+		},
+		{
+			name:    "second retry stays within jittered doubled window",
+			attempt: 2,
+			min:     1 * time.Second,
+			max:     3 * time.Second,
+		},
+		{
+			name:    "large retry is capped at max wait",
+			attempt: 20,
+			min:     providerRetryMaxWait,
+			max:     providerRetryMaxWait,
+		},
 	}
 
-	// 验证不超过 MaxWait
-	large := providerRetryBackoff(20)
-	if large > providerRetryMaxWait {
-		t.Fatalf("expected backoff <= MaxWait, got %v > %v", large, providerRetryMaxWait)
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := providerRetryBackoff(tt.attempt)
+			if got < tt.min || got > tt.max {
+				t.Fatalf("providerRetryBackoff(%d) = %v, want within [%v, %v]", tt.attempt, got, tt.min, tt.max)
+			}
+		})
 	}
 }
