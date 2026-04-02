@@ -22,13 +22,27 @@ type Loader struct {
 }
 
 type persistedConfig struct {
-	SelectedProvider string      `yaml:"selected_provider"`
-	CurrentModel     string      `yaml:"current_model"`
-	Workdir          string      `yaml:"workdir"`
-	Shell            string      `yaml:"shell"`
-	MaxLoops         int         `yaml:"max_loops,omitempty"`
-	ToolTimeoutSec   int         `yaml:"tool_timeout_sec,omitempty"`
-	Tools            ToolsConfig `yaml:"tools,omitempty"`
+	SelectedProvider string                 `yaml:"selected_provider"`
+	CurrentModel     string                 `yaml:"current_model"`
+	Workdir          string                 `yaml:"workdir"`
+	Shell            string                 `yaml:"shell"`
+	MaxLoops         int                    `yaml:"max_loops,omitempty"`
+	ToolTimeoutSec   int                    `yaml:"tool_timeout_sec,omitempty"`
+	Context          persistedContextConfig `yaml:"context,omitempty"`
+	Tools            ToolsConfig            `yaml:"tools,omitempty"`
+}
+
+type persistedContextConfig struct {
+	Compact persistedCompactConfig `yaml:"compact,omitempty"`
+}
+
+type persistedCompactConfig struct {
+	MicroEnabled                  *bool  `yaml:"micro_enabled,omitempty"`
+	ToolResultKeepRecent          int    `yaml:"tool_result_keep_recent,omitempty"`
+	ToolResultPlaceholderMinChars int    `yaml:"tool_result_placeholder_min_chars,omitempty"`
+	ManualStrategy                string `yaml:"manual_strategy,omitempty"`
+	ManualKeepRecentSpans         int    `yaml:"manual_keep_recent_spans,omitempty"`
+	MaxSummaryChars               int    `yaml:"max_summary_chars,omitempty"`
 }
 
 func NewLoader(baseDir string, defaults *Config) *Loader {
@@ -122,6 +136,7 @@ func (l *Loader) Save(ctx context.Context, cfg *Config) error {
 		Shell:            snapshot.Shell,
 		MaxLoops:         snapshot.MaxLoops,
 		ToolTimeoutSec:   snapshot.ToolTimeoutSec,
+		Context:          newPersistedContextConfig(snapshot.Context),
 		Tools:            snapshot.Tools,
 	}
 
@@ -162,7 +177,7 @@ type aliasConfig struct {
 	WorkspaceRoot string `yaml:"workspace_root"`
 }
 
-func parseCurrentConfig(data []byte, _ Config) (*Config, error) {
+func parseCurrentConfig(data []byte, defaults Config) (*Config, error) {
 	var file persistedConfig
 	if err := yaml.Unmarshal(data, &file); err != nil {
 		return nil, err
@@ -185,10 +200,43 @@ func parseCurrentConfig(data []byte, _ Config) (*Config, error) {
 		Shell:            strings.TrimSpace(file.Shell),
 		MaxLoops:         file.MaxLoops,
 		ToolTimeoutSec:   file.ToolTimeoutSec,
+		Context:          fromPersistedContextConfig(file.Context, defaults.Context),
 		Tools:            file.Tools,
 	}
 
 	return cfg, nil
+}
+
+func newPersistedContextConfig(cfg ContextConfig) persistedContextConfig {
+	microEnabled := cfg.Compact.MicroEnabled
+	return persistedContextConfig{
+		Compact: persistedCompactConfig{
+			MicroEnabled:                  &microEnabled,
+			ToolResultKeepRecent:          cfg.Compact.ToolResultKeepRecent,
+			ToolResultPlaceholderMinChars: cfg.Compact.ToolResultPlaceholderMinChars,
+			ManualStrategy:                cfg.Compact.ManualStrategy,
+			ManualKeepRecentSpans:         cfg.Compact.ManualKeepRecentSpans,
+			MaxSummaryChars:               cfg.Compact.MaxSummaryChars,
+		},
+	}
+}
+
+func fromPersistedContextConfig(file persistedContextConfig, defaults ContextConfig) ContextConfig {
+	out := ContextConfig{
+		Compact: CompactConfig{
+			ToolResultKeepRecent:          file.Compact.ToolResultKeepRecent,
+			ToolResultPlaceholderMinChars: file.Compact.ToolResultPlaceholderMinChars,
+			ManualStrategy:                strings.TrimSpace(file.Compact.ManualStrategy),
+			ManualKeepRecentSpans:         file.Compact.ManualKeepRecentSpans,
+			MaxSummaryChars:               file.Compact.MaxSummaryChars,
+		},
+	}
+	if file.Compact.MicroEnabled != nil {
+		out.Compact.MicroEnabled = *file.Compact.MicroEnabled
+	} else {
+		out.Compact.MicroEnabled = defaults.Compact.MicroEnabled
+	}
+	return out
 }
 
 func requiresConfigRewrite(data []byte) bool {
