@@ -97,23 +97,3 @@ func TestMarkdownRendererPreservesChineseText(t *testing.T) {
 		t.Fatalf("expected chinese markdown content to be preserved, got %q", visible)
 	}
 }
-
-func TestMarkdownRendererTrimsTrailingWhitespace(t *testing.T) {
-	rendererAny, err := newMarkdownRenderer()
-	if err != nil {
-		t.Fatalf("newMarkdownRenderer() error = %v", err)
-	}
-	renderer := rendererAny.(*glamourMarkdownRenderer)
-
-	output, err := renderer.Render("nihao", 48)
-	if err != nil {
-		t.Fatalf("Render() error = %v", err)
-	}
-
-	visible := markdownTestANSIPattern.ReplaceAllString(output, "")
-	for _, line := range strings.Split(visible, "\n") {
-		if strings.HasSuffix(line, " ") || strings.HasSuffix(line, "\t") {
-			t.Fatalf("expected no trailing whitespace in line %q", line)
-		}
-	}
-}

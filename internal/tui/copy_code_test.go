@@ -50,6 +50,10 @@ func TestRenderMessageBlockWithCopyAddsButtons(t *testing.T) {
 	if !strings.Contains(rendered, "[Copy code #1]") {
 		t.Fatalf("expected copy button in rendered message, got %q", rendered)
 	}
+	plain := stripANSI(rendered)
+	if strings.Index(plain, "[Copy code #1]") > strings.Index(plain, "fmt.Println(1)") {
+		t.Fatalf("expected copy button to render above code block, got %q", plain)
+	}
 	if len(bindings) != 1 || bindings[0].ID != 1 || bindings[0].Code != "fmt.Println(1)" {
 		t.Fatalf("unexpected bindings: %+v", bindings)
 	}
@@ -112,7 +116,7 @@ func TestTranscriptMouseClickCopiesCodeBlock(t *testing.T) {
 	}
 
 	if handled := app.handleTranscriptMouse(tea.MouseMsg{
-		X:      x + 1,
+		X:      x + 60,
 		Y:      y + targetY,
 		Button: tea.MouseButtonLeft,
 	}); handled {

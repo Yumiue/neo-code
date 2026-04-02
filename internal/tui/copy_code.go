@@ -24,8 +24,10 @@ const (
 )
 
 type markdownSegment struct {
-	Kind markdownSegmentKind
-	Text string
+	Kind   markdownSegmentKind
+	Text   string
+	Fenced string
+	Code   string
 }
 
 var (
@@ -48,11 +50,15 @@ func splitMarkdownSegments(content string) []markdownSegment {
 			continue
 		}
 
-		code := extractCodeBlockContent(part)
+		fenced, code := parseCodeFence(part)
 		if code == "" {
 			continue
 		}
-		segments = append(segments, markdownSegment{Kind: markdownSegmentCode, Text: code})
+		segments = append(segments, markdownSegment{
+			Kind:   markdownSegmentCode,
+			Fenced: fenced,
+			Code:   code,
+		})
 	}
 	if len(segments) == 0 {
 		return []markdownSegment{{Kind: markdownSegmentText, Text: content}}
@@ -64,23 +70,37 @@ func extractFencedCodeBlocks(content string) []string {
 	segments := splitMarkdownSegments(content)
 	blocks := make([]string, 0, len(segments))
 	for _, segment := range segments {
-		if segment.Kind == markdownSegmentCode && strings.TrimSpace(segment.Text) != "" {
-			blocks = append(blocks, strings.TrimSpace(segment.Text))
+		if segment.Kind == markdownSegmentCode && strings.TrimSpace(segment.Code) != "" {
+			blocks = append(blocks, strings.TrimSpace(segment.Code))
 		}
 	}
 	return blocks
 }
 
-func extractCodeBlockContent(raw string) string {
-	code := strings.Trim(raw, "\n")
+func parseCodeFence(raw string) (fenced string, code string) {
+	code = strings.Trim(raw, "\n")
 	if code == "" {
-		return ""
+		return "", ""
 	}
 	lines := strings.Split(code, "\n")
-	if len(lines) > 1 && !strings.Contains(lines[0], " ") && !strings.Contains(lines[0], "\t") {
-		code = strings.Join(lines[1:], "\n")
+	if len(lines) > 1 && isFenceLanguageCandidate(lines[0]) {
+		body := strings.Join(lines[1:], "\n")
+		body = strings.TrimSpace(body)
+		if body == "" {
+			return "", ""
+		}
+		return "```" + lines[0] + "\n" + body + "\n```", body
 	}
-	return strings.TrimSpace(code)
+
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return "", ""
+	}
+	return "```\n" + code + "\n```", code
+}
+
+func isFenceLanguageCandidate(line string) bool {
+	return !strings.Contains(line, " ") && !strings.Contains(line, "\t")
 }
 
 func (a *App) setCodeCopyBlocks(bindings []copyCodeButtonBinding) {

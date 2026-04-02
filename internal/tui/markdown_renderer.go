@@ -55,10 +55,9 @@ func (r *glamourMarkdownRenderer) Render(content string, width int) (string, err
 	if err != nil {
 		return "", err
 	}
-	rendered = markdownANSIPattern.ReplaceAllString(rendered, "")
 	rendered = strings.TrimRight(rendered, "\n")
-	rendered = trimMarkdownTrailingWhitespace(rendered)
-	if strings.TrimSpace(rendered) == "" {
+	visible := markdownANSIPattern.ReplaceAllString(rendered, "")
+	if strings.TrimSpace(visible) == "" {
 		rendered = emptyMessageText
 	}
 
@@ -98,16 +97,4 @@ func (r *glamourMarkdownRenderer) cacheResult(key string, value string) {
 	}
 	r.cacheOrder = append(r.cacheOrder, key)
 	r.cache[key] = value
-}
-
-func trimMarkdownTrailingWhitespace(input string) string {
-	if input == "" {
-		return input
-	}
-
-	lines := strings.Split(input, "\n")
-	for i := range lines {
-		lines[i] = strings.TrimRight(lines[i], " \t")
-	}
-	return strings.Join(lines, "\n")
 }
