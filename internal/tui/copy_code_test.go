@@ -122,6 +122,16 @@ func TestTranscriptMouseClickCopiesCodeBlock(t *testing.T) {
 	}); handled {
 		t.Fatalf("expected click outside copy button text to be ignored")
 	}
+
+	if handled := app.handleTranscriptMouse(tea.MouseMsg{
+		X:      x + targetX + 1,
+		Y:      y + targetY,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionMotion,
+		Type:   tea.MouseMotion,
+	}); handled {
+		t.Fatalf("expected hover/motion over copy button to be ignored")
+	}
 }
 
 func TestTranscriptMouseCopyFailureSetsError(t *testing.T) {

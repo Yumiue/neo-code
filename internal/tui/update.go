@@ -572,14 +572,14 @@ func (a *App) handleTranscriptMouse(msg tea.MouseMsg) bool {
 		return false
 	}
 
-	switch msg.Button {
-	case tea.MouseButtonWheelUp:
+	switch {
+	case msg.Button == tea.MouseButtonWheelUp && msg.Action == tea.MouseActionPress:
 		a.transcript.LineUp(mouseWheelStepLines)
 		return true
-	case tea.MouseButtonWheelDown:
+	case msg.Button == tea.MouseButtonWheelDown && msg.Action == tea.MouseActionPress:
 		a.transcript.LineDown(mouseWheelStepLines)
 		return true
-	case tea.MouseButtonLeft:
+	case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress:
 		return a.handleTranscriptCopyClick(msg)
 	default:
 		return false
