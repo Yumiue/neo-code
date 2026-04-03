@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"neo-code/internal/config"
+	"neo-code/internal/context/internalcompact"
 	"neo-code/internal/provider"
 )
 
@@ -33,6 +34,15 @@ type ErrorMode string
 
 const (
 	ErrorModeNone ErrorMode = "none"
+)
+
+const (
+	neocodeDataDirName          = ".neocode"
+	compactProjectsDirName      = "projects"
+	compactTranscriptsDirName   = ".transcripts"
+	transcriptFallbackSessionID = "draft"
+	transcriptFileExtension     = ".jsonl"
+	transcriptTemporarySuffix   = ".tmp"
 )
 
 // Input is a single compact execution request.
@@ -262,13 +272,7 @@ func validateSummary(summary string, maxChars int) (string, error) {
 	return summary, nil
 }
 
-var summarySections = []string{
-	"done",
-	"in_progress",
-	"decisions",
-	"code_changes",
-	"constraints",
-}
+var summarySections = internalcompact.SummarySections()
 
 func normalizeSummary(summary string) string {
 	summary = strings.ReplaceAll(summary, "\r\n", "\n")
@@ -283,8 +287,8 @@ func validateSummaryStructure(summary string) error {
 
 	lines := strings.Split(summary, "\n")
 	index := nextNonEmptyLine(lines, 0)
-	if index >= len(lines) || strings.TrimSpace(lines[index]) != "[compact_summary]" {
-		return errors.New("compact: summary must start with [compact_summary]")
+	if index >= len(lines) || strings.TrimSpace(lines[index]) != internalcompact.SummaryMarker {
+		return fmt.Errorf("compact: summary must start with %s", internalcompact.SummaryMarker)
 	}
 	index++
 
@@ -366,14 +370,14 @@ func (s *Service) saveTranscript(messages []provider.Message, sessionID string, 
 	}
 
 	projectHash := hashProject(workdir)
-	dir := filepath.Join(home, ".neocode", "projects", projectHash, ".transcripts")
+	dir := transcriptDirectory(home, projectHash)
 	if err := s.mkdirAll(dir, 0o755); err != nil {
 		return "", "", fmt.Errorf("compact: create transcript dir: %w", err)
 	}
 
 	sessionID = sanitizeID(sessionID)
 	if sessionID == "" {
-		sessionID = "draft"
+		sessionID = transcriptFallbackSessionID
 	}
 	tokenFn := s.randomToken
 	if tokenFn == nil {
@@ -385,8 +389,8 @@ func (s *Service) saveTranscript(messages []provider.Message, sessionID string, 
 	}
 
 	transcriptID := fmt.Sprintf("transcript_%d_%s_%s", s.now().UnixNano(), randomToken, sessionID)
-	transcriptPath := filepath.Join(dir, transcriptID+".jsonl")
-	tmpPath := transcriptPath + ".tmp"
+	transcriptPath := filepath.Join(dir, transcriptID+transcriptFileExtension)
+	tmpPath := transcriptPath + transcriptTemporarySuffix
 
 	now := s.now().UTC().Format(time.RFC3339Nano)
 	var builder strings.Builder
@@ -424,6 +428,11 @@ func transcriptFileMode() os.FileMode {
 		return 0o644
 	}
 	return 0o600
+}
+
+// transcriptDirectory 统一构造 compact 原始 transcript 的持久化目录。
+func transcriptDirectory(home string, projectHash string) string {
+	return filepath.Join(home, neocodeDataDirName, compactProjectsDirName, projectHash, compactTranscriptsDirName)
 }
 
 func randomTranscriptToken() (string, error) {

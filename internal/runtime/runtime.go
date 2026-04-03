@@ -17,8 +17,6 @@ import (
 	"neo-code/internal/tools"
 )
 
-const maxContextTurns = 10
-
 const (
 	// defaultProviderRetryMax 是 runtime 层对单次 provider.Chat() 的最大重试次数（不含首次调用）。
 	// 与 RetryTransport 的 HTTP 层重试互补：Transport 耗尽后 runtime 仍可重试整个 Chat 调用。

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"neo-code/internal/config"
+	"neo-code/internal/context/internalcompact"
 	"neo-code/internal/provider"
 )
 
@@ -32,23 +33,19 @@ func (g *stubSummaryGenerator) Generate(ctx context.Context, input SummaryInput)
 }
 
 func validSemanticSummary() string {
-	return strings.Join([]string{
-		"[compact_summary]",
-		"done:",
-		"- Completed the previous investigation and captured the outcome.",
-		"",
-		"in_progress:",
-		"- Continue from the retained recent context window.",
-		"",
-		"decisions:",
-		"- Keep manual compact summaries in the existing section layout for compatibility.",
-		"",
-		"code_changes:",
-		"- Updated internal/context/compact/runner.go to use semantic summaries.",
-		"",
-		"constraints:",
-		"- Preserve only the minimum information needed to continue the work.",
-	}, "\n")
+	entries := map[string]string{
+		internalcompact.SectionDone:        "- Completed the previous investigation and captured the outcome.",
+		internalcompact.SectionInProgress:  "- Continue from the retained recent context window.",
+		internalcompact.SectionDecisions:   "- Keep manual compact summaries in the existing section layout for compatibility.",
+		internalcompact.SectionCodeChanges: "- Updated internal/context/compact/runner.go to use semantic summaries.",
+		internalcompact.SectionConstraints: "- Preserve only the minimum information needed to continue the work.",
+	}
+
+	lines := []string{internalcompact.SummaryMarker}
+	for _, section := range internalcompact.SummarySections() {
+		lines = append(lines, section+":", entries[section], "")
+	}
+	return strings.Join(lines[:len(lines)-1], "\n")
 }
 
 func TestManualCompactAddsSummaryAndKeepsRecentSpans(t *testing.T) {
@@ -135,8 +132,12 @@ func TestManualCompactWritesTranscriptJSONL(t *testing.T) {
 	if !strings.Contains(string(data), `"role":"user"`) {
 		t.Fatalf("expected jsonl content, got %q", string(data))
 	}
-	if !strings.Contains(filepath.ToSlash(result.TranscriptPath), "/.neocode/projects/") {
-		t.Fatalf("expected transcript path under .neocode/projects, got %q", result.TranscriptPath)
+	expectedDir := transcriptDirectory(home, hashProject(filepath.Join(home, "workspace")))
+	if filepath.Dir(result.TranscriptPath) != expectedDir {
+		t.Fatalf("expected transcript path under %q, got %q", expectedDir, result.TranscriptPath)
+	}
+	if filepath.Ext(result.TranscriptPath) != transcriptFileExtension {
+		t.Fatalf("expected transcript extension %q, got %q", transcriptFileExtension, result.TranscriptPath)
 	}
 }
 
