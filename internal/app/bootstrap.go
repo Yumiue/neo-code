@@ -38,9 +38,8 @@ func ensureConsoleUTF8() {
 func NewProgram(ctx context.Context) (*tea.Program, error) {
 
 	ensureConsoleUTF8()
-
-	loader := config.NewLoader("", builtin.DefaultConfig())
-  loader := config.NewLoader("", config.DefaultConfig())
+	
+    loader := config.NewLoader("", config.DefaultConfig())
 	manager := config.NewManager(loader)
 	if _, err := manager.Load(ctx); err != nil {
 		return nil, err
