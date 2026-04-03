@@ -1383,11 +1383,23 @@ func TestServiceSetSessionWorkdir(t *testing.T) {
 
 func newRuntimeConfigManager(t *testing.T) *config.Manager {
 	t.Helper()
-	restoreRuntimeEnv(t, config.OpenAIDefaultAPIKeyEnv)
-	if err := os.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key"); err != nil {
+
+	apiKeyEnv := runtimeTestAPIKeyEnv(t)
+	restoreRuntimeEnv(t, apiKeyEnv)
+	if err := os.Setenv(apiKeyEnv, "test-key"); err != nil {
 		t.Fatalf("set env: %v", err)
 	}
-	manager := config.NewManager(config.NewLoader(t.TempDir(), builtin.DefaultConfig()))
+
+	defaults := builtin.DefaultConfig()
+	selected := config.NormalizeProviderName(defaults.SelectedProvider)
+	for i := range defaults.Providers {
+		if config.NormalizeProviderName(defaults.Providers[i].Name) == selected {
+			defaults.Providers[i].APIKeyEnv = apiKeyEnv
+			break
+		}
+	}
+
+	manager := config.NewManager(config.NewLoader(t.TempDir(), defaults))
 	if _, err := manager.Load(context.Background()); err != nil {
 		t.Fatalf("load config: %v", err)
 	}
@@ -1400,6 +1412,36 @@ func newRuntimeConfigManager(t *testing.T) *config.Manager {
 		t.Fatalf("update config: %v", err)
 	}
 	return manager
+}
+
+func runtimeTestAPIKeyEnv(t *testing.T) string {
+	t.Helper()
+
+	const fallback = "NEOCODE_RUNTIME_TEST_API_KEY"
+	name := strings.TrimSpace(t.Name())
+	if name == "" {
+		return fallback
+	}
+
+	var b strings.Builder
+	b.Grow(len(name))
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r - ('a' - 'A'))
+		case r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+
+	suffix := strings.Trim(b.String(), "_")
+	if suffix == "" {
+		suffix = "CASE"
+	}
+
+	return "NEOCODE_RUNTIME_TEST_API_KEY_" + suffix
 }
 
 func restoreRuntimeEnv(t *testing.T, key string) {
