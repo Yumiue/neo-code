@@ -29,6 +29,11 @@ type modelCatalogRefreshMsg struct {
 	models     []provider.ModelDescriptor
 	err        error
 }
+
+type compactFinishedMsg struct {
+	err error
+}
+
 type localCommandResultMsg struct {
 	notice          string
 	err             error
@@ -56,7 +61,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	var spinCmd tea.Cmd
 	a.spinner, spinCmd = a.spinner.Update(msg)
-	if a.state.IsAgentRunning {
+	if a.isBusy() {
 		cmds = append(cmds, spinCmd)
 	}
 
@@ -78,6 +83,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case RuntimeClosedMsg:
 		a.state.IsAgentRunning = false
 		a.clearRunProgress()
+		a.state.IsCompacting = false
 		if strings.TrimSpace(a.state.StatusText) == "" {
 			a.state.StatusText = statusRuntimeClosed
 		}
@@ -118,6 +124,26 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cfg := a.configManager.Get()
 		a.syncConfigState(cfg)
 		selectPickerItemByID(&a.modelPicker, cfg.CurrentModel)
+		return a, tea.Batch(cmds...)
+	case compactFinishedMsg:
+		a.state.IsCompacting = false
+		if typed.err != nil && strings.TrimSpace(a.state.ExecutionError) == "" {
+			a.state.ExecutionError = typed.err.Error()
+			a.state.StatusText = typed.err.Error()
+		}
+		if err := a.refreshSessions(); err != nil {
+			a.state.ExecutionError = err.Error()
+			a.state.StatusText = err.Error()
+			a.appendInlineMessage(roleError, err.Error())
+		}
+		if err := a.refreshMessages(); err != nil && strings.TrimSpace(a.state.ActiveSessionID) != "" {
+			a.state.ExecutionError = err.Error()
+			a.state.StatusText = err.Error()
+			a.appendInlineMessage(roleError, err.Error())
+		}
+		a.syncActiveSessionTitle()
+		a.rebuildTranscript()
+		a.transcript.GotoBottom()
 		return a, tea.Batch(cmds...)
 	case localCommandResultMsg:
 		if typed.err != nil {
@@ -249,7 +275,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.applyFocus()
 			return a, tea.Batch(cmds...)
 		}
-		if key.Matches(typed, a.keys.NewSession) && !a.state.IsAgentRunning {
+		if key.Matches(typed, a.keys.NewSession) && !a.isBusy() {
 			a.startDraftSession()
 			return a, tea.Batch(cmds...)
 		}
@@ -296,7 +322,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			effectiveTyped = tea.KeyMsg{Type: tea.KeyEnter, Paste: true}
 		} else {
 			input := strings.TrimSpace(a.input.Value())
-			if input == "" || a.state.IsAgentRunning {
+			if input == "" || a.isBusy() {
 				return a, tea.Batch(cmds...)
 			}
 
@@ -367,6 +393,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			a.clearActivities()
 			a.clearRunProgress()
 			a.state.IsAgentRunning = true
+			a.state.IsCompacting = false
 			a.state.StreamingReply = false
 			a.state.ExecutionError = ""
 			a.state.StatusText = statusThinking
@@ -731,6 +758,36 @@ func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
 			a.runProgressKnown = false
 			a.appendActivity("provider", "Retrying provider call", payload, false)
 		}
+	case agentruntime.EventCompactDone:
+		payload, ok := event.Payload.(agentruntime.CompactDonePayload)
+		if !ok {
+			return transcriptDirty
+		}
+		a.state.ExecutionError = ""
+		a.state.StatusText = fmt.Sprintf("Compact(%s) saved %.1f%% context", payload.TriggerMode, payload.SavedRatio*100)
+		a.appendInlineMessage(
+			roleSystem,
+			fmt.Sprintf(
+				"[System] Compact(%s) %s (before=%d, after=%d, saved=%.1f%%, transcript=%s)",
+				payload.TriggerMode,
+				map[bool]string{true: "applied", false: "checked"}[payload.Applied],
+				payload.BeforeChars,
+				payload.AfterChars,
+				payload.SavedRatio*100,
+				payload.TranscriptPath,
+			),
+		)
+		transcriptDirty = true
+	case agentruntime.EventCompactError:
+		payload, ok := event.Payload.(agentruntime.CompactErrorPayload)
+		if !ok {
+			return transcriptDirty
+		}
+		message := fmt.Sprintf("Compact(%s) failed: %s", payload.TriggerMode, payload.Message)
+		a.state.ExecutionError = message
+		a.state.StatusText = message
+		a.appendInlineMessage(roleError, message)
+		transcriptDirty = true
 	}
 
 	return transcriptDirty
@@ -1125,7 +1182,7 @@ func (a *App) applyComponentLayout(rebuildTranscript bool) {
 	a.fileBrowser.SetHeight(max(6, clamp(lay.rightHeight-8, 8, 16)))
 	if rebuildTranscript || prevTranscriptWidth != a.transcript.Width {
 		a.rebuildTranscript()
-	} else if a.transcript.AtBottom() || a.state.IsAgentRunning {
+	} else if a.transcript.AtBottom() || a.isBusy() {
 		a.transcript.GotoBottom()
 	}
 	if prevActivityWidth != a.activity.Width || prevActivityHeight != a.activity.Height {
@@ -1225,7 +1282,7 @@ func (a *App) clearRunProgress() {
 }
 
 func (a *App) handleImmediateSlashCommand(input string) (bool, tea.Cmd) {
-	command, _ := splitFirstWord(strings.ToLower(strings.TrimSpace(input)))
+	command, rest := splitFirstWord(strings.ToLower(strings.TrimSpace(input)))
 	switch command {
 	case slashCommandExit:
 		return true, tea.Quit
@@ -1233,6 +1290,37 @@ func (a *App) handleImmediateSlashCommand(input string) (bool, tea.Cmd) {
 		a.startDraftSession()
 		a.state.StatusText = "[System] Cleared current draft/history."
 		return true, nil
+	case slashCommandCompact:
+		if strings.TrimSpace(rest) != "" {
+			errText := fmt.Sprintf("usage: %s", slashUsageCompact)
+			a.state.ExecutionError = errText
+			a.state.StatusText = errText
+			a.appendInlineMessage(roleError, errText)
+			a.rebuildTranscript()
+			return true, nil
+		}
+		if strings.TrimSpace(a.state.ActiveSessionID) == "" {
+			errText := "compact requires an existing session"
+			a.state.ExecutionError = errText
+			a.state.StatusText = errText
+			a.appendInlineMessage(roleError, errText)
+			a.rebuildTranscript()
+			return true, nil
+		}
+		if a.isBusy() {
+			errText := "compact is already running, please wait"
+			a.state.ExecutionError = errText
+			a.state.StatusText = errText
+			a.appendInlineMessage(roleError, errText)
+			a.rebuildTranscript()
+			return true, nil
+		}
+		a.state.IsCompacting = true
+		a.state.StreamingReply = false
+		a.state.CurrentTool = ""
+		a.state.StatusText = statusCompacting
+		a.state.ExecutionError = ""
+		return true, runCompact(a.runtime, a.state.ActiveSessionID)
 	default:
 		return false, nil
 	}
@@ -1253,6 +1341,7 @@ func (a App) currentStatusSnapshot() statusSnapshot {
 		ActiveSessionID:    a.state.ActiveSessionID,
 		ActiveSessionTitle: a.state.ActiveSessionTitle,
 		IsAgentRunning:     a.state.IsAgentRunning,
+		IsCompacting:       a.state.IsCompacting,
 		CurrentProvider:    a.state.CurrentProvider,
 		CurrentModel:       a.state.CurrentModel,
 		CurrentWorkdir:     a.state.CurrentWorkdir,
@@ -1269,6 +1358,7 @@ func (a *App) startDraftSession() {
 	a.state.ActiveSessionTitle = draftSessionTitle
 	a.activeMessages = nil
 	a.clearActivities()
+	a.state.IsCompacting = false
 	a.state.StatusText = statusDraft
 	a.state.ExecutionError = ""
 	a.state.CurrentTool = ""
@@ -1403,4 +1493,17 @@ func selectSessionWorkdir(sessionWorkdir string, defaultWorkdir string) string {
 		return workdir
 	}
 	return strings.TrimSpace(defaultWorkdir)
+}
+
+// runCompact 在独立命令中触发 runtime compact，并把结果回传给 TUI。
+func runCompact(runtime agentruntime.Runtime, sessionID string) tea.Cmd {
+	return func() tea.Msg {
+		_, err := runtime.Compact(context.Background(), agentruntime.CompactInput{SessionID: sessionID})
+		return compactFinishedMsg{err: err}
+	}
+}
+
+// isBusy 统一判断当前界面是否存在进行中的 agent 或 compact 操作。
+func (a App) isBusy() bool {
+	return a.state.IsAgentRunning || a.state.IsCompacting
 }

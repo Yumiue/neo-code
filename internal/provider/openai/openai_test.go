@@ -12,6 +12,159 @@ import (
 	domain "neo-code/internal/provider"
 )
 
+func TestDriver(t *testing.T) {
+	t.Parallel()
+
+	driver := Driver()
+	if driver.Name != DriverName {
+		t.Fatalf("expected driver name %q, got %q", DriverName, driver.Name)
+	}
+	if driver.Build == nil {
+		t.Fatal("expected Build function to be non-nil")
+	}
+	if driver.Discover == nil {
+		t.Fatal("expected Discover function to be non-nil")
+	}
+}
+
+func TestWithTransport(t *testing.T) {
+	t.Parallel()
+
+	customTransport := &http.Transport{}
+	cfg := resolvedConfig("", "")
+
+	provider, err := New(cfg, WithTransport(customTransport))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	if provider.client.Transport != customTransport {
+		t.Fatal("expected custom transport to be set")
+	}
+}
+
+func TestDefaultRetryTransport(t *testing.T) {
+	t.Parallel()
+
+	transport := defaultRetryTransport()
+	if transport == nil {
+		t.Fatal("expected non-nil transport")
+	}
+}
+
+func TestDiscoverModels(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/models" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"id": "gpt-4", "name": "GPT-4"},
+				{"id": "gpt-3.5-turbo"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	provider, err := New(resolvedConfig(server.URL, ""))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	provider.client = server.Client()
+
+	models, err := provider.DiscoverModels(context.Background())
+	if err != nil {
+		t.Fatalf("DiscoverModels() error = %v", err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("expected 2 models, got %d", len(models))
+	}
+	if models[0].ID != "gpt-4" || models[0].Name != "GPT-4" {
+		t.Fatalf("unexpected first model: %+v", models[0])
+	}
+}
+
+func TestEmitToolCallDelta(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil events guard", func(t *testing.T) {
+		t.Parallel()
+		if err := emitToolCallDelta(context.Background(), nil, 0, "args"); err != nil {
+			t.Fatalf("expected nil events guard to return nil, got %v", err)
+		}
+	})
+
+	t.Run("empty arguments guard", func(t *testing.T) {
+		t.Parallel()
+		events := make(chan domain.StreamEvent, 1)
+		if err := emitToolCallDelta(context.Background(), events, 0, ""); err != nil {
+			t.Fatalf("expected empty arguments guard to return nil, got %v", err)
+		}
+		select {
+		case <-events:
+			t.Fatal("expected no event for empty arguments")
+		default:
+		}
+	})
+
+	t.Run("normal send", func(t *testing.T) {
+		t.Parallel()
+		events := make(chan domain.StreamEvent, 1)
+		if err := emitToolCallDelta(context.Background(), events, 3, `{"path":"main.go"}`); err != nil {
+			t.Fatalf("emitToolCallDelta() error = %v", err)
+		}
+		got := <-events
+		if got.Type != domain.StreamEventToolCallDelta || got.ToolCallIndex != 3 || got.ToolArgumentsDelta != `{"path":"main.go"}` {
+			t.Fatalf("unexpected event: %+v", got)
+		}
+	})
+
+	t.Run("context cancellation", func(t *testing.T) {
+		t.Parallel()
+		cancelledCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := emitToolCallDelta(cancelledCtx, make(chan domain.StreamEvent), 0, "args"); err == nil {
+			t.Fatal("expected cancellation error")
+		}
+	})
+}
+
+func TestEmitMessageDone(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil events guard", func(t *testing.T) {
+		t.Parallel()
+		if err := emitMessageDone(context.Background(), nil, "stop", nil); err != nil {
+			t.Fatalf("expected nil events guard to return nil, got %v", err)
+		}
+	})
+
+	t.Run("normal send", func(t *testing.T) {
+		t.Parallel()
+		events := make(chan domain.StreamEvent, 1)
+		usage := &domain.Usage{TotalTokens: 100}
+		if err := emitMessageDone(context.Background(), events, "stop", usage); err != nil {
+			t.Fatalf("emitMessageDone() error = %v", err)
+		}
+		got := <-events
+		if got.Type != domain.StreamEventMessageDone || got.FinishReason != "stop" || got.Usage.TotalTokens != 100 {
+			t.Fatalf("unexpected event: %+v", got)
+		}
+	})
+
+	t.Run("context cancellation", func(t *testing.T) {
+		t.Parallel()
+		cancelledCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := emitMessageDone(cancelledCtx, make(chan domain.StreamEvent), "stop", nil); err == nil {
+			t.Fatal("expected cancellation error")
+		}
+	})
+}
+
 func resolvedConfig(baseURL string, model string) config.ResolvedProviderConfig {
 	if strings.TrimSpace(baseURL) == "" {
 		baseURL = config.OpenAIDefaultBaseURL
@@ -29,84 +182,6 @@ func resolvedConfig(baseURL string, model string) config.ResolvedProviderConfig 
 			APIKeyEnv: config.OpenAIDefaultAPIKeyEnv,
 		},
 		APIKey: "test-key",
-	}
-}
-
-func TestMergeToolCallDeltas(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name       string
-		deltas     []toolCallDelta
-		assert     func(t *testing.T, calls map[int]*domain.ToolCall)
-		assertDisc func(t *testing.T, disc []domain.ToolCall)
-	}{
-		{
-			name: "single tool call fragments are merged by index",
-			deltas: []toolCallDelta{
-				{Index: 0, ID: "call_1", Function: openAIFunctionCall{Name: "filesystem_edit", Arguments: `{"path":"a.go",`}},
-				{Index: 0, Function: openAIFunctionCall{Arguments: `"search_string":"old",`}},
-				{Index: 0, Function: openAIFunctionCall{Arguments: `"replace_string":"new"}`}},
-			},
-			assert: func(t *testing.T, calls map[int]*domain.ToolCall) {
-				t.Helper()
-				call := calls[0]
-				if call == nil {
-					t.Fatalf("expected call at index 0")
-				}
-				if call.Name != "filesystem_edit" {
-					t.Fatalf("expected name filesystem_edit, got %q", call.Name)
-				}
-				if call.Arguments != `{"path":"a.go","search_string":"old","replace_string":"new"}` {
-					t.Fatalf("unexpected arguments: %q", call.Arguments)
-				}
-			},
-			assertDisc: func(t *testing.T, disc []domain.ToolCall) {
-				t.Helper()
-				if len(disc) != 1 {
-					t.Fatalf("expected 1 discovered tool call, got %d", len(disc))
-				}
-				if disc[0].ID != "call_1" || disc[0].Name != "filesystem_edit" {
-					t.Fatalf("unexpected discovered call: %+v", disc[0])
-				}
-			},
-		},
-		{
-			name: "multiple indices stay isolated",
-			deltas: []toolCallDelta{
-				{Index: 0, ID: "call_1", Function: openAIFunctionCall{Name: "filesystem_read_file", Arguments: `{"path":"a.go"}`}},
-				{Index: 1, ID: "call_2", Function: openAIFunctionCall{Name: "filesystem_write_file", Arguments: `{"path":"b.go"`}},
-				{Index: 1, Function: openAIFunctionCall{Arguments: `,"content":"ok"}`}},
-			},
-			assert: func(t *testing.T, calls map[int]*domain.ToolCall) {
-				t.Helper()
-				if len(calls) != 2 {
-					t.Fatalf("expected 2 calls, got %d", len(calls))
-				}
-				if calls[1].Arguments != `{"path":"b.go","content":"ok"}` {
-					t.Fatalf("unexpected second arguments: %q", calls[1].Arguments)
-				}
-			},
-			assertDisc: func(t *testing.T, disc []domain.ToolCall) {
-				t.Helper()
-				if len(disc) != 2 {
-					t.Fatalf("expected 2 discovered tool calls, got %d", len(disc))
-				}
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			calls := map[int]*domain.ToolCall{}
-			discovered := mergeToolCallDeltas(calls, tt.deltas)
-			tt.assert(t, calls)
-			if tt.assertDisc != nil {
-				tt.assertDisc(t, discovered)
-			}
-		})
 	}
 }
 
@@ -498,16 +573,7 @@ func (r *readCloser) Close() error {
 	return nil
 }
 
-func containsString(items []string, target string) bool {
-	for _, item := range items {
-		if item == target {
-			return true
-		}
-	}
-	return false
-}
-
-// --- emitToolCallStart / mergeToolCallDeltas 边界补充测试 ---
+// --- emitToolCallStart 边界测试 ---
 
 func TestEmitToolCallStartGuards(t *testing.T) {
 	t.Parallel()
@@ -515,13 +581,13 @@ func TestEmitToolCallStartGuards(t *testing.T) {
 	ctx := context.Background()
 
 	// nil events 守卫
-	if err := emitToolCallStart(ctx, nil, "call-1", "filesystem_edit"); err != nil {
+	if err := emitToolCallStart(ctx, nil, 0, "call-1", "filesystem_edit"); err != nil {
 		t.Fatalf("expected nil events guard to return nil, got %v", err)
 	}
 
 	// 空 name 守卫
 	events := make(chan domain.StreamEvent, 1)
-	if err := emitToolCallStart(ctx, events, "call-1", ""); err != nil {
+	if err := emitToolCallStart(ctx, events, 0, "call-1", ""); err != nil {
 		t.Fatalf("expected empty name guard to return nil, got %v", err)
 	}
 	select {
@@ -531,142 +597,19 @@ func TestEmitToolCallStartGuards(t *testing.T) {
 	}
 
 	// 正常发送
-	if err := emitToolCallStart(ctx, events, "call-1", "filesystem_edit"); err != nil {
+	if err := emitToolCallStart(ctx, events, 2, "call-1", "filesystem_edit"); err != nil {
 		t.Fatalf("emitToolCallStart() error = %v", err)
 	}
 	got := <-events
-	if got.Type != domain.StreamEventToolCallStart || got.ToolName != "filesystem_edit" || got.ToolCallID != "call-1" {
+	if got.Type != domain.StreamEventToolCallStart || got.ToolName != "filesystem_edit" || got.ToolCallID != "call-1" || got.ToolCallIndex != 2 {
 		t.Fatalf("unexpected event: %+v", got)
 	}
 
 	// context 取消
 	cancelledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := emitToolCallStart(cancelledCtx, make(chan domain.StreamEvent), "call-1", "filesystem_edit"); err == nil {
+	if err := emitToolCallStart(cancelledCtx, make(chan domain.StreamEvent), 0, "call-1", "filesystem_edit"); err == nil {
 		t.Fatalf("expected cancellation error")
-	}
-}
-
-func TestMergeToolCallDeltasEdgeCases(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name       string
-		deltas     []toolCallDelta
-		assert     func(t *testing.T, calls map[int]*domain.ToolCall)
-		assertDisc func(t *testing.T, disc []domain.ToolCall)
-	}{
-		{
-			name:   "empty deltas returns empty discovered",
-			deltas: []toolCallDelta{},
-			assert: func(t *testing.T, calls map[int]*domain.ToolCall) {
-				t.Helper()
-				if len(calls) != 0 {
-					t.Fatalf("expected empty calls, got %d", len(calls))
-				}
-			},
-			assertDisc: func(t *testing.T, disc []domain.ToolCall) {
-				t.Helper()
-				if len(disc) != 0 {
-					t.Fatalf("expected empty discovered, got %d", len(disc))
-				}
-			},
-		},
-		{
-			name: "only ID without Name is not discovered",
-			deltas: []toolCallDelta{
-				{Index: 0, ID: "call-1"},
-			},
-			assert: func(t *testing.T, calls map[int]*domain.ToolCall) {
-				t.Helper()
-				if calls[0].ID != "call-1" {
-					t.Fatalf("expected ID to be set")
-				}
-			},
-			assertDisc: func(t *testing.T, disc []domain.ToolCall) {
-				t.Helper()
-				if len(disc) != 0 {
-					t.Fatalf("expected 0 discovered when only ID, got %d", len(disc))
-				}
-			},
-		},
-		{
-			name: "only Name without ID is discovered",
-			deltas: []toolCallDelta{
-				{Index: 0, Function: openAIFunctionCall{Name: "filesystem_edit"}},
-			},
-			assert: func(t *testing.T, calls map[int]*domain.ToolCall) {
-				t.Helper()
-				if calls[0].Name != "filesystem_edit" {
-					t.Fatalf("expected Name to be set")
-				}
-			},
-			assertDisc: func(t *testing.T, disc []domain.ToolCall) {
-				t.Helper()
-				if len(disc) != 1 {
-					t.Fatalf("expected 1 discovered, got %d", len(disc))
-				}
-				if disc[0].Name != "filesystem_edit" {
-					t.Fatalf("expected discovered Name %q, got %q", "filesystem_edit", disc[0].Name)
-				}
-			},
-		},
-		{
-			name: "only Arguments without Name is not discovered",
-			deltas: []toolCallDelta{
-				{Index: 0, Function: openAIFunctionCall{Arguments: `{"path":"x"}`}},
-			},
-			assert: func(t *testing.T, calls map[int]*domain.ToolCall) {
-				t.Helper()
-				if calls[0].Arguments != `{"path":"x"}` {
-					t.Fatalf("expected Arguments to be set")
-				}
-			},
-			assertDisc: func(t *testing.T, disc []domain.ToolCall) {
-				t.Helper()
-				if len(disc) != 0 {
-					t.Fatalf("expected 0 discovered when only Arguments, got %d", len(disc))
-				}
-			},
-		},
-		{
-			name: "cumulative calls across multiple rounds",
-			deltas: []toolCallDelta{
-				{Index: 0, ID: "call-1", Function: openAIFunctionCall{Name: "tool_a"}},
-			},
-			assert: func(t *testing.T, calls map[int]*domain.ToolCall) {
-				t.Helper()
-				// 第二轮：添加新工具
-				discovered := mergeToolCallDeltas(calls, []toolCallDelta{
-					{Index: 1, ID: "call-2", Function: openAIFunctionCall{Name: "tool_b"}},
-				})
-				if len(discovered) != 1 || discovered[0].Name != "tool_b" {
-					t.Fatalf("expected 1 new discovered in second round, got %+v", discovered)
-				}
-				if len(calls) != 2 {
-					t.Fatalf("expected 2 calls after cumulative merge, got %d", len(calls))
-				}
-			},
-			assertDisc: func(t *testing.T, disc []domain.ToolCall) {
-				t.Helper()
-				if len(disc) != 1 || disc[0].ID != "call-1" {
-					t.Fatalf("expected first round discovered ID %q, got %+v", "call-1", disc)
-				}
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			calls := map[int]*domain.ToolCall{}
-			discovered := mergeToolCallDeltas(calls, tt.deltas)
-			tt.assert(t, calls)
-			if tt.assertDisc != nil {
-				tt.assertDisc(t, discovered)
-			}
-		})
 	}
 }
 
@@ -733,5 +676,165 @@ func TestProviderChatEmitsToolCallStartEvent(t *testing.T) {
 	}
 	if !foundToolCallStart {
 		t.Fatalf("expected StreamEventToolCallStart event in stream")
+	}
+}
+
+// TestProviderChatEmitsFullEventStream 测试完整的事件流（包括 tool_call_delta 和 message_done）。
+func TestProviderChatEmitsFullEventStream(t *testing.T) {
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+
+		// 发送文本 delta
+		writeSSEChunk(t, w, map[string]any{
+			"choices": []map[string]any{
+				{
+					"index": 0,
+					"delta": map[string]any{
+						"content": "Hello",
+					},
+				},
+			},
+		})
+
+		// 发送 tool call start 和 delta
+		writeSSEChunk(t, w, map[string]any{
+			"choices": []map[string]any{
+				{
+					"index": 0,
+					"delta": map[string]any{
+						"tool_calls": []map[string]any{
+							{
+								"index": 0,
+								"id":    "call_tool_1",
+								"type":  "function",
+								"function": map[string]any{
+									"name":      "filesystem_edit",
+									"arguments": `{"path":"a.`,
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+
+		// 发送 tool call delta（参数增量）
+		writeSSEChunk(t, w, map[string]any{
+			"choices": []map[string]any{
+				{
+					"index": 0,
+					"delta": map[string]any{
+						"tool_calls": []map[string]any{
+							{
+								"index": 0,
+								"function": map[string]any{
+									"arguments": `go"}`,
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+
+		// 发送 usage 和 finish_reason
+		writeSSEChunk(t, w, map[string]any{
+			"choices": []map[string]any{
+				{
+					"index":         0,
+					"finish_reason": "tool_calls",
+				},
+			},
+			"usage": map[string]any{
+				"prompt_tokens":     100,
+				"completion_tokens": 50,
+				"total_tokens":      150,
+			},
+		})
+
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	provider, err := New(resolvedConfig(server.URL, config.OpenAIDefaultModel))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	provider.client = server.Client()
+
+	events := make(chan domain.StreamEvent, 16)
+	_, err = provider.Chat(context.Background(), domain.ChatRequest{
+		Model:    config.OpenAIDefaultModel,
+		Messages: []domain.Message{{Role: "user", Content: "test"}},
+	}, events)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+
+	close(events)
+
+	var (
+		foundTextDelta       bool
+		foundToolCallStart   bool
+		foundToolCallDelta   bool
+		foundMessageDone     bool
+		toolCallDeltaContent string
+		messageDoneEvt       *domain.StreamEvent
+	)
+
+	for evt := range events {
+		switch evt.Type {
+		case domain.StreamEventTextDelta:
+			foundTextDelta = true
+		case domain.StreamEventToolCallStart:
+			foundToolCallStart = true
+			if evt.ToolName != "filesystem_edit" {
+				t.Fatalf("expected ToolName %q, got %q", "filesystem_edit", evt.ToolName)
+			}
+			if evt.ToolCallIndex != 0 {
+				t.Fatalf("expected ToolCallIndex %d for tool_call_start, got %d", 0, evt.ToolCallIndex)
+			}
+		case domain.StreamEventToolCallDelta:
+			foundToolCallDelta = true
+			toolCallDeltaContent += evt.ToolArgumentsDelta
+		case domain.StreamEventMessageDone:
+			foundMessageDone = true
+			messageDoneEvt = &evt
+		}
+	}
+
+	if !foundTextDelta {
+		t.Fatal("expected StreamEventTextDelta event")
+	}
+	if !foundToolCallStart {
+		t.Fatal("expected StreamEventToolCallStart event")
+	}
+	if !foundToolCallDelta {
+		t.Fatal("expected StreamEventToolCallDelta event")
+	}
+	if !foundMessageDone {
+		t.Fatal("expected StreamEventMessageDone event")
+	}
+
+	// 验证 tool_call_delta 内容被正确累加
+	expectedDelta := `{"path":"a.go"}`
+	if toolCallDeltaContent != expectedDelta {
+		t.Fatalf("expected tool call delta content %q, got %q", expectedDelta, toolCallDeltaContent)
+	}
+
+	// 验证 message_done 事件包含正确的字段
+	if messageDoneEvt == nil {
+		t.Fatal("message_done event is nil")
+	}
+	if messageDoneEvt.FinishReason != "tool_calls" {
+		t.Fatalf("expected FinishReason %q, got %q", "tool_calls", messageDoneEvt.FinishReason)
+	}
+	if messageDoneEvt.Usage == nil {
+		t.Fatal("expected Usage in message_done event")
+	}
+	if messageDoneEvt.Usage.TotalTokens != 150 {
+		t.Fatalf("expected TotalTokens %d, got %d", 150, messageDoneEvt.Usage.TotalTokens)
 	}
 }

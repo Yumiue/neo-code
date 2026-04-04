@@ -240,9 +240,37 @@ func (p *Provider) consumeStream(ctx context.Context, body io.Reader, events cha
 				}
 			}
 
-			for _, discovered := range mergeToolCallDeltas(toolCalls, choice.Delta.ToolCalls) {
-				if err := emitToolCallStart(ctx, events, discovered.ID, discovered.Name); err != nil {
-					return err
+			// 处理 tool call 增量
+			for _, delta := range choice.Delta.ToolCalls {
+				call, exists := toolCalls[delta.Index]
+				if !exists {
+					call = &domain.ToolCall{}
+					toolCalls[delta.Index] = call
+				}
+
+				// 首次发现且有名称，发送 tool_call_start
+				if !exists && strings.TrimSpace(delta.Function.Name) != "" {
+					call.ID = delta.ID
+					call.Name = delta.Function.Name
+					if err := emitToolCallStart(ctx, events, delta.Index, delta.ID, delta.Function.Name); err != nil {
+						return err
+					}
+				} else {
+					// 更新现有 tool call
+					if strings.TrimSpace(delta.ID) != "" {
+						call.ID = delta.ID
+					}
+					if strings.TrimSpace(delta.Function.Name) != "" {
+						call.Name = delta.Function.Name
+					}
+				}
+
+				// 发送 tool_call_delta
+				if delta.Function.Arguments != "" {
+					call.Arguments += delta.Function.Arguments
+					if err := emitToolCallDelta(ctx, events, delta.Index, delta.Function.Arguments); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -267,6 +295,10 @@ func (p *Provider) consumeStream(ctx context.Context, body io.Reader, events cha
 				return domain.ChatResponse{}, flushErr
 			}
 			if done {
+				// 发送 message_done 事件
+				if err := emitMessageDone(ctx, events, finishReason, &usage); err != nil {
+					return domain.ChatResponse{}, err
+				}
 				return finalizeResponse(contentBuilder.String(), toolCalls, finishReason, usage), nil
 			}
 		case strings.HasPrefix(trimmed, ":"):
@@ -276,6 +308,10 @@ func (p *Provider) consumeStream(ctx context.Context, body io.Reader, events cha
 		if errors.Is(err, io.EOF) {
 			if flushErr := flushEvent(); flushErr != nil {
 				return domain.ChatResponse{}, flushErr
+			}
+			// 发送 message_done 事件
+			if err := emitMessageDone(ctx, events, finishReason, &usage); err != nil {
+				return domain.ChatResponse{}, err
 			}
 			return finalizeResponse(contentBuilder.String(), toolCalls, finishReason, usage), nil
 		}
@@ -342,16 +378,17 @@ func emitTextDelta(ctx context.Context, events chan<- domain.StreamEvent, text s
 	}
 }
 
-func emitToolCallStart(ctx context.Context, events chan<- domain.StreamEvent, id, name string) error {
+func emitToolCallStart(ctx context.Context, events chan<- domain.StreamEvent, index int, id, name string) error {
 	if events == nil || name == "" {
 		return nil
 	}
 
 	select {
 	case events <- domain.StreamEvent{
-		Type:       domain.StreamEventToolCallStart,
-		ToolCallID: id,
-		ToolName:   name,
+		Type:          domain.StreamEventToolCallStart,
+		ToolCallID:    id,
+		ToolName:      name,
+		ToolCallIndex: index,
 	}:
 		return nil
 	case <-ctx.Done():
@@ -359,32 +396,40 @@ func emitToolCallStart(ctx context.Context, events chan<- domain.StreamEvent, id
 	}
 }
 
-// mergeToolCallDeltas 将流式增量合并到 target map 中，并返回本次新发现的 tool call 列表。
-// 当一个新的 tool call 索引首次出现且拥有非空工具名称时，视为新发现。
-func mergeToolCallDeltas(target map[int]*domain.ToolCall, deltas []toolCallDelta) []domain.ToolCall {
-	var discovered []domain.ToolCall
-	for _, delta := range deltas {
-		call, exists := target[delta.Index]
-		if !exists {
-			call = &domain.ToolCall{}
-			target[delta.Index] = call
-		}
-
-		if strings.TrimSpace(delta.ID) != "" {
-			call.ID = delta.ID
-		}
-		if strings.TrimSpace(delta.Function.Name) != "" {
-			call.Name = delta.Function.Name
-		}
-		if delta.Function.Arguments != "" {
-			call.Arguments += delta.Function.Arguments
-		}
-
-		if !exists && strings.TrimSpace(call.Name) != "" {
-			discovered = append(discovered, *call)
-		}
+// emitToolCallDelta 发送工具调用参数增量事件。
+func emitToolCallDelta(ctx context.Context, events chan<- domain.StreamEvent, index int, argumentsDelta string) error {
+	if events == nil || argumentsDelta == "" {
+		return nil
 	}
-	return discovered
+
+	select {
+	case events <- domain.StreamEvent{
+		Type:               domain.StreamEventToolCallDelta,
+		ToolCallIndex:      index,
+		ToolArgumentsDelta: argumentsDelta,
+	}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// emitMessageDone 发送消息完成事件。
+func emitMessageDone(ctx context.Context, events chan<- domain.StreamEvent, finishReason string, usage *domain.Usage) error {
+	if events == nil {
+		return nil
+	}
+
+	select {
+	case events <- domain.StreamEvent{
+		Type:         domain.StreamEventMessageDone,
+		FinishReason: finishReason,
+		Usage:        usage,
+	}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func finalizeResponse(content string, toolCalls map[int]*domain.ToolCall, finishReason string, usage domain.Usage) domain.ChatResponse {
