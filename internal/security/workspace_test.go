@@ -155,7 +155,7 @@ func TestWorkspaceSandboxCheck(t *testing.T) {
 			}
 
 			sandbox := NewWorkspaceSandbox()
-			err := sandbox.Check(context.Background(), tt.action(root, outsideFile))
+			_, err := sandbox.Check(context.Background(), tt.action(root, outsideFile))
 			if tt.expectErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.expectErr) {
 					t.Fatalf("expected error containing %q, got %v", tt.expectErr, err)
@@ -179,12 +179,12 @@ func TestWorkspaceSandboxCheckShortCircuits(t *testing.T) {
 	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := sandbox.Check(canceledCtx, action)
+	_, err := sandbox.Check(canceledCtx, action)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context canceled error, got %v", err)
 	}
 
-	err = sandbox.Check(context.Background(), Action{
+	_, err = sandbox.Check(context.Background(), Action{
 		Type: ActionTypeRead,
 		Payload: ActionPayload{
 			Resource: "filesystem_read_file",
@@ -638,7 +638,7 @@ func TestEnsureNoSymlinkEscape(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			root, target, original := tt.setup(t)
-			err := ensureNoSymlinkEscape(root, target, original)
+			_, err := ensureNoSymlinkEscape(root, target, original)
 			if tt.expectErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.expectErr) {
 					t.Fatalf("expected error containing %q, got %v", tt.expectErr, err)
