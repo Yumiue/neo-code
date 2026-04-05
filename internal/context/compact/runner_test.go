@@ -591,7 +591,7 @@ func TestManualCompactTruncationFailsWhenStructureBreaks(t *testing.T) {
 			MaxSummaryChars:          40,
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "missing required section") {
+	if err == nil || !strings.Contains(err.Error(), "max_summary_chars") {
 		t.Fatalf("expected truncation validation failure, got %v", err)
 	}
 }

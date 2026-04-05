@@ -1,6 +1,11 @@
 package context
 
-import "context"
+import (
+	"context"
+	"os"
+	"sync"
+	"time"
+)
 
 // promptSectionSource 约束单个 prompt section 来源的最小能力，避免 Builder 持有具体细节。
 type promptSectionSource interface {
@@ -18,21 +23,26 @@ func (corePromptSource) Sections(ctx context.Context, input BuildInput) ([]promp
 	return append([]promptSection(nil), defaultSystemPromptSections()...), nil
 }
 
-// projectRulesSource 只负责发现并渲染项目规则文件。
-type projectRulesSource struct{}
+type projectRulesLoader func(ctx context.Context, workdir string) ([]ruleDocument, error)
+type ruleFileStat func(path string) (os.FileInfo, error)
 
-// Sections 按当前工作目录向上发现 AGENTS.md，并渲染为统一 section。
-func (projectRulesSource) Sections(ctx context.Context, input BuildInput) ([]promptSection, error) {
-	rules, err := loadProjectRules(ctx, input.Metadata.Workdir)
-	if err != nil {
-		return nil, err
-	}
+type ruleFileSnapshot struct {
+	Path    string
+	ModTime time.Time
+	Size    int64
+}
 
-	section := renderProjectRulesSection(rules)
-	if renderPromptSection(section) == "" {
-		return nil, nil
-	}
-	return []promptSection{section}, nil
+type cachedRuleDocuments struct {
+	documents []ruleDocument
+	snapshots []ruleFileSnapshot
+}
+
+// projectRulesSource 负责发现、缓存并渲染项目规则文件。
+type projectRulesSource struct {
+	mu        sync.Mutex
+	cache     map[string]cachedRuleDocuments
+	loadRules projectRulesLoader
+	statFile  ruleFileStat
 }
 
 // systemStateSource 只负责收集并渲染运行时系统摘要。
@@ -41,7 +51,7 @@ type systemStateSource struct {
 }
 
 // Sections 汇总 workdir、shell、provider、model 与 git 摘要信息。
-func (s systemStateSource) Sections(ctx context.Context, input BuildInput) ([]promptSection, error) {
+func (s *systemStateSource) Sections(ctx context.Context, input BuildInput) ([]promptSection, error) {
 	systemState, err := collectSystemState(ctx, input.Metadata, s.gitRunner)
 	if err != nil {
 		return nil, err

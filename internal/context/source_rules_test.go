@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadProjectRulesOrdersGlobalToLocal(t *testing.T) {
@@ -130,6 +131,50 @@ func TestDiscoverRuleFilesReturnsDirectoryReadError(t *testing.T) {
 	}
 	if paths != nil {
 		t.Fatalf("expected no paths on discovery failure, got %+v", paths)
+	}
+}
+
+func TestProjectRulesSourceCachesAndInvalidatesByMTime(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	rulesPath := filepath.Join(root, projectRuleFileName)
+	if err := os.WriteFile(rulesPath, []byte("version-1"), 0o644); err != nil {
+		t.Fatalf("write rules: %v", err)
+	}
+
+	loadCalls := 0
+	source := &projectRulesSource{
+		loadRules: func(ctx context.Context, workdir string) ([]ruleDocument, error) {
+			loadCalls++
+			return loadProjectRules(ctx, workdir)
+		},
+		statFile: os.Stat,
+	}
+
+	if _, err := source.Sections(context.Background(), BuildInput{Metadata: testMetadata(root)}); err != nil {
+		t.Fatalf("first Sections() error = %v", err)
+	}
+	if _, err := source.Sections(context.Background(), BuildInput{Metadata: testMetadata(root)}); err != nil {
+		t.Fatalf("second Sections() error = %v", err)
+	}
+	if loadCalls != 1 {
+		t.Fatalf("expected cached rules on second call, got loadCalls=%d", loadCalls)
+	}
+
+	future := time.Now().Add(2 * time.Second)
+	if err := os.WriteFile(rulesPath, []byte("version-2 with more content"), 0o644); err != nil {
+		t.Fatalf("rewrite rules: %v", err)
+	}
+	if err := os.Chtimes(rulesPath, future, future); err != nil {
+		t.Fatalf("chtimes rules: %v", err)
+	}
+
+	if _, err := source.Sections(context.Background(), BuildInput{Metadata: testMetadata(root)}); err != nil {
+		t.Fatalf("third Sections() error = %v", err)
+	}
+	if loadCalls != 2 {
+		t.Fatalf("expected cache invalidation after mtime change, got loadCalls=%d", loadCalls)
 	}
 }
 

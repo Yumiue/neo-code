@@ -33,7 +33,7 @@ func TestCorePromptSourceSectionsReturnsClone(t *testing.T) {
 func TestProjectRulesSourceSectionsSkipsWhenNoRulesExist(t *testing.T) {
 	t.Parallel()
 
-	sections, err := (projectRulesSource{}).Sections(context.Background(), BuildInput{
+	sections, err := (&projectRulesSource{}).Sections(context.Background(), BuildInput{
 		Metadata: Metadata{Workdir: t.TempDir()},
 	})
 	if err != nil {
@@ -52,7 +52,7 @@ func TestProjectRulesSourceSectionsRendersRules(t *testing.T) {
 		t.Fatalf("write AGENTS.md: %v", err)
 	}
 
-	sections, err := (projectRulesSource{}).Sections(context.Background(), BuildInput{
+	sections, err := (&projectRulesSource{}).Sections(context.Background(), BuildInput{
 		Metadata: Metadata{Workdir: root},
 	})
 	if err != nil {

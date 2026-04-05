@@ -525,10 +525,16 @@ func TestServiceRunFailurePreservesExistingSessionProviderAndModel(t *testing.T)
 	t.Parallel()
 
 	manager := newRuntimeConfigManager(t)
-	setRuntimeProviderEnv(t, config.GeminiDefaultAPIKeyEnv, "gemini-key")
+	geminiEnv := runtimeTestAPIKeyEnv(t) + "_GEMINI"
+	setRuntimeProviderEnv(t, geminiEnv, "gemini-key")
 	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
 		cfg.SelectedProvider = config.GeminiName
 		cfg.CurrentModel = "gemini-current-model"
+		for index := range cfg.Providers {
+			if config.NormalizeProviderName(cfg.Providers[index].Name) == config.NormalizeProviderName(config.GeminiName) {
+				cfg.Providers[index].APIKeyEnv = geminiEnv
+			}
+		}
 		return nil
 	}); err != nil {
 		t.Fatalf("update config: %v", err)

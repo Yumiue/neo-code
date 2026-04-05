@@ -10,11 +10,11 @@ type DefaultBuilder struct {
 
 // NewBuilder returns the default context builder implementation.
 func NewBuilder() Builder {
-	systemSource := systemStateSource{gitRunner: runGitCommand}
+	systemSource := &systemStateSource{gitRunner: runGitCommand}
 	return &DefaultBuilder{
 		promptSources: []promptSectionSource{
 			corePromptSource{},
-			projectRulesSource{},
+			&projectRulesSource{},
 			systemSource,
 		},
 		trimPolicy: spanMessageTrimPolicy{},

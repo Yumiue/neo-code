@@ -27,18 +27,16 @@ func TestCollectSystemStateHandlesGitUnavailable(t *testing.T) {
 	}
 }
 
-func TestCollectSystemStateIncludesGitSummary(t *testing.T) {
+func TestCollectSystemStateIncludesGitSummaryFromSingleCall(t *testing.T) {
 	t.Parallel()
 
+	callCount := 0
 	runner := func(ctx context.Context, workdir string, args ...string) (string, error) {
-		switch strings.Join(args, " ") {
-		case "rev-parse --abbrev-ref HEAD":
-			return "feature/context\n", nil
-		case "status --porcelain":
-			return " M internal/context/builder.go\n", nil
-		default:
+		callCount++
+		if strings.Join(args, " ") != "status --short --branch" {
 			return "", errors.New("unexpected git command")
 		}
+		return "## feature/context...origin/feature/context\n M internal/context/builder.go\n", nil
 	}
 
 	state, err := collectSystemState(context.Background(), testMetadata("/workspace"), runner)
@@ -46,6 +44,9 @@ func TestCollectSystemStateIncludesGitSummary(t *testing.T) {
 		t.Fatalf("collectSystemState() error = %v", err)
 	}
 
+	if callCount != 1 {
+		t.Fatalf("expected a single git call, got %d", callCount)
+	}
 	if !state.Git.Available {
 		t.Fatalf("expected git to be available")
 	}

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"neo-code/internal/context/internalcompact"
 	"neo-code/internal/provider"
 )
 
@@ -129,6 +130,75 @@ func TestTrimMessagesPreservesToolPairs(t *testing.T) {
 	}
 	if foundAssistantToolCall != foundToolResult {
 		t.Fatalf("expected tool call and tool result to be preserved together, got %+v", trimmed)
+	}
+}
+
+func TestTrimMessagesProtectsLatestExplicitUserInstructionTail(t *testing.T) {
+	t.Parallel()
+
+	messages := make([]provider.Message, 0, maxRetainedMessageSpans+5)
+	for i := 0; i < 2; i++ {
+		messages = append(messages, provider.Message{Role: provider.RoleUser, Content: fmt.Sprintf("old-%d", i)})
+	}
+	messages = append(messages,
+		provider.Message{Role: provider.RoleUser, Content: "latest explicit instruction"},
+		provider.Message{Role: provider.RoleAssistant, Content: "follow-up-1"},
+		provider.Message{Role: provider.RoleAssistant, Content: "follow-up-2"},
+		provider.Message{Role: provider.RoleAssistant, Content: "follow-up-3"},
+		provider.Message{Role: provider.RoleAssistant, Content: "follow-up-4"},
+		provider.Message{Role: provider.RoleAssistant, Content: "follow-up-5"},
+		provider.Message{Role: provider.RoleAssistant, Content: "follow-up-6"},
+		provider.Message{Role: provider.RoleAssistant, Content: "follow-up-7"},
+		provider.Message{Role: provider.RoleAssistant, Content: "follow-up-8"},
+		provider.Message{Role: provider.RoleAssistant, Content: "follow-up-9"},
+		provider.Message{Role: provider.RoleAssistant, Content: "follow-up-10"},
+		provider.Message{Role: provider.RoleAssistant, Content: "follow-up-11"},
+	)
+
+	trimmed := trimMessages(messages)
+	if trimmed[0].Role != provider.RoleUser || trimmed[0].Content != "latest explicit instruction" {
+		t.Fatalf("expected protected tail to keep latest explicit user instruction, got %+v", trimmed[0])
+	}
+	if len(trimmed) != 12 {
+		t.Fatalf("expected protected tail to keep latest instruction and full assistant tail, got %d messages", len(trimmed))
+	}
+}
+
+func TestTrimMessagesUsesSharedSpanModel(t *testing.T) {
+	t.Parallel()
+
+	messages := make([]provider.Message, 0, maxRetainedMessageSpans+6)
+	for i := 0; i < 3; i++ {
+		messages = append(messages, provider.Message{Role: provider.RoleUser, Content: fmt.Sprintf("u-%d", i)})
+	}
+	messages = append(messages,
+		provider.Message{
+			Role: provider.RoleAssistant,
+			ToolCalls: []provider.ToolCall{
+				{ID: "call-2", Name: "filesystem_read_file", Arguments: "{}"},
+			},
+		},
+		provider.Message{Role: provider.RoleTool, ToolCallID: "call-2", Content: "tool-result"},
+		provider.Message{Role: provider.RoleAssistant, Content: "after tool"},
+		provider.Message{Role: provider.RoleUser, Content: "u-4"},
+		provider.Message{Role: provider.RoleAssistant, Content: "a-5"},
+		provider.Message{Role: provider.RoleUser, Content: "u-6"},
+		provider.Message{Role: provider.RoleAssistant, Content: "a-7"},
+		provider.Message{Role: provider.RoleUser, Content: "u-8"},
+		provider.Message{Role: provider.RoleAssistant, Content: "a-9"},
+		provider.Message{Role: provider.RoleUser, Content: "u-10"},
+		provider.Message{Role: provider.RoleAssistant, Content: "a-11"},
+	)
+
+	spans := internalcompact.BuildMessageSpans(messages)
+	trimmed := trimMessages(messages)
+
+	start := spans[len(spans)-maxRetainedMessageSpans].Start
+	if len(trimmed) == 0 || trimmed[0].Content != messages[start].Content {
+		t.Fatalf("expected trim to start from shared span boundary %d, got %+v", start, trimmed)
+	}
+	if trimmed[0].Role != provider.RoleAssistant || len(trimmed[0].ToolCalls) != 1 {
+		t.Fatalf("expected trim to keep whole tool block at shared boundary, got %+v", trimmed[0])
 	}
 }
 
