@@ -431,6 +431,9 @@ func TestServiceRunDelegatesToContextBuilder(t *testing.T) {
 
 	manager := newRuntimeConfigManager(t)
 	store := newMemoryStore()
+	session := newSession("memory reject")
+	session.ID = "session-memory-reject"
+	store.sessions[session.ID] = cloneSession(session)
 	registry := tools.NewRegistry()
 	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
 
@@ -650,6 +653,9 @@ func TestServiceRunEmitsPermissionRequestAndResolvedForAsk(t *testing.T) {
 
 	manager := newRuntimeConfigManager(t)
 	store := newMemoryStore()
+	session := newSession("memory reject")
+	session.ID = "session-memory-reject"
+	store.sessions[session.ID] = cloneSession(session)
 	registry := tools.NewRegistry()
 	tool := &stubTool{name: "webfetch", content: "should-not-run"}
 	registry.Register(tool)
@@ -815,6 +821,97 @@ func TestServiceRunEmitsPermissionResolvedForDeny(t *testing.T) {
 		}
 		if payload.RuleID != "deny-bash" {
 			t.Fatalf("expected deny-bash rule id, got %+v", payload)
+		}
+		return
+	}
+	t.Fatalf("expected permission resolved event payload")
+}
+
+func TestServiceRunEmitsRememberScopeWhenSessionRejectMemoryHits(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	session := newSession("memory reject")
+	session.ID = "session-memory-reject"
+	store.sessions[session.ID] = cloneSession(session)
+	registry := tools.NewRegistry()
+	tool := &stubTool{name: "webfetch", content: "should-not-run"}
+	registry.Register(tool)
+
+	engine, err := security.NewStaticGateway(security.DecisionAllow, []security.Rule{
+		{
+			ID:       "ask-webfetch",
+			Type:     security.ActionTypeRead,
+			Resource: "webfetch",
+			Decision: security.DecisionAsk,
+			Reason:   "requires approval",
+		},
+	})
+	if err != nil {
+		t.Fatalf("new static gateway: %v", err)
+	}
+	toolManager, err := tools.NewManager(registry, engine, nil)
+	if err != nil {
+		t.Fatalf("new tool manager: %v", err)
+	}
+	if err := toolManager.RememberSessionDecision("session-memory-reject", security.Action{
+		Type: security.ActionTypeRead,
+		Payload: security.ActionPayload{
+			ToolName:   "webfetch",
+			Resource:   "webfetch",
+			Operation:  "fetch",
+			TargetType: security.TargetTypeURL,
+			Target:     "https://example.com/private",
+		},
+	}, tools.SessionPermissionScopeReject); err != nil {
+		t.Fatalf("remember session reject: %v", err)
+	}
+
+	scripted := &scriptedProvider{
+		responses: []provider.ChatResponse{
+			{
+				Message: provider.Message{
+					Role: "assistant",
+					ToolCalls: []provider.ToolCall{
+						{ID: "call-memory-reject", Name: "webfetch", Arguments: `{"url":"https://example.com/private"}`},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+			{
+				Message:      provider.Message{Role: "assistant", Content: "done"},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{provider: scripted}, nil)
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: "session-memory-reject",
+		RunID:     "run-memory-reject",
+		Content:   "fetch private",
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if tool.callCount != 0 {
+		t.Fatalf("expected remembered reject to skip tool execution, got %d", tool.callCount)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{EventPermissionResolved, EventToolResult, EventAgentDone})
+	assertNoEventType(t, events, EventPermissionRequest)
+
+	for _, event := range events {
+		if event.Type != EventPermissionResolved {
+			continue
+		}
+		payload, ok := event.Payload.(PermissionResolvedPayload)
+		if !ok {
+			t.Fatalf("expected PermissionResolvedPayload, got %#v", event.Payload)
+		}
+		if payload.RememberScope != string(tools.SessionPermissionScopeReject) {
+			t.Fatalf("expected remember_scope reject, got %+v", payload)
 		}
 		return
 	}

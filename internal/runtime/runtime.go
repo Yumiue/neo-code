@@ -578,6 +578,7 @@ type permissionEventView struct {
 	decision   string
 	reason     string
 	ruleID     string
+	scope      string
 	resolvedAs string
 }
 
@@ -609,6 +610,7 @@ func permissionEventFromError(err error) (permissionEventView, bool) {
 		decision:   decision,
 		reason:     reason,
 		ruleID:     strings.TrimSpace(permissionErr.RuleID()),
+		scope:      strings.TrimSpace(permissionErr.RememberScope()),
 		resolvedAs: resolvedAs,
 	}, true
 }
@@ -624,7 +626,7 @@ func (v permissionEventView) toRequestPayload() PermissionRequestPayload {
 		Decision:      v.decision,
 		Reason:        v.reason,
 		RuleID:        v.ruleID,
-		RememberScope: "",
+		RememberScope: v.scope,
 	}
 }
 
@@ -639,7 +641,7 @@ func (v permissionEventView) toResolvedPayload() PermissionResolvedPayload {
 		Decision:      v.decision,
 		Reason:        v.reason,
 		RuleID:        v.ruleID,
-		RememberScope: "",
+		RememberScope: v.scope,
 		ResolvedAs:    v.resolvedAs,
 	}
 }

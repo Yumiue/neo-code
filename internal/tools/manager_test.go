@@ -377,6 +377,9 @@ func TestPermissionDecisionError(t *testing.T) {
 	if err.Action().Type != security.ActionTypeRead {
 		t.Fatalf("expected action type read, got %q", err.Action().Type)
 	}
+	if err.RememberScope() != "" {
+		t.Fatalf("expected empty remember scope, got %q", err.RememberScope())
+	}
 	if errors.Is(err, context.Canceled) {
 		t.Fatalf("permission error should not match unrelated errors")
 	}
@@ -391,11 +394,209 @@ func TestPermissionDecisionError(t *testing.T) {
 	if denyErr.ToolName() != "" {
 		t.Fatalf("expected empty tool name, got %q", denyErr.ToolName())
 	}
+	if denyErr.RememberScope() != "" {
+		t.Fatalf("expected empty remember scope, got %q", denyErr.RememberScope())
+	}
 
 	var nilErr *PermissionDecisionError
-	if nilErr.Error() != "" || nilErr.Decision() != "" || nilErr.ToolName() != "" {
+	if nilErr.Error() != "" || nilErr.Decision() != "" || nilErr.ToolName() != "" || nilErr.RememberScope() != "" {
 		t.Fatalf("expected nil permission error helpers to be empty")
 	}
+}
+
+func TestDefaultManagerSessionPermissionMemory(t *testing.T) {
+	t.Parallel()
+
+	newAskManager := func(t *testing.T) (*DefaultManager, *managerStubTool) {
+		t.Helper()
+		registry := NewRegistry()
+		webTool := &managerStubTool{name: "webfetch", content: "ok"}
+		registry.Register(webTool)
+		engine, err := security.NewStaticGateway(security.DecisionAllow, []security.Rule{
+			{
+				ID:       "ask-webfetch",
+				Type:     security.ActionTypeRead,
+				Resource: "webfetch",
+				Decision: security.DecisionAsk,
+				Reason:   "requires approval",
+			},
+		})
+		if err != nil {
+			t.Fatalf("new engine: %v", err)
+		}
+		manager, err := NewManager(registry, engine, nil)
+		if err != nil {
+			t.Fatalf("new manager: %v", err)
+		}
+		return manager, webTool
+	}
+
+	t.Run("once allows only first follow-up", func(t *testing.T) {
+		t.Parallel()
+		manager, webTool := newAskManager(t)
+		input := ToolCallInput{
+			ID:        "call-once",
+			Name:      "webfetch",
+			Arguments: []byte(`{"url":"https://example.com/once"}`),
+			SessionID: "session-once",
+		}
+
+		_, err := manager.Execute(context.Background(), input)
+		var permissionErr *PermissionDecisionError
+		if !errors.As(err, &permissionErr) || permissionErr.Decision() != "ask" {
+			t.Fatalf("expected initial ask decision, got %v", err)
+		}
+		if rememberErr := manager.RememberSessionDecision(input.SessionID, permissionErr.Action(), SessionPermissionScopeOnce); rememberErr != nil {
+			t.Fatalf("remember once: %v", rememberErr)
+		}
+
+		result, err := manager.Execute(context.Background(), input)
+		if err != nil {
+			t.Fatalf("expected remembered once allow, got %v", err)
+		}
+		if result.IsError {
+			t.Fatalf("expected non-error result, got %+v", result)
+		}
+		if webTool.callCount != 1 {
+			t.Fatalf("expected tool call count 1 after once allow, got %d", webTool.callCount)
+		}
+
+		_, err = manager.Execute(context.Background(), input)
+		if !errors.As(err, &permissionErr) || permissionErr.Decision() != "ask" {
+			t.Fatalf("expected ask after once consumed, got %v", err)
+		}
+	})
+
+	t.Run("always(session) keeps allowing in same session", func(t *testing.T) {
+		t.Parallel()
+		manager, webTool := newAskManager(t)
+		input := ToolCallInput{
+			ID:        "call-always",
+			Name:      "webfetch",
+			Arguments: []byte(`{"url":"https://example.com/always"}`),
+			SessionID: "session-always",
+		}
+
+		_, err := manager.Execute(context.Background(), input)
+		var permissionErr *PermissionDecisionError
+		if !errors.As(err, &permissionErr) || permissionErr.Decision() != "ask" {
+			t.Fatalf("expected initial ask decision, got %v", err)
+		}
+		if rememberErr := manager.RememberSessionDecision(input.SessionID, permissionErr.Action(), SessionPermissionScopeAlways); rememberErr != nil {
+			t.Fatalf("remember always: %v", rememberErr)
+		}
+
+		for i := 0; i < 2; i++ {
+			if _, err := manager.Execute(context.Background(), input); err != nil {
+				t.Fatalf("expected always allow on iteration %d, got %v", i, err)
+			}
+		}
+		if webTool.callCount != 2 {
+			t.Fatalf("expected tool to execute twice, got %d", webTool.callCount)
+		}
+	})
+
+	t.Run("reject denies in same session and keeps scope metadata", func(t *testing.T) {
+		t.Parallel()
+		manager, webTool := newAskManager(t)
+		input := ToolCallInput{
+			ID:        "call-reject",
+			Name:      "webfetch",
+			Arguments: []byte(`{"url":"https://example.com/reject"}`),
+			SessionID: "session-reject",
+		}
+
+		_, err := manager.Execute(context.Background(), input)
+		var permissionErr *PermissionDecisionError
+		if !errors.As(err, &permissionErr) || permissionErr.Decision() != "ask" {
+			t.Fatalf("expected initial ask decision, got %v", err)
+		}
+		if rememberErr := manager.RememberSessionDecision(input.SessionID, permissionErr.Action(), SessionPermissionScopeReject); rememberErr != nil {
+			t.Fatalf("remember reject: %v", rememberErr)
+		}
+
+		_, err = manager.Execute(context.Background(), input)
+		if !errors.As(err, &permissionErr) {
+			t.Fatalf("expected permission error, got %v", err)
+		}
+		if permissionErr.Decision() != "deny" {
+			t.Fatalf("expected deny from remembered reject, got %q", permissionErr.Decision())
+		}
+		if permissionErr.RememberScope() != string(SessionPermissionScopeReject) {
+			t.Fatalf("expected reject remember scope, got %q", permissionErr.RememberScope())
+		}
+		if webTool.callCount != 0 {
+			t.Fatalf("expected rejected call to skip tool execution, got %d", webTool.callCount)
+		}
+	})
+
+	t.Run("session memory does not leak across sessions", func(t *testing.T) {
+		t.Parallel()
+		manager, _ := newAskManager(t)
+		inputA := ToolCallInput{
+			ID:        "call-session-a",
+			Name:      "webfetch",
+			Arguments: []byte(`{"url":"https://example.com/session-a"}`),
+			SessionID: "session-a",
+		}
+		inputB := ToolCallInput{
+			ID:        "call-session-b",
+			Name:      "webfetch",
+			Arguments: []byte(`{"url":"https://example.com/session-a"}`),
+			SessionID: "session-b",
+		}
+
+		_, err := manager.Execute(context.Background(), inputA)
+		var permissionErr *PermissionDecisionError
+		if !errors.As(err, &permissionErr) {
+			t.Fatalf("expected permission ask on session A, got %v", err)
+		}
+		if rememberErr := manager.RememberSessionDecision(inputA.SessionID, permissionErr.Action(), SessionPermissionScopeAlways); rememberErr != nil {
+			t.Fatalf("remember session A always: %v", rememberErr)
+		}
+		if _, err := manager.Execute(context.Background(), inputA); err != nil {
+			t.Fatalf("expected session A to be allowed, got %v", err)
+		}
+
+		_, err = manager.Execute(context.Background(), inputB)
+		if !errors.As(err, &permissionErr) || permissionErr.Decision() != "ask" {
+			t.Fatalf("expected session B remain ask, got %v", err)
+		}
+	})
+
+	t.Run("action matching remains exact by structured target", func(t *testing.T) {
+		t.Parallel()
+		manager, _ := newAskManager(t)
+		inputA := ToolCallInput{
+			ID:        "call-target-a",
+			Name:      "webfetch",
+			Arguments: []byte(`{"url":"https://example.com/a"}`),
+			SessionID: "session-target",
+		}
+		inputB := ToolCallInput{
+			ID:        "call-target-b",
+			Name:      "webfetch",
+			Arguments: []byte(`{"url":"https://example.com/b"}`),
+			SessionID: "session-target",
+		}
+
+		_, err := manager.Execute(context.Background(), inputA)
+		var permissionErr *PermissionDecisionError
+		if !errors.As(err, &permissionErr) {
+			t.Fatalf("expected permission ask on target A, got %v", err)
+		}
+		if rememberErr := manager.RememberSessionDecision(inputA.SessionID, permissionErr.Action(), SessionPermissionScopeAlways); rememberErr != nil {
+			t.Fatalf("remember target A: %v", rememberErr)
+		}
+		if _, err := manager.Execute(context.Background(), inputA); err != nil {
+			t.Fatalf("expected target A to be allowed, got %v", err)
+		}
+
+		_, err = manager.Execute(context.Background(), inputB)
+		if !errors.As(err, &permissionErr) || permissionErr.Decision() != "ask" {
+			t.Fatalf("expected target B to stay ask, got %v", err)
+		}
+	})
 }
 
 func TestBuildPermissionAction(t *testing.T) {
