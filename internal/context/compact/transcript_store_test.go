@@ -1,6 +1,7 @@
 package compact
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,5 +57,67 @@ func TestTranscriptFileModeForOS(t *testing.T) {
 	}
 	if got := transcriptFileModeForOS("linux"); got != 0o600 {
 		t.Fatalf("expected non-windows mode 0600, got %#o", got)
+	}
+}
+
+func TestTranscriptStoreSaveReturnsHomeDirectoryError(t *testing.T) {
+	t.Parallel()
+
+	store := transcriptStore{
+		userHomeDir: func() (string, error) { return "", errors.New("home boom") },
+	}
+
+	_, _, err := store.Save(nil, "session", "workspace")
+	if err == nil || !strings.Contains(err.Error(), "home boom") {
+		t.Fatalf("expected user home error, got %v", err)
+	}
+}
+
+func TestTranscriptStoreSaveReturnsRandomTokenError(t *testing.T) {
+	t.Parallel()
+
+	store := transcriptStore{
+		now:         func() time.Time { return time.Unix(1, 0) },
+		userHomeDir: func() (string, error) { return t.TempDir(), nil },
+		mkdirAll:    func(path string, perm os.FileMode) error { return nil },
+		randomToken: func() (string, error) { return "", errors.New("token boom") },
+	}
+
+	_, _, err := store.Save(nil, "session", "workspace")
+	if err == nil || !strings.Contains(err.Error(), "token boom") {
+		t.Fatalf("expected token generation error, got %v", err)
+	}
+}
+
+func TestTranscriptStoreSaveRemovesTemporaryFileWhenRenameFails(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	written := ""
+	removed := ""
+	store := transcriptStore{
+		now:         func() time.Time { return time.Unix(1, 0) },
+		userHomeDir: func() (string, error) { return home, nil },
+		mkdirAll:    func(path string, perm os.FileMode) error { return nil },
+		randomToken: func() (string, error) { return "token1234", nil },
+		writeFile: func(name string, data []byte, perm os.FileMode) error {
+			written = name
+			return nil
+		},
+		rename: func(oldPath, newPath string) error {
+			return errors.New("rename boom")
+		},
+		remove: func(path string) error {
+			removed = path
+			return nil
+		},
+	}
+
+	_, _, err := store.Save([]provider.Message{{Role: provider.RoleUser, Content: "hello"}}, "session", filepath.Join(home, "workspace"))
+	if err == nil || !strings.Contains(err.Error(), "rename boom") {
+		t.Fatalf("expected rename error, got %v", err)
+	}
+	if written == "" || removed != written {
+		t.Fatalf("expected temp transcript cleanup, wrote %q removed %q", written, removed)
 	}
 }

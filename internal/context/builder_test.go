@@ -12,6 +12,18 @@ import (
 	"neo-code/internal/provider"
 )
 
+type stubPromptSectionSource struct {
+	sections []promptSection
+	err      error
+}
+
+func (s stubPromptSectionSource) Sections(ctx stdcontext.Context, input BuildInput) ([]promptSection, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return append([]promptSection(nil), s.sections...), nil
+}
+
 func TestDefaultBuilderBuild(t *testing.T) {
 	t.Parallel()
 
@@ -91,6 +103,50 @@ func TestDefaultBuilderBuildComposesPromptSectionsInOrder(t *testing.T) {
 	}
 	if !(identityIndex < rulesIndex && rulesIndex < stateIndex) {
 		t.Fatalf("expected section order core -> project rules -> system state, got %q", got.SystemPrompt)
+	}
+}
+
+func TestDefaultBuilderBuildUsesSpanTrimPolicyWhenTrimPolicyIsUnset(t *testing.T) {
+	t.Parallel()
+
+	messages := make([]provider.Message, 0, maxRetainedMessageSpans+2)
+	for i := 0; i < maxRetainedMessageSpans+2; i++ {
+		messages = append(messages, provider.Message{
+			Role:    provider.RoleUser,
+			Content: fmt.Sprintf("u-%d", i),
+		})
+	}
+
+	builder := &DefaultBuilder{
+		promptSources: []promptSectionSource{
+			stubPromptSectionSource{sections: []promptSection{{title: "Stub", content: "body"}}},
+		},
+	}
+
+	got, err := builder.Build(stdcontext.Background(), BuildInput{Messages: messages})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if len(got.Messages) != maxRetainedMessageSpans {
+		t.Fatalf("expected %d retained messages, got %d", maxRetainedMessageSpans, len(got.Messages))
+	}
+	if got.Messages[0].Content != "u-2" {
+		t.Fatalf("expected oldest messages to be trimmed, got first message %+v", got.Messages[0])
+	}
+}
+
+func TestDefaultBuilderBuildReturnsPromptSourceError(t *testing.T) {
+	t.Parallel()
+
+	builder := &DefaultBuilder{
+		promptSources: []promptSectionSource{
+			stubPromptSectionSource{err: fmt.Errorf("source failed")},
+		},
+	}
+
+	_, err := builder.Build(stdcontext.Background(), BuildInput{})
+	if err == nil || !strings.Contains(err.Error(), "source failed") {
+		t.Fatalf("expected source error, got %v", err)
 	}
 }
 

@@ -2,6 +2,7 @@ package context
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -63,5 +64,17 @@ func TestProjectRulesSourceSectionsRendersRules(t *testing.T) {
 	}
 	if got := renderPromptSection(sections[0]); got == "" {
 		t.Fatalf("expected rendered project rule section")
+	}
+}
+
+func TestCorePromptSourceSectionsHonorsCancellation(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := (corePromptSource{}).Sections(ctx, BuildInput{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context canceled, got %v", err)
 	}
 }

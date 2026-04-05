@@ -73,3 +73,26 @@ func TestCompactionPlannerRejectsUnsupportedStrategy(t *testing.T) {
 		t.Fatalf("expected unsupported strategy error")
 	}
 }
+
+func TestCompactionPlannerReactiveModeAlwaysUsesKeepRecentStrategy(t *testing.T) {
+	t.Parallel()
+
+	plan, err := (compactionPlanner{}).Plan(ModeReactive, []provider.Message{
+		{Role: provider.RoleUser, Content: "old request"},
+		{Role: provider.RoleAssistant, Content: "old answer"},
+		{Role: provider.RoleUser, Content: "latest request"},
+		{Role: provider.RoleAssistant, Content: "latest answer"},
+	}, config.CompactConfig{
+		ManualStrategy:           "unsupported",
+		ManualKeepRecentMessages: 2,
+	})
+	if err != nil {
+		t.Fatalf("Plan() error = %v", err)
+	}
+	if !plan.Applied {
+		t.Fatalf("expected reactive plan to keep recent messages")
+	}
+	if len(plan.Archived) != 2 || len(plan.Retained) != 2 {
+		t.Fatalf("unexpected reactive plan: %+v", plan)
+	}
+}
