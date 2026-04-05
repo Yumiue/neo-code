@@ -564,7 +564,7 @@ func TestDefaultManagerSessionPermissionMemory(t *testing.T) {
 		}
 	})
 
-	t.Run("action matching remains exact by structured target", func(t *testing.T) {
+	t.Run("category matching shares decision across same tool category", func(t *testing.T) {
 		t.Parallel()
 		manager, _ := newAskManager(t)
 		inputA := ToolCallInput{
@@ -592,9 +592,87 @@ func TestDefaultManagerSessionPermissionMemory(t *testing.T) {
 			t.Fatalf("expected target A to be allowed, got %v", err)
 		}
 
-		_, err = manager.Execute(context.Background(), inputB)
+		if _, err := manager.Execute(context.Background(), inputB); err != nil {
+			t.Fatalf("expected target B to inherit same-category allow, got %v", err)
+		}
+	})
+
+	t.Run("filesystem read category applies across file/grep/glob", func(t *testing.T) {
+		t.Parallel()
+
+		registry := NewRegistry()
+		readTool := &managerStubTool{name: "filesystem_read_file", content: "ok"}
+		grepTool := &managerStubTool{name: "filesystem_grep", content: "ok"}
+		globTool := &managerStubTool{name: "filesystem_glob", content: "ok"}
+		registry.Register(readTool)
+		registry.Register(grepTool)
+		registry.Register(globTool)
+
+		engine, err := security.NewStaticGateway(security.DecisionAllow, []security.Rule{
+			{
+				ID:       "ask-filesystem-read",
+				Type:     security.ActionTypeRead,
+				Resource: "filesystem_read_file",
+				Decision: security.DecisionAsk,
+				Reason:   "requires approval",
+			},
+			{
+				ID:       "ask-filesystem-grep",
+				Type:     security.ActionTypeRead,
+				Resource: "filesystem_grep",
+				Decision: security.DecisionAsk,
+				Reason:   "requires approval",
+			},
+			{
+				ID:       "ask-filesystem-glob",
+				Type:     security.ActionTypeRead,
+				Resource: "filesystem_glob",
+				Decision: security.DecisionAsk,
+				Reason:   "requires approval",
+			},
+		})
+		if err != nil {
+			t.Fatalf("new engine: %v", err)
+		}
+		manager, err := NewManager(registry, engine, nil)
+		if err != nil {
+			t.Fatalf("new manager: %v", err)
+		}
+
+		sessionID := "session-fs-read"
+		readInput := ToolCallInput{
+			ID:        "call-read",
+			Name:      "filesystem_read_file",
+			Arguments: []byte(`{"path":"README.md"}`),
+			SessionID: sessionID,
+		}
+		grepInput := ToolCallInput{
+			ID:        "call-grep",
+			Name:      "filesystem_grep",
+			Arguments: []byte(`{"dir":"internal","pattern":"TODO"}`),
+			SessionID: sessionID,
+		}
+		globInput := ToolCallInput{
+			ID:        "call-glob",
+			Name:      "filesystem_glob",
+			Arguments: []byte(`{"dir":"internal","pattern":"*.go"}`),
+			SessionID: sessionID,
+		}
+
+		_, err = manager.Execute(context.Background(), readInput)
+		var permissionErr *PermissionDecisionError
 		if !errors.As(err, &permissionErr) || permissionErr.Decision() != "ask" {
-			t.Fatalf("expected target B to stay ask, got %v", err)
+			t.Fatalf("expected initial read ask, got %v", err)
+		}
+		if rememberErr := manager.RememberSessionDecision(sessionID, permissionErr.Action(), SessionPermissionScopeAlways); rememberErr != nil {
+			t.Fatalf("remember filesystem read category: %v", rememberErr)
+		}
+
+		if _, err := manager.Execute(context.Background(), grepInput); err != nil {
+			t.Fatalf("expected grep allow via filesystem_read category, got %v", err)
+		}
+		if _, err := manager.Execute(context.Background(), globInput); err != nil {
+			t.Fatalf("expected glob allow via filesystem_read category, got %v", err)
 		}
 	})
 }

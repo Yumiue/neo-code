@@ -124,19 +124,41 @@ func (m *sessionPermissionMemory) resolve(sessionID string, action security.Acti
 
 // sessionPermissionActionKey 基于结构化 action 生成稳定匹配键。
 func sessionPermissionActionKey(action security.Action) string {
-	normalizedTool := strings.ToLower(strings.TrimSpace(action.Payload.ToolName))
-	normalizedResource := strings.ToLower(strings.TrimSpace(action.Payload.Resource))
-	normalizedOperation := strings.ToLower(strings.TrimSpace(action.Payload.Operation))
-	normalizedTargetType := strings.ToLower(strings.TrimSpace(string(action.Payload.TargetType)))
-	normalizedTarget := strings.TrimSpace(action.Payload.Target)
-	normalizedTarget = strings.ReplaceAll(normalizedTarget, "\r\n", "\n")
-	normalizedTarget = strings.ReplaceAll(normalizedTarget, "\r", "\n")
 	return strings.Join([]string{
 		string(action.Type),
-		normalizedTool,
-		normalizedResource,
-		normalizedOperation,
-		normalizedTargetType,
-		normalizedTarget,
+		sessionPermissionCategory(action),
 	}, "|")
+}
+
+// sessionPermissionCategory 将安全动作归一为稳定的工具类别。
+// 类别用于 once/always/reject 的 session 级记忆，不再按具体 target 区分。
+func sessionPermissionCategory(action security.Action) string {
+	resource := strings.ToLower(strings.TrimSpace(action.Payload.Resource))
+	switch action.Type {
+	case security.ActionTypeRead:
+		if strings.HasPrefix(resource, "filesystem_") {
+			return "filesystem_read"
+		}
+		if resource == "webfetch" {
+			return "webfetch"
+		}
+	case security.ActionTypeWrite:
+		if strings.HasPrefix(resource, "filesystem_") {
+			return "filesystem_write"
+		}
+	case security.ActionTypeBash:
+		return "bash"
+	case security.ActionTypeMCP:
+		target := strings.ToLower(strings.TrimSpace(action.Payload.Target))
+		if target != "" {
+			return "mcp:" + target
+		}
+		return "mcp"
+	}
+
+	toolName := strings.ToLower(strings.TrimSpace(action.Payload.ToolName))
+	if toolName != "" {
+		return toolName
+	}
+	return resource
 }

@@ -20,6 +20,7 @@ type SpecListInput struct {
 type Manager interface {
 	ListAvailableSpecs(ctx context.Context, input SpecListInput) ([]provider.ToolSpec, error)
 	Execute(ctx context.Context, input ToolCallInput) (ToolResult, error)
+	RememberSessionDecision(sessionID string, action security.Action, scope SessionPermissionScope) error
 }
 
 // Executor is the concrete tool execution layer under the manager.

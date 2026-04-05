@@ -38,6 +38,8 @@ type stubRuntime struct {
 	setWorkdirErr error
 	setResult     *agentruntime.Session
 	setCalls      int
+	resolveInputs []agentruntime.PermissionResolutionInput
+	resolveErr    error
 	cancelCalls   int
 	cancelResult  bool
 }
@@ -76,6 +78,11 @@ func (r *stubRuntime) Run(ctx context.Context, input agentruntime.UserInput) err
 func (r *stubRuntime) Compact(ctx context.Context, input agentruntime.CompactInput) (agentruntime.CompactResult, error) {
 	r.compactInputs = append(r.compactInputs, input)
 	return r.compactResult, r.compactErr
+}
+
+func (r *stubRuntime) ResolvePermission(ctx context.Context, input agentruntime.PermissionResolutionInput) error {
+	r.resolveInputs = append(r.resolveInputs, input)
+	return r.resolveErr
 }
 
 func (r *stubRuntime) Events() <-chan agentruntime.RuntimeEvent {
