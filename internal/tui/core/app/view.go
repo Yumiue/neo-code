@@ -1,4 +1,4 @@
-package tui
+﻿package tui
 
 import (
 	"fmt"
@@ -8,6 +8,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"neo-code/internal/provider"
+	tuicomponents "neo-code/internal/tui/components"
+	tuiutils "neo-code/internal/tui/core/utils"
+	tuistate "neo-code/internal/tui/state"
 )
 
 type layout struct {
@@ -20,6 +23,8 @@ type layout struct {
 	rightHeight   int
 	bodyGap       int
 }
+
+const headerBarHeight = 1
 
 func (a App) View() string {
 	docWidth := max(0, a.width-a.styles.doc.GetHorizontalFrameSize())
@@ -44,15 +49,15 @@ func (a App) View() string {
 }
 
 func (a App) renderHeader(width int) string {
-	status := compactStatusText(a.state.StatusText, max(18, width/3))
+	status := tuicomponents.CompactStatusText(a.state.StatusText, max(18, width/3))
 	if a.state.IsAgentRunning {
 		if a.runProgressKnown {
 			progressBar := a.progress
-			progressBar.Width = clamp(width/7, 12, 26)
-			progressLabel := fallback(strings.TrimSpace(a.runProgressLabel), fallback(status, statusRunning))
+			progressBar.Width = tuiutils.Clamp(width/7, 12, 26)
+			progressLabel := tuiutils.Fallback(strings.TrimSpace(a.runProgressLabel), tuiutils.Fallback(status, statusRunning))
 			status = progressBar.ViewAs(a.runProgressValue) + " " + progressLabel
 		} else {
-			status = a.spinner.View() + " " + fallback(status, statusRunning)
+			status = a.spinner.View() + " " + tuiutils.Fallback(status, statusRunning)
 		}
 	}
 
@@ -76,7 +81,7 @@ func (a App) renderHeader(width int) string {
 		lipgloss.Center,
 		workdirLabel,
 		" ",
-		a.styles.headerPath.Render(trimMiddle(a.state.CurrentWorkdir, workdirWidth)),
+		a.styles.headerPath.Render(tuiutils.TrimMiddle(a.state.CurrentWorkdir, workdirWidth)),
 	)
 
 	header := lipgloss.JoinHorizontal(
@@ -131,7 +136,7 @@ func (a App) renderWaterfall(width int, height int) string {
 			height,
 			lipgloss.Center,
 			lipgloss.Center,
-			a.renderPicker(clamp(width-10, 36, 56), clamp(height-6, 10, 14)),
+			a.renderPicker(tuiutils.Clamp(width-10, 36, 56), tuiutils.Clamp(height-6, 10, 14)),
 		)
 	}
 
@@ -196,9 +201,9 @@ func (a App) renderSidebarHeader(width int) string {
 		lipgloss.Center,
 		title,
 		lipgloss.NewStyle().Width(1).Render(""),
-		a.styles.panelSubtitle.Render(trimRunes(sidebarFilterHint, filterWidth)),
+		a.styles.panelSubtitle.Render(tuiutils.TrimRunes(sidebarFilterHint, filterWidth)),
 	)
-	openRow := a.styles.panelSubtitle.Render(trimRunes(sidebarOpenHint, width))
+	openRow := a.styles.panelSubtitle.Render(tuiutils.TrimRunes(sidebarOpenHint, width))
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		lipgloss.Place(width, 1, lipgloss.Left, lipgloss.Top, titleRow),
@@ -239,7 +244,7 @@ func (a App) renderMessageBlockWithCopy(message provider.Message, width int, sta
 		return a.styles.inlineSystem.Width(width).Render("  - " + wrapPlain(message.Content, max(16, width-6))), nil
 	}
 
-	maxMessageWidth := clamp(int(float64(width)*0.84), 24, width)
+	maxMessageWidth := tuiutils.Clamp(int(float64(width)*0.84), 24, width)
 	tag := messageTagAgent
 	tagStyle := a.styles.messageAgentTag
 	bodyStyle := a.styles.messageBody
@@ -247,7 +252,7 @@ func (a App) renderMessageBlockWithCopy(message provider.Message, width int, sta
 
 	switch message.Role {
 	case roleUser:
-		maxMessageWidth = clamp(int(float64(width)*0.68), 24, width)
+		maxMessageWidth = tuiutils.Clamp(int(float64(width)*0.68), 24, width)
 		tag = messageTagUser
 		tagStyle = a.styles.messageUserTag
 		bodyStyle = a.styles.messageUserBody
@@ -300,13 +305,13 @@ func (a App) renderCommandMenu(width int) string {
 	if body == "" {
 		return ""
 	}
-	return a.styles.commandMenu.Width(width).Render(
-		lipgloss.JoinVertical(
-			lipgloss.Left,
-			a.styles.commandMenuTitle.Render(title),
-			body,
-		),
-	)
+	return tuicomponents.RenderCommandMenu(tuicomponents.CommandMenuData{
+		Title:          title,
+		Body:           body,
+		Width:          width,
+		ContainerStyle: a.styles.commandMenu,
+		TitleStyle:     a.styles.commandMenuTitle,
+	})
 }
 
 func (a App) commandMenuHeight(width int) int {
@@ -385,31 +390,11 @@ func (a App) renderMessageContentWithCopy(content string, width int, bodyStyle l
 }
 
 func normalizeBlockRightEdge(content string, maxWidth int) string {
-	if strings.TrimSpace(content) == "" {
-		return content
-	}
-
-	lines := strings.Split(content, "\n")
-	targetWidth := 0
-	for _, line := range lines {
-		targetWidth = max(targetWidth, lipgloss.Width(line))
-	}
-	targetWidth = clamp(targetWidth, 1, maxWidth)
-
-	padStyle := lipgloss.NewStyle().Width(targetWidth)
-	normalized := make([]string, 0, len(lines))
-	for _, line := range lines {
-		normalized = append(normalized, padStyle.Render(line))
-	}
-	return strings.Join(normalized, "\n")
+	return tuicomponents.NormalizeBlockRightEdge(content, maxWidth)
 }
 
 func trimRenderedTrailingWhitespace(content string) string {
-	lines := strings.Split(content, "\n")
-	for i := range lines {
-		lines[i] = strings.TrimRight(lines[i], " \t")
-	}
-	return strings.Join(lines, "\n")
+	return tuicomponents.TrimRenderedTrailingWhitespace(content)
 }
 
 func (a App) statusBadge(text string) string {
@@ -427,41 +412,21 @@ func (a App) statusBadge(text string) string {
 }
 
 func compactStatusText(text string, limit int) string {
-	text = strings.ReplaceAll(text, "\r\n", "\n")
-	text = strings.ReplaceAll(text, "\r", "\n")
-	lines := strings.Split(text, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		line = strings.Join(strings.Fields(line), " ")
-		if limit > 0 {
-			return trimMiddle(line, limit)
-		}
-		return line
-	}
-	return ""
+	return tuicomponents.CompactStatusText(text, limit)
 }
 
 func (a App) focusLabel() string {
-	switch a.focus {
-	case panelSessions:
-		return focusLabelSessions
-	case panelTranscript:
-		return focusLabelTranscript
-	case panelActivity:
-		return focusLabelActivity
-	default:
-		return focusLabelComposer
-	}
+	return tuiutils.FocusLabelFromPanel(
+		a.focus,
+		focusLabelSessions,
+		focusLabelTranscript,
+		focusLabelActivity,
+		focusLabelComposer,
+	)
 }
 
 func (a App) activityPreviewHeight() int {
-	if len(a.activities) == 0 {
-		return 0
-	}
-	return 6
+	return tuicomponents.ActivityPreviewHeight(len(a.activities))
 }
 
 func (a App) renderActivityPreview(width int) string {
@@ -480,28 +445,20 @@ func (a App) renderActivityPreview(width int) string {
 	)
 }
 
-func (a App) renderActivityLine(entry activityEntry, width int) string {
-	timeLabel := entry.Time.Format("15:04:05")
-	kindLabel := strings.ToUpper(fallback(strings.TrimSpace(entry.Kind), "event"))
-
-	text := entry.Title
-	if strings.TrimSpace(entry.Detail) != "" {
-		text = text + ": " + entry.Detail
-	}
-
-	return trimMiddle(timeLabel+" "+kindLabel+" "+strings.Join(strings.Fields(text), " "), max(12, width))
+func (a App) renderActivityLine(entry tuistate.ActivityEntry, width int) string {
+	return tuicomponents.RenderActivityLine(entry, width)
 }
 
 func (a App) computeLayout() layout {
 	contentWidth := max(0, a.width-a.styles.doc.GetHorizontalFrameSize())
-	headerHeight := lipgloss.Height(a.renderHeader(contentWidth))
-	helpHeight := lipgloss.Height(a.renderHelp(contentWidth))
+	helpHeight := a.helpHeight(contentWidth)
+	headerHeight := headerBarHeight
 	contentHeight := max(1, a.height-a.styles.doc.GetVerticalFrameSize()-headerHeight-helpHeight)
 	lay := layout{contentWidth: contentWidth, contentHeight: contentHeight}
 	if contentWidth < 110 {
 		lay.stacked = true
 		lay.sidebarWidth = contentWidth
-		lay.sidebarHeight = clamp(contentHeight/3, 9, 13)
+		lay.sidebarHeight = tuiutils.Clamp(contentHeight/3, 9, 13)
 		lay.rightWidth = contentWidth
 		lay.rightHeight = max(10, contentHeight-lay.sidebarHeight)
 		return lay
@@ -515,6 +472,13 @@ func (a App) computeLayout() layout {
 	return lay
 }
 
+// helpHeight 仅计算帮助区高度，避免在 layout 计算阶段触发完整渲染。
+func (a App) helpHeight(width int) int {
+	a.help.ShowAll = a.state.ShowHelp
+	return lipgloss.Height(a.styles.footer.Width(width).Render(a.help.View(a.keys)))
+}
+
 func (a App) isFilteringSessions() bool {
 	return a.sessions.FilterState() != list.Unfiltered
 }
+

@@ -8,6 +8,7 @@ import (
 	"unicode/utf16"
 
 	"neo-code/internal/config"
+	tuistatus "neo-code/internal/tui/core/status"
 )
 
 func TestExecuteLocalCommand(t *testing.T) {
@@ -174,9 +175,9 @@ func containsUsage(suggestions []commandSuggestion, usage string) bool {
 	return false
 }
 
-func defaultTestStatusSnapshot(manager *config.Manager) statusSnapshot {
+func defaultTestStatusSnapshot(manager *config.Manager) tuistatus.Snapshot {
 	cfg := manager.Get()
-	return statusSnapshot{
+	return tuistatus.Snapshot{
 		ActiveSessionTitle: draftSessionTitle,
 		CurrentProvider:    cfg.SelectedProvider,
 		CurrentModel:       cfg.CurrentModel,
@@ -285,19 +286,19 @@ func TestLocalCommandWrappers(t *testing.T) {
 
 	msg := runLocalCommand(manager, providerSvc, defaultTestStatusSnapshot(manager), "/help")()
 	result, ok := msg.(localCommandResultMsg)
-	if !ok || result.err != nil || !strings.Contains(result.notice, "Available slash commands") {
+	if !ok || result.Err != nil || !strings.Contains(result.Notice, "Available slash commands") {
 		t.Fatalf("expected help command result, got %+v", msg)
 	}
 
 	msg = runProviderSelection(providerSvc, "missing-provider")()
 	result, ok = msg.(localCommandResultMsg)
-	if !ok || result.err == nil {
+	if !ok || result.Err == nil {
 		t.Fatalf("expected provider selection error, got %+v", msg)
 	}
 }
 
 func TestExecuteStatusCommandSnapshot(t *testing.T) {
-	notice := executeStatusCommand(statusSnapshot{
+	notice := executeStatusCommand(tuistatus.Snapshot{
 		ActiveSessionID:    "session-123",
 		ActiveSessionTitle: "Implement slash UX",
 		IsAgentRunning:     true,
@@ -329,7 +330,7 @@ func TestExecuteStatusCommandSnapshot(t *testing.T) {
 }
 
 func TestExecuteStatusCommandTreatsCompactingAsRunning(t *testing.T) {
-	notice := executeStatusCommand(statusSnapshot{
+	notice := executeStatusCommand(tuistatus.Snapshot{
 		ActiveSessionTitle: draftSessionTitle,
 		IsCompacting:       true,
 		CurrentProvider:    "openai",

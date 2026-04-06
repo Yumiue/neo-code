@@ -22,6 +22,10 @@ import (
 	providercatalog "neo-code/internal/provider/catalog"
 	agentruntime "neo-code/internal/runtime"
 	"neo-code/internal/tools"
+	tuiutils "neo-code/internal/tui/core/utils"
+	tuiworkspace "neo-code/internal/tui/core/workspace"
+	tuiservices "neo-code/internal/tui/services"
+	tuistate "neo-code/internal/tui/state"
 )
 
 type stubRuntime struct {
@@ -282,7 +286,7 @@ func TestRunSessionWorkdirCommandBranches(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected sessionWorkdirResultMsg, got %T", msg)
 		}
-		if result.err == nil || !strings.Contains(result.err.Error(), "unknown command") {
+		if result.Err == nil || !strings.Contains(result.Err.Error(), "unknown command") {
 			t.Fatalf("expected unknown command error, got %+v", result)
 		}
 	})
@@ -290,7 +294,7 @@ func TestRunSessionWorkdirCommandBranches(t *testing.T) {
 	t.Run("empty workspace query without current workdir returns usage", func(t *testing.T) {
 		msg := runSessionWorkdirCommand(newStubRuntime(), "", "", "/cwd")()
 		result := msg.(sessionWorkdirResultMsg)
-		if result.err == nil || !strings.Contains(result.err.Error(), "usage: /cwd <path>") {
+		if result.Err == nil || !strings.Contains(result.Err.Error(), "usage: /cwd <path>") {
 			t.Fatalf("expected usage error, got %+v", result)
 		}
 	})
@@ -299,10 +303,10 @@ func TestRunSessionWorkdirCommandBranches(t *testing.T) {
 		current := t.TempDir()
 		msg := runSessionWorkdirCommand(newStubRuntime(), "", current, "/cwd")()
 		result := msg.(sessionWorkdirResultMsg)
-		if result.err != nil {
-			t.Fatalf("unexpected error: %v", result.err)
+		if result.Err != nil {
+			t.Fatalf("unexpected error: %v", result.Err)
 		}
-		if result.workdir != current || !strings.Contains(result.notice, "Current workspace is") {
+		if result.Workdir != current || !strings.Contains(result.Notice, "Current workspace is") {
 			t.Fatalf("expected current workspace message, got %+v", result)
 		}
 	})
@@ -312,7 +316,7 @@ func TestRunSessionWorkdirCommandBranches(t *testing.T) {
 		runtime.setWorkdirErr = errors.New("set workdir failed")
 		msg := runSessionWorkdirCommand(runtime, "session-1", t.TempDir(), "/cwd ./subdir")()
 		result := msg.(sessionWorkdirResultMsg)
-		if result.err == nil || !strings.Contains(result.err.Error(), "set workdir failed") {
+		if result.Err == nil || !strings.Contains(result.Err.Error(), "set workdir failed") {
 			t.Fatalf("expected set workdir error, got %+v", result)
 		}
 	})
@@ -323,11 +327,11 @@ func TestRunSessionWorkdirCommandBranches(t *testing.T) {
 		runtime.setResult = &agentruntime.Session{ID: "session-1", Workdir: ""}
 		msg := runSessionWorkdirCommand(runtime, "session-1", current, "/cwd ./subdir")()
 		result := msg.(sessionWorkdirResultMsg)
-		if result.err != nil {
-			t.Fatalf("unexpected error: %v", result.err)
+		if result.Err != nil {
+			t.Fatalf("unexpected error: %v", result.Err)
 		}
-		if result.workdir != current {
-			t.Fatalf("expected fallback workdir %q, got %q", current, result.workdir)
+		if result.Workdir != current {
+			t.Fatalf("expected fallback workdir %q, got %q", current, result.Workdir)
 		}
 	})
 
@@ -338,10 +342,10 @@ func TestRunSessionWorkdirCommandBranches(t *testing.T) {
 		runtime.setResult = &agentruntime.Session{ID: "session-1", Workdir: target}
 		msg := runSessionWorkdirCommand(runtime, "session-1", current, "/cwd ./subdir")()
 		result := msg.(sessionWorkdirResultMsg)
-		if result.err != nil {
-			t.Fatalf("unexpected error: %v", result.err)
+		if result.Err != nil {
+			t.Fatalf("unexpected error: %v", result.Err)
 		}
-		if result.workdir != target || !strings.Contains(result.notice, "Session workspace switched") {
+		if result.Workdir != target || !strings.Contains(result.Notice, "Session workspace switched") {
 			t.Fatalf("expected runtime returned workdir %q, got %+v", target, result)
 		}
 	})
@@ -349,7 +353,7 @@ func TestRunSessionWorkdirCommandBranches(t *testing.T) {
 	t.Run("draft workspace change returns resolve error for missing path", func(t *testing.T) {
 		msg := runSessionWorkdirCommand(newStubRuntime(), "", t.TempDir(), "/cwd ./missing-path")()
 		result := msg.(sessionWorkdirResultMsg)
-		if result.err == nil || !strings.Contains(strings.ToLower(result.err.Error()), "resolve path") {
+		if result.Err == nil || !strings.Contains(strings.ToLower(result.Err.Error()), "resolve path") {
 			t.Fatalf("expected resolve path error, got %+v", result)
 		}
 	})
@@ -357,9 +361,9 @@ func TestRunSessionWorkdirCommandBranches(t *testing.T) {
 
 func TestResolveWorkspacePathAndSelector(t *testing.T) {
 	t.Run("resolve from empty base falls back to process cwd", func(t *testing.T) {
-		resolved, err := resolveWorkspacePath("", ".")
+		resolved, err := tuiworkspace.ResolveWorkspacePath("", ".")
 		if err != nil {
-			t.Fatalf("resolveWorkspacePath() error = %v", err)
+			t.Fatalf("ResolveWorkspacePath() error = %v", err)
 		}
 		expected, err := filepath.Abs(".")
 		if err != nil {
@@ -376,9 +380,9 @@ func TestResolveWorkspacePathAndSelector(t *testing.T) {
 		if err := os.MkdirAll(target, 0o755); err != nil {
 			t.Fatalf("mkdir target: %v", err)
 		}
-		resolved, err := resolveWorkspacePath(base, "sub")
+		resolved, err := tuiworkspace.ResolveWorkspacePath(base, "sub")
 		if err != nil {
-			t.Fatalf("resolveWorkspacePath() error = %v", err)
+			t.Fatalf("ResolveWorkspacePath() error = %v", err)
 		}
 		if resolved != filepath.Clean(target) {
 			t.Fatalf("expected %q, got %q", filepath.Clean(target), resolved)
@@ -391,7 +395,7 @@ func TestResolveWorkspacePathAndSelector(t *testing.T) {
 		if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
 			t.Fatalf("write file: %v", err)
 		}
-		_, err := resolveWorkspacePath(base, "note.txt")
+		_, err := tuiworkspace.ResolveWorkspacePath(base, "note.txt")
 		if err == nil || !strings.Contains(err.Error(), "is not a directory") {
 			t.Fatalf("expected non-directory error, got %v", err)
 		}
@@ -399,17 +403,17 @@ func TestResolveWorkspacePathAndSelector(t *testing.T) {
 
 	t.Run("resolve workspace path returns error for missing target", func(t *testing.T) {
 		base := t.TempDir()
-		_, err := resolveWorkspacePath(base, "missing-dir")
+		_, err := tuiworkspace.ResolveWorkspacePath(base, "missing-dir")
 		if err == nil || !strings.Contains(strings.ToLower(err.Error()), "resolve path") {
 			t.Fatalf("expected missing path error, got %v", err)
 		}
 	})
 
 	t.Run("select session workdir prefers session value", func(t *testing.T) {
-		if got := selectSessionWorkdir("  /session  ", "/default"); got != "/session" {
+		if got := tuiworkspace.SelectSessionWorkdir("  /session  ", "/default"); got != "/session" {
 			t.Fatalf("expected trimmed session workdir, got %q", got)
 		}
-		if got := selectSessionWorkdir("", " /default "); got != "/default" {
+		if got := tuiworkspace.SelectSessionWorkdir("", " /default "); got != "/default" {
 			t.Fatalf("expected fallback default workdir, got %q", got)
 		}
 	})
@@ -424,8 +428,8 @@ func TestAppUpdateSessionWorkdirResultMessage(t *testing.T) {
 	}
 
 	model, cmd := app.Update(sessionWorkdirResultMsg{
-		notice:  "ok",
-		workdir: filepath.Join(t.TempDir(), "missing-dir"),
+		Notice:  "ok",
+		Workdir: filepath.Join(t.TempDir(), "missing-dir"),
 	})
 	app = model.(App)
 	_ = collectTeaMessages(cmd)
@@ -840,16 +844,16 @@ func TestTUIStandaloneHelpers(t *testing.T) {
 		t.Fatalf("expected key help bindings")
 	}
 
-	if wrapPlain("abcdef", 3) == "" || trimRunes("abcdef", 4) == "" || trimMiddle("abcdefgh", 5) == "" {
+	if wrapPlain("abcdef", 3) == "" || tuiutils.TrimRunes("abcdef", 4) == "" || tuiutils.TrimMiddle("abcdefgh", 5) == "" {
 		t.Fatalf("expected string helpers to return content")
 	}
-	if fallback("", "x") != "x" {
+	if tuiutils.Fallback("", "x") != "x" {
 		t.Fatalf("expected fallback to use replacement")
 	}
 	if preview("line1\nline2\nline3", 8, 2) == "" {
 		t.Fatalf("expected preview output")
 	}
-	if clamp(10, 0, 5) != 5 || max(2, 3) != 3 {
+	if tuiutils.Clamp(10, 0, 5) != 5 || max(2, 3) != 3 {
 		t.Fatalf("expected numeric helpers to work")
 	}
 
@@ -890,7 +894,7 @@ func TestTUIStandaloneHelpers(t *testing.T) {
 	}
 
 	runtime := newStubRuntime()
-	runMsg := runAgent(runtime, "session-x", "", "hello")()
+	runMsg := runAgent(runtime, "run-x", "session-x", "", "hello")()
 	if _, ok := runMsg.(runFinishedMsg); !ok {
 		t.Fatalf("expected runFinishedMsg")
 	}
@@ -900,7 +904,7 @@ func TestTUIStandaloneHelpers(t *testing.T) {
 
 	manager := newTestConfigManager(t)
 	msg := runModelSelection(newTestProviderService(t, manager), config.OpenAIDefaultModel)()
-	if result, ok := msg.(localCommandResultMsg); !ok || result.err != nil {
+	if result, ok := msg.(localCommandResultMsg); !ok || result.Err != nil {
 		t.Fatalf("expected successful localCommandResultMsg, got %+v", msg)
 	}
 
@@ -944,7 +948,7 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 				app.state.IsAgentRunning = true
 				app.state.StatusText = statusCanceling
 			},
-			msg: runFinishedMsg{err: context.Canceled},
+			msg: runFinishedMsg{Err: context.Canceled},
 			assert: func(t *testing.T, app App, runtime *stubRuntime, manager *config.Manager, msgs []tea.Msg) {
 				t.Helper()
 				if app.state.IsAgentRunning || app.state.ExecutionError != "" || app.state.StatusText != statusCanceled {
@@ -957,7 +961,7 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 			setup: func(t *testing.T, app *App, runtime *stubRuntime, manager *config.Manager) {
 				app.state.IsAgentRunning = true
 			},
-			msg: runFinishedMsg{err: context.DeadlineExceeded},
+			msg: runFinishedMsg{Err: context.DeadlineExceeded},
 			assert: func(t *testing.T, app App, runtime *stubRuntime, manager *config.Manager, msgs []tea.Msg) {
 				t.Helper()
 				if app.state.IsAgentRunning || app.state.ExecutionError == "" {
@@ -967,7 +971,7 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 		},
 		{
 			name: "model selection success updates state",
-			msg:  localCommandResultMsg{notice: "[System] ok"},
+			msg:  localCommandResultMsg{Notice: "[System] ok"},
 			assert: func(t *testing.T, app App, runtime *stubRuntime, manager *config.Manager, msgs []tea.Msg) {
 				t.Helper()
 				if app.state.StatusText != "[System] ok" {
@@ -977,7 +981,7 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 		},
 		{
 			name: "model selection error updates state",
-			msg:  localCommandResultMsg{err: context.Canceled},
+			msg:  localCommandResultMsg{Err: context.Canceled},
 			assert: func(t *testing.T, app App, runtime *stubRuntime, manager *config.Manager, msgs []tea.Msg) {
 				t.Helper()
 				if app.state.ExecutionError == "" || app.state.StatusText == "" {
@@ -1993,7 +1997,7 @@ func TestCompactEventAndBusyBranches(t *testing.T) {
 		t.Fatalf("expected new-session shortcut to be blocked while compacting")
 	}
 
-	model, cmd = app.Update(compactFinishedMsg{err: nil})
+	model, cmd = app.Update(compactFinishedMsg{Err: nil})
 	app = model.(App)
 	_ = collectTeaMessages(cmd)
 	if app.state.IsCompacting {
@@ -2236,7 +2240,7 @@ func TestViewActivityPreviewAndStatusHelpers(t *testing.T) {
 	}
 
 	fixed := time.Date(2026, 4, 2, 9, 30, 0, 0, time.UTC)
-	app.activities = []activityEntry{
+	app.activities = []tuistate.ActivityEntry{
 		{Time: fixed, Kind: "tool", Title: "first", Detail: "alpha"},
 		{Time: fixed, Kind: "", Title: "second", Detail: ""},
 		{Time: fixed, Kind: "provider", Title: "third", Detail: "retry"},
@@ -2260,7 +2264,7 @@ func TestViewActivityPreviewAndStatusHelpers(t *testing.T) {
 		t.Fatalf("expected oldest activity row to be clipped from current viewport, got %q", preview)
 	}
 
-	line := app.renderActivityLine(activityEntry{Time: fixed, Kind: "", Title: "single line", Detail: ""}, 80)
+	line := app.renderActivityLine(tuistate.ActivityEntry{Time: fixed, Kind: "", Title: "single line", Detail: ""}, 80)
 	if !strings.Contains(line, "EVENT") || strings.Contains(line, "single line:") {
 		t.Fatalf("expected fallback kind without detail suffix, got %q", line)
 	}
@@ -2573,6 +2577,64 @@ func TestActivityMouseFilePickerAndProgressRendering(t *testing.T) {
 	if closed.runProgressKnown {
 		t.Fatalf("expected RuntimeClosedMsg to clear run progress")
 	}
+}
+
+func TestRuntimeSourceEventsUpdateState(t *testing.T) {
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	runID := "run-source-state"
+	sessionID := "session-source-state"
+
+	model, _ := app.Update(RuntimeMsg{Event: agentruntime.RuntimeEvent{
+		Type:      agentruntime.EventType(tuiservices.RuntimeEventRunContext),
+		RunID:     runID,
+		SessionID: sessionID,
+		Payload: tuiservices.RuntimeRunContextPayload{
+			Provider: "openai",
+			Model:    "gpt-5.4",
+			Workdir:  "D:/repo",
+			Mode:     "act",
+		},
+	}})
+	app = model.(App)
+	if app.state.ActiveRunID != runID || app.state.RunContext.Provider != "openai" {
+		t.Fatalf("expected run context to be mapped, got runID=%q context=%+v", app.state.ActiveRunID, app.state.RunContext)
+	}
+
+	model, _ = app.Update(RuntimeMsg{Event: agentruntime.RuntimeEvent{
+		Type:      agentruntime.EventType(tuiservices.RuntimeEventToolStatus),
+		RunID:     runID,
+		SessionID: sessionID,
+		Payload: tuiservices.RuntimeToolStatusPayload{
+			ToolCallID: "call-1",
+			ToolName:   "filesystem_edit",
+			Status:     string(tuistate.ToolLifecycleRunning),
+		},
+	}})
+	app = model.(App)
+	if len(app.state.ToolStates) != 1 || app.state.ToolStates[0].ToolName != "filesystem_edit" {
+		t.Fatalf("expected tool status to be tracked, got %+v", app.state.ToolStates)
+	}
+
+	model, _ = app.Update(RuntimeMsg{Event: agentruntime.RuntimeEvent{
+		Type:      agentruntime.EventType(tuiservices.RuntimeEventUsage),
+		RunID:     runID,
+		SessionID: sessionID,
+		Payload: tuiservices.RuntimeUsagePayload{
+			Run:     tuiservices.RuntimeUsageSnapshot{InputTokens: 1, OutputTokens: 2, TotalTokens: 3},
+			Session: tuiservices.RuntimeUsageSnapshot{InputTokens: 10, OutputTokens: 20, TotalTokens: 30},
+		},
+	}})
+	app = model.(App)
+	if app.state.TokenUsage.RunTotalTokens != 3 || app.state.TokenUsage.SessionTotalTokens != 30 {
+		t.Fatalf("expected usage to be mapped, got %+v", app.state.TokenUsage)
+	}
+
 }
 
 func newTestConfigManager(t *testing.T) *config.Manager {

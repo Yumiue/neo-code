@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -19,43 +18,26 @@ import (
 	"neo-code/internal/provider"
 	agentruntime "neo-code/internal/runtime"
 	"neo-code/internal/tools"
+	tuicommands "neo-code/internal/tui/core/commands"
+	tuistatus "neo-code/internal/tui/core/status"
+	tuiutils "neo-code/internal/tui/core/utils"
+	tuiworkspace "neo-code/internal/tui/core/workspace"
+	tuiservices "neo-code/internal/tui/services"
+	tuistate "neo-code/internal/tui/state"
 )
-
-type RuntimeMsg struct{ Event agentruntime.RuntimeEvent }
-type RuntimeClosedMsg struct{}
-type runFinishedMsg struct{ err error }
-type modelCatalogRefreshMsg struct {
-	providerID string
-	models     []config.ModelDescriptor
-	err        error
-}
-
-type compactFinishedMsg struct {
-	err error
-}
-
-type localCommandResultMsg struct {
-	notice          string
-	err             error
-	providerChanged bool
-	modelChanged    bool
-}
-type sessionWorkdirResultMsg struct {
-	notice  string
-	workdir string
-	err     error
-}
 
 const (
-	composerMinHeight   = 1
-	composerMaxHeight   = 5
-	composerPromptWidth = 2
-	mouseWheelStepLines = 3
-	pasteBurstWindow    = 120 * time.Millisecond
-	pasteEnterGuard     = 180 * time.Millisecond
-	pasteSessionGuard   = 5 * time.Second
-	pasteBurstThreshold = 12
+	composerMinHeight   = tuistate.ComposerMinHeight
+	composerMaxHeight   = tuistate.ComposerMaxHeight
+	composerPromptWidth = tuistate.ComposerPromptWidth
+	mouseWheelStepLines = tuistate.MouseWheelStepLines
+	pasteBurstWindow    = tuistate.PasteBurstWindow
+	pasteEnterGuard     = tuistate.PasteEnterGuard
+	pasteSessionGuard   = tuistate.PasteSessionGuard
+	pasteBurstThreshold = tuistate.PasteBurstThreshold
 )
+
+var panelOrder = []panel{panelSessions, panelTranscript, panelActivity, panelInput}
 
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
@@ -82,6 +64,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 	case RuntimeClosedMsg:
 		a.state.IsAgentRunning = false
+		a.state.StreamingReply = false
+		a.state.CurrentTool = ""
+		a.state.ActiveRunID = ""
 		a.clearRunProgress()
 		a.state.IsCompacting = false
 		if strings.TrimSpace(a.state.StatusText) == "" {
@@ -89,17 +74,18 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, tea.Batch(cmds...)
 	case runFinishedMsg:
-		if typed.err != nil {
+		if typed.Err != nil {
 			a.state.IsAgentRunning = false
+			a.state.ActiveRunID = ""
 			a.clearRunProgress()
 			a.state.StreamingReply = false
 			a.state.CurrentTool = ""
-			if errors.Is(typed.err, context.Canceled) {
+			if errors.Is(typed.Err, context.Canceled) {
 				a.state.ExecutionError = ""
 				a.state.StatusText = statusCanceled
 			} else {
-				a.state.ExecutionError = typed.err.Error()
-				a.state.StatusText = typed.err.Error()
+				a.state.ExecutionError = typed.Err.Error()
+				a.state.StatusText = typed.Err.Error()
 			}
 		}
 		if !a.state.IsAgentRunning {
@@ -109,27 +95,27 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.syncActiveSessionTitle()
 		return a, tea.Batch(cmds...)
 	case modelCatalogRefreshMsg:
-		if strings.EqualFold(a.modelRefreshID, typed.providerID) {
+		if strings.EqualFold(a.modelRefreshID, typed.ProviderID) {
 			a.modelRefreshID = ""
 		}
-		if !strings.EqualFold(strings.TrimSpace(a.state.CurrentProvider), strings.TrimSpace(typed.providerID)) {
+		if !strings.EqualFold(strings.TrimSpace(a.state.CurrentProvider), strings.TrimSpace(typed.ProviderID)) {
 			return a, tea.Batch(cmds...)
 		}
-		if typed.err != nil {
-			a.appendActivity("provider", "Failed to refresh models", typed.err.Error(), true)
+		if typed.Err != nil {
+			a.appendActivity("provider", "Failed to refresh models", typed.Err.Error(), true)
 			return a, tea.Batch(cmds...)
 		}
 
-		replacePickerItems(&a.modelPicker, mapModelItems(typed.models))
+		replacePickerItems(&a.modelPicker, mapModelItems(typed.Models))
 		cfg := a.configManager.Get()
 		a.syncConfigState(cfg)
 		selectPickerItemByID(&a.modelPicker, cfg.CurrentModel)
 		return a, tea.Batch(cmds...)
 	case compactFinishedMsg:
 		a.state.IsCompacting = false
-		if typed.err != nil && strings.TrimSpace(a.state.ExecutionError) == "" {
-			a.state.ExecutionError = typed.err.Error()
-			a.state.StatusText = typed.err.Error()
+		if typed.Err != nil && strings.TrimSpace(a.state.ExecutionError) == "" {
+			a.state.ExecutionError = typed.Err.Error()
+			a.state.StatusText = typed.Err.Error()
 		}
 		if err := a.refreshSessions(); err != nil {
 			a.state.ExecutionError = err.Error()
@@ -146,16 +132,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.transcript.GotoBottom()
 		return a, tea.Batch(cmds...)
 	case localCommandResultMsg:
-		if typed.err != nil {
-			a.state.ExecutionError = typed.err.Error()
-			a.state.StatusText = typed.err.Error()
-			a.appendActivity("command", "Local command failed", typed.err.Error(), true)
+		if typed.Err != nil {
+			a.state.ExecutionError = typed.Err.Error()
+			a.state.StatusText = typed.Err.Error()
+			a.appendActivity("command", "Local command failed", typed.Err.Error(), true)
 		} else {
 			a.state.ExecutionError = ""
-			a.state.StatusText = typed.notice
+			a.state.StatusText = typed.Notice
 			cfg := a.configManager.Get()
 			a.syncConfigState(cfg)
-			if typed.providerChanged {
+			if typed.ProviderChanged {
 				if err := a.refreshProviderPicker(); err != nil {
 					a.state.ExecutionError = err.Error()
 					a.state.StatusText = err.Error()
@@ -173,42 +159,42 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if cmd := a.requestModelCatalogRefresh(cfg.SelectedProvider); cmd != nil {
 					cmds = append(cmds, cmd)
 				}
-			} else if typed.modelChanged {
+			} else if typed.ModelChanged {
 				a.selectCurrentModel(cfg.CurrentModel)
 			}
-			a.appendActivity("command", typed.notice, "", false)
+			a.appendActivity("command", typed.Notice, "", false)
 		}
 		return a, tea.Batch(cmds...)
 	case sessionWorkdirResultMsg:
-		if typed.err != nil {
-			a.state.ExecutionError = typed.err.Error()
-			a.state.StatusText = typed.err.Error()
-			a.appendActivity("workspace", "Workspace command failed", typed.err.Error(), true)
+		if typed.Err != nil {
+			a.state.ExecutionError = typed.Err.Error()
+			a.state.StatusText = typed.Err.Error()
+			a.appendActivity("workspace", "Workspace command failed", typed.Err.Error(), true)
 			return a, tea.Batch(cmds...)
 		}
 
 		a.state.ExecutionError = ""
-		a.state.StatusText = typed.notice
-		a.state.CurrentWorkdir = strings.TrimSpace(typed.workdir)
+		a.state.StatusText = typed.Notice
+		a.state.CurrentWorkdir = strings.TrimSpace(typed.Workdir)
 		if err := a.refreshFileCandidates(); err != nil {
 			a.state.ExecutionError = err.Error()
 			a.state.StatusText = err.Error()
 			a.appendActivity("workspace", "Failed to refresh workspace files", err.Error(), true)
 			return a, tea.Batch(cmds...)
 		}
-		a.appendActivity("workspace", typed.notice, "", false)
+		a.appendActivity("workspace", typed.Notice, "", false)
 		return a, tea.Batch(cmds...)
 	case workspaceCommandResultMsg:
-		if typed.command == "" && typed.err != nil {
-			a.state.ExecutionError = typed.err.Error()
-			a.state.StatusText = typed.err.Error()
-			a.appendActivity("command", "Workspace command failed", typed.err.Error(), true)
+		if typed.Command == "" && typed.Err != nil {
+			a.state.ExecutionError = typed.Err.Error()
+			a.state.StatusText = typed.Err.Error()
+			a.appendActivity("command", "Workspace command failed", typed.Err.Error(), true)
 			return a, tea.Batch(cmds...)
 		}
-		result := formatWorkspaceCommandResult(typed.command, typed.output, typed.err)
-		if typed.err != nil {
-			a.state.ExecutionError = typed.err.Error()
-			a.state.StatusText = fmt.Sprintf("Command failed: %s", typed.command)
+		result := formatWorkspaceCommandResult(typed.Command, typed.Output, typed.Err)
+		if typed.Err != nil {
+			a.state.ExecutionError = typed.Err.Error()
+			a.state.StatusText = fmt.Sprintf("Command failed: %s", typed.Command)
 			a.appendActivity("command", "Command failed", result, true)
 		} else {
 			a.state.ExecutionError = ""
@@ -400,11 +386,10 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			a.state.CurrentTool = ""
 			a.activeMessages = append(a.activeMessages, provider.Message{Role: roleUser, Content: input})
 			a.rebuildTranscript()
-			requestedWorkdir := ""
-			if strings.TrimSpace(a.state.ActiveSessionID) == "" {
-				requestedWorkdir = a.state.CurrentWorkdir
-			}
-			cmds = append(cmds, runAgent(a.runtime, a.state.ActiveSessionID, requestedWorkdir, input))
+			runID := fmt.Sprintf("run-%d", a.now().UnixNano())
+			a.state.ActiveRunID = runID
+			requestedWorkdir := tuiutils.RequestedWorkdirForRun(a.state.ActiveSessionID, a.state.CurrentWorkdir)
+			cmds = append(cmds, runAgent(a.runtime, runID, a.state.ActiveSessionID, requestedWorkdir, input))
 			return a, tea.Batch(cmds...)
 		}
 	}
@@ -614,7 +599,8 @@ func (a *App) refreshMessages() error {
 	a.activeMessages = session.Messages
 	a.clearActivities()
 	a.state.ActiveSessionTitle = session.Title
-	a.state.CurrentWorkdir = selectSessionWorkdir(session.Workdir, a.configManager.Get().Workdir)
+	a.state.CurrentWorkdir = tuiworkspace.SelectSessionWorkdir(session.Workdir, a.configManager.Get().Workdir)
+	a.refreshRuntimeSourceSnapshot()
 	return nil
 }
 
@@ -660,139 +646,327 @@ func (a *App) syncConfigState(cfg config.Config) {
 	}
 }
 
+// refreshRuntimeSourceSnapshot 浠?runtime 鏌ヨ context/token/tool 蹇収锛岀敤浜庝細璇濆垏鎹㈡垨鎭㈠鏃跺洖濉?UI銆
+func (a *App) refreshRuntimeSourceSnapshot() {
+	sessionID := strings.TrimSpace(a.state.ActiveSessionID)
+	if sessionID != "" {
+		if source, ok := a.runtime.(runtimeSessionContextSource); ok {
+			raw, err := source.GetSessionContext(context.Background(), sessionID)
+			if err == nil {
+				contextSnapshot, parsed := tuiservices.ParseSessionContextSnapshot(raw)
+				if parsed {
+					mapped := tuiservices.MapSessionContextSnapshot(contextSnapshot)
+					a.state.RunContext.Provider = mapped.Provider
+					a.state.RunContext.Model = mapped.Model
+					a.state.RunContext.Workdir = mapped.Workdir
+					a.state.RunContext.Mode = mapped.Mode
+					a.state.RunContext.SessionID = mapped.SessionID
+				}
+			}
+		}
+		if source, ok := a.runtime.(runtimeSessionUsageSource); ok {
+			raw, err := source.GetSessionUsage(context.Background(), sessionID)
+			if err == nil {
+				usageSnapshot, parsed := tuiservices.ParseUsageSnapshot(raw)
+				if parsed {
+					a.state.TokenUsage = tuiservices.MapUsageSnapshot(usageSnapshot, a.state.TokenUsage)
+				}
+			}
+		}
+	}
+
+	runID := strings.TrimSpace(a.state.ActiveRunID)
+	if runID == "" {
+		return
+	}
+	if source, ok := a.runtime.(runtimeRunSnapshotSource); ok {
+		raw, err := source.GetRunSnapshot(context.Background(), runID)
+		if err == nil {
+			runSnapshot, parsed := tuiservices.ParseRunSnapshot(raw)
+			if parsed {
+				contextVM, toolVM, usageVM := tuiservices.MapRunSnapshot(runSnapshot)
+				if strings.TrimSpace(contextVM.Provider) != "" {
+					a.state.RunContext = contextVM
+				}
+				if len(toolVM) > 0 {
+					a.state.ToolStates = append([]tuistate.ToolState(nil), toolVM...)
+				}
+				a.state.TokenUsage = usageVM
+			}
+		}
+	}
+}
+
+// runtimeSessionContextSource 约束可选的会话上下文查询能力。
+type runtimeSessionContextSource interface {
+	GetSessionContext(ctx context.Context, sessionID string) (any, error)
+}
+
+// runtimeSessionUsageSource 约束可选的会话 token 使用量查询能力。
+type runtimeSessionUsageSource interface {
+	GetSessionUsage(ctx context.Context, sessionID string) (any, error)
+}
+
+// runtimeRunSnapshotSource 约束可选的运行快照查询能力。
+type runtimeRunSnapshotSource interface {
+	GetRunSnapshot(ctx context.Context, runID string) (any, error)
+}
+
+var runtimeEventHandlerRegistry = map[agentruntime.EventType]func(*App, agentruntime.RuntimeEvent) bool{
+	agentruntime.EventUserMessage:                              runtimeEventUserMessageHandler,
+	agentruntime.EventType(tuiservices.RuntimeEventRunContext): runtimeEventRunContextHandler,
+	agentruntime.EventType(tuiservices.RuntimeEventToolStatus): runtimeEventToolStatusHandler,
+	agentruntime.EventType(tuiservices.RuntimeEventUsage):      runtimeEventUsageHandler,
+	agentruntime.EventToolCallThinking:                         runtimeEventToolCallThinkingHandler,
+	agentruntime.EventToolStart:                                runtimeEventToolStartHandler,
+	agentruntime.EventToolResult:                               runtimeEventToolResultHandler,
+	agentruntime.EventAgentChunk:                               runtimeEventAgentChunkHandler,
+	agentruntime.EventToolChunk:                                runtimeEventToolChunkHandler,
+	agentruntime.EventAgentDone:                                runtimeEventAgentDoneHandler,
+	agentruntime.EventRunCanceled:                              runtimeEventRunCanceledHandler,
+	agentruntime.EventError:                                    runtimeEventErrorHandler,
+	agentruntime.EventProviderRetry:                            runtimeEventProviderRetryHandler,
+	agentruntime.EventCompactDone:                              runtimeEventCompactDoneHandler,
+	agentruntime.EventCompactError:                             runtimeEventCompactErrorHandler,
+}
+
+// handleRuntimeEvent 通过注册表分发 runtime 事件，避免巨型 switch 膨胀。
 func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
 	if a.state.ActiveSessionID == "" {
 		a.state.ActiveSessionID = event.SessionID
 	}
-
-	transcriptDirty := false
-
-	switch event.Type {
-	case agentruntime.EventUserMessage:
-		a.state.StatusText = statusThinking
-		a.state.StreamingReply = false
-		a.state.CurrentTool = ""
-		a.state.ExecutionError = ""
-		a.setRunProgress(0.15, "Queued")
-	case agentruntime.EventToolCallThinking:
-		if payload, ok := event.Payload.(string); ok && strings.TrimSpace(payload) != "" {
-			a.state.CurrentTool = payload
-			a.setRunProgress(0.35, "Planning")
-			a.appendActivity("tool", "Planning tool call", payload, false)
-		}
-	case agentruntime.EventToolStart:
-		a.state.StatusText = statusRunningTool
-		a.state.StreamingReply = false
-		if payload, ok := event.Payload.(provider.ToolCall); ok {
-			a.state.CurrentTool = payload.Name
-			a.setRunProgress(0.6, "Running tool")
-			a.appendActivity("tool", "Running tool", payload.Name, false)
-		}
-	case agentruntime.EventToolResult:
-		a.state.StreamingReply = false
-		a.state.CurrentTool = ""
-		a.setRunProgress(0.8, "Integrating result")
-		if payload, ok := event.Payload.(tools.ToolResult); ok {
-			a.activeMessages = append(a.activeMessages, provider.Message{
-				Role:    roleTool,
-				Content: payload.Content,
-				IsError: payload.IsError,
-			})
-			transcriptDirty = true
-			if payload.IsError {
-				a.state.ExecutionError = payload.Content
-				a.state.StatusText = statusToolError
-				a.appendActivity("tool", "Tool error", preview(payload.Content, 88, 4), true)
-			} else if strings.TrimSpace(a.state.ExecutionError) == "" {
-				a.state.StatusText = statusToolFinished
-				a.appendActivity("tool", "Completed tool", payload.Name, false)
-			}
-		}
-	case agentruntime.EventAgentChunk:
-		if payload, ok := event.Payload.(string); ok {
-			a.appendAssistantChunk(payload)
-			if !a.runProgressKnown {
-				a.setRunProgress(0.72, "Generating")
-			}
-			transcriptDirty = true
-		}
-	case agentruntime.EventToolChunk:
-		if payload, ok := event.Payload.(string); ok && strings.TrimSpace(payload) != "" {
-			a.state.StatusText = statusRunningTool
-			a.appendActivity("tool", "Tool output", preview(payload, 88, 4), false)
-		}
-	case agentruntime.EventAgentDone:
-		a.state.IsAgentRunning = false
-		a.state.StreamingReply = false
-		a.state.CurrentTool = ""
-		a.clearRunProgress()
-		if strings.TrimSpace(a.state.ExecutionError) == "" {
-			a.state.StatusText = statusReady
-		}
-		if payload, ok := event.Payload.(provider.Message); ok && strings.TrimSpace(payload.Content) != "" && !a.lastAssistantMatches(payload.Content) {
-			a.activeMessages = append(a.activeMessages, provider.Message{Role: roleAssistant, Content: payload.Content})
-			transcriptDirty = true
-		}
-	case agentruntime.EventRunCanceled:
-		a.state.IsAgentRunning = false
-		a.state.StreamingReply = false
-		a.state.CurrentTool = ""
-		a.state.ExecutionError = ""
-		a.state.StatusText = statusCanceled
-		a.clearRunProgress()
-		a.appendActivity("run", "Canceled current run", "", false)
-	case agentruntime.EventError:
-		a.state.StatusText = statusError
-		a.state.IsAgentRunning = false
-		a.state.StreamingReply = false
-		a.state.CurrentTool = ""
-		a.clearRunProgress()
-		if payload, ok := event.Payload.(string); ok {
-			a.state.ExecutionError = payload
-			a.state.StatusText = payload
-			a.appendActivity("run", "Runtime error", payload, true)
-		}
-	case agentruntime.EventProviderRetry:
-		if payload, ok := event.Payload.(string); ok && strings.TrimSpace(payload) != "" {
-			a.state.StatusText = statusThinking
-			a.runProgressKnown = false
-			a.appendActivity("provider", "Retrying provider call", payload, false)
-		}
-	case agentruntime.EventCompactDone:
-		payload, ok := event.Payload.(agentruntime.CompactDonePayload)
-		if !ok {
-			return transcriptDirty
-		}
-		a.state.ExecutionError = ""
-		a.state.StatusText = fmt.Sprintf("Compact(%s) saved %.1f%% context", payload.TriggerMode, payload.SavedRatio*100)
-		a.appendInlineMessage(
-			roleSystem,
-			fmt.Sprintf(
-				"[System] Compact(%s) %s (before=%d, after=%d, saved=%.1f%%, transcript=%s)",
-				payload.TriggerMode,
-				map[bool]string{true: "applied", false: "checked"}[payload.Applied],
-				payload.BeforeChars,
-				payload.AfterChars,
-				payload.SavedRatio*100,
-				payload.TranscriptPath,
-			),
-		)
-		transcriptDirty = true
-	case agentruntime.EventCompactError:
-		payload, ok := event.Payload.(agentruntime.CompactErrorPayload)
-		if !ok {
-			return transcriptDirty
-		}
-		message := fmt.Sprintf("Compact(%s) failed: %s", payload.TriggerMode, payload.Message)
-		a.state.ExecutionError = message
-		a.state.StatusText = message
-		a.appendInlineMessage(roleError, message)
-		transcriptDirty = true
+	handler, ok := runtimeEventHandlerRegistry[event.Type]
+	if !ok {
+		return false
 	}
-
-	return transcriptDirty
+	return handler(a, event)
 }
 
+// runtimeEventUserMessageHandler 处理用户消息进入运行队列后的状态同步。
+func runtimeEventUserMessageHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	if strings.TrimSpace(event.RunID) != "" {
+		a.state.ActiveRunID = strings.TrimSpace(event.RunID)
+	}
+	a.state.StatusText = statusThinking
+	a.state.StreamingReply = false
+	a.state.CurrentTool = ""
+	a.state.ExecutionError = ""
+	a.setRunProgress(0.15, "Queued")
+	return false
+}
+
+// runtimeEventRunContextHandler 处理 runtime 上下文事件并回填界面状态。
+func runtimeEventRunContextHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	payload, ok := tuiservices.ParseRunContextPayload(event.Payload)
+	if !ok {
+		return false
+	}
+	mapped := tuiservices.MapRunContextPayload(event.RunID, event.SessionID, payload)
+	a.state.RunContext = mapped
+	if strings.TrimSpace(mapped.RunID) != "" {
+		a.state.ActiveRunID = mapped.RunID
+	}
+	if strings.TrimSpace(mapped.Provider) != "" {
+		a.state.CurrentProvider = mapped.Provider
+	}
+	if strings.TrimSpace(mapped.Model) != "" {
+		a.state.CurrentModel = mapped.Model
+	}
+	if strings.TrimSpace(mapped.Workdir) != "" {
+		a.state.CurrentWorkdir = mapped.Workdir
+	}
+	return false
+}
+
+// runtimeEventToolStatusHandler 处理工具状态流转并更新当前工具展示。
+func runtimeEventToolStatusHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	payload, ok := tuiservices.ParseToolStatusPayload(event.Payload)
+	if !ok {
+		return false
+	}
+	toolVM := tuiservices.MapToolStatusPayload(payload)
+	a.state.ToolStates = tuiservices.MergeToolStates(a.state.ToolStates, toolVM, 16)
+	switch toolVM.Status {
+	case tuistate.ToolLifecyclePlanned, tuistate.ToolLifecycleRunning:
+		if strings.TrimSpace(toolVM.ToolName) != "" {
+			a.state.CurrentTool = toolVM.ToolName
+		}
+	case tuistate.ToolLifecycleSucceeded, tuistate.ToolLifecycleFailed:
+		a.state.CurrentTool = ""
+	}
+	return false
+}
+
+// runtimeEventUsageHandler 处理 token 使用量更新。
+func runtimeEventUsageHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	payload, ok := tuiservices.ParseUsagePayload(event.Payload)
+	if !ok {
+		return false
+	}
+	a.state.TokenUsage = tuiservices.MapUsagePayload(payload)
+	return false
+}
+
+// runtimeEventToolCallThinkingHandler 处理工具规划阶段事件。
+func runtimeEventToolCallThinkingHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	if payload, ok := event.Payload.(string); ok && strings.TrimSpace(payload) != "" {
+		a.state.CurrentTool = payload
+		a.setRunProgress(0.35, "Planning")
+		a.appendActivity("tool", "Planning tool call", payload, false)
+	}
+	return false
+}
+
+// runtimeEventToolStartHandler 处理工具开始执行事件。
+func runtimeEventToolStartHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	a.state.StatusText = statusRunningTool
+	a.state.StreamingReply = false
+	if payload, ok := event.Payload.(provider.ToolCall); ok {
+		a.state.CurrentTool = payload.Name
+		a.setRunProgress(0.6, "Running tool")
+		a.appendActivity("tool", "Running tool", payload.Name, false)
+	}
+	return false
+}
+
+// runtimeEventToolResultHandler 处理工具执行结果并决定是否刷新对话区。
+func runtimeEventToolResultHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	a.state.StreamingReply = false
+	a.state.CurrentTool = ""
+	a.setRunProgress(0.8, "Integrating result")
+	payload, ok := event.Payload.(tools.ToolResult)
+	if !ok {
+		return false
+	}
+	a.activeMessages = append(a.activeMessages, provider.Message{
+		Role:    roleTool,
+		Content: payload.Content,
+		IsError: payload.IsError,
+	})
+	if payload.IsError {
+		a.state.ExecutionError = payload.Content
+		a.state.StatusText = statusToolError
+		a.appendActivity("tool", "Tool error", preview(payload.Content, 88, 4), true)
+	} else if strings.TrimSpace(a.state.ExecutionError) == "" {
+		a.state.StatusText = statusToolFinished
+		a.appendActivity("tool", "Completed tool", payload.Name, false)
+	}
+	return true
+}
+
+// runtimeEventAgentChunkHandler 处理模型流式增量输出。
+func runtimeEventAgentChunkHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	payload, ok := event.Payload.(string)
+	if !ok {
+		return false
+	}
+	a.appendAssistantChunk(payload)
+	if !a.runProgressKnown {
+		a.setRunProgress(0.72, "Generating")
+	}
+	return true
+}
+
+// runtimeEventToolChunkHandler 处理工具流式输出片段。
+func runtimeEventToolChunkHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	if payload, ok := event.Payload.(string); ok && strings.TrimSpace(payload) != "" {
+		a.state.StatusText = statusRunningTool
+		a.appendActivity("tool", "Tool output", preview(payload, 88, 4), false)
+	}
+	return false
+}
+
+// runtimeEventAgentDoneHandler 处理运行完成事件。
+func runtimeEventAgentDoneHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	a.state.IsAgentRunning = false
+	a.state.StreamingReply = false
+	a.state.CurrentTool = ""
+	a.state.ActiveRunID = ""
+	a.clearRunProgress()
+	if strings.TrimSpace(a.state.ExecutionError) == "" {
+		a.state.StatusText = statusReady
+	}
+	if payload, ok := event.Payload.(provider.Message); ok && strings.TrimSpace(payload.Content) != "" && !a.lastAssistantMatches(payload.Content) {
+		a.activeMessages = append(a.activeMessages, provider.Message{Role: roleAssistant, Content: payload.Content})
+		return true
+	}
+	return false
+}
+
+// runtimeEventRunCanceledHandler 处理运行取消事件。
+func runtimeEventRunCanceledHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	a.state.IsAgentRunning = false
+	a.state.StreamingReply = false
+	a.state.CurrentTool = ""
+	a.state.ActiveRunID = ""
+	a.state.ExecutionError = ""
+	a.state.StatusText = statusCanceled
+	a.clearRunProgress()
+	a.appendActivity("run", "Canceled current run", "", false)
+	return false
+}
+
+// runtimeEventErrorHandler 处理运行时错误事件。
+func runtimeEventErrorHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	a.state.StatusText = statusError
+	a.state.IsAgentRunning = false
+	a.state.StreamingReply = false
+	a.state.CurrentTool = ""
+	a.state.ActiveRunID = ""
+	a.clearRunProgress()
+	if payload, ok := event.Payload.(string); ok {
+		a.state.ExecutionError = payload
+		a.state.StatusText = payload
+		a.appendActivity("run", "Runtime error", payload, true)
+	}
+	return false
+}
+
+// runtimeEventProviderRetryHandler 处理 provider 重试提示事件。
+func runtimeEventProviderRetryHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	if payload, ok := event.Payload.(string); ok && strings.TrimSpace(payload) != "" {
+		a.state.StatusText = statusThinking
+		a.runProgressKnown = false
+		a.appendActivity("provider", "Retrying provider call", payload, false)
+	}
+	return false
+}
+
+// runtimeEventCompactDoneHandler 处理 compact 完成事件。
+func runtimeEventCompactDoneHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	payload, ok := event.Payload.(agentruntime.CompactDonePayload)
+	if !ok {
+		return false
+	}
+	a.state.ExecutionError = ""
+	a.state.StatusText = fmt.Sprintf("Compact(%s) saved %.1f%% context", payload.TriggerMode, payload.SavedRatio*100)
+	a.appendInlineMessage(
+		roleSystem,
+		fmt.Sprintf(
+			"[System] Compact(%s) %s (before=%d, after=%d, saved=%.1f%%, transcript=%s)",
+			payload.TriggerMode,
+			map[bool]string{true: "applied", false: "checked"}[payload.Applied],
+			payload.BeforeChars,
+			payload.AfterChars,
+			payload.SavedRatio*100,
+			payload.TranscriptPath,
+		),
+	)
+	return true
+}
+
+// runtimeEventCompactErrorHandler 处理 compact 异常事件。
+func runtimeEventCompactErrorHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	payload, ok := event.Payload.(agentruntime.CompactErrorPayload)
+	if !ok {
+		return false
+	}
+	message := fmt.Sprintf("Compact(%s) failed: %s", payload.TriggerMode, payload.Message)
+	a.state.ExecutionError = message
+	a.state.StatusText = message
+	a.appendInlineMessage(roleError, message)
+	return true
+}
 func (a *App) appendAssistantChunk(chunk string) {
 	if chunk == "" {
 		return
@@ -828,7 +1002,7 @@ func (a *App) appendActivity(kind string, title string, detail string, isError b
 		detail = ""
 	}
 
-	a.activities = append(a.activities, activityEntry{
+	a.activities = append(a.activities, tuistate.ActivityEntry{
 		Time:    time.Now(),
 		Kind:    strings.TrimSpace(kind),
 		Title:   title,
@@ -836,7 +1010,7 @@ func (a *App) appendActivity(kind string, title string, detail string, isError b
 		IsError: isError,
 	})
 	if len(a.activities) > maxActivityEntries {
-		a.activities = append([]activityEntry(nil), a.activities[len(a.activities)-maxActivityEntries:]...)
+		a.activities = append([]tuistate.ActivityEntry(nil), a.activities[len(a.activities)-maxActivityEntries:]...)
 	}
 	a.syncActivityViewport(previousCount)
 }
@@ -947,7 +1121,7 @@ func (a App) transcriptBounds() (int, int, int, int) {
 	lay := a.computeLayout()
 	contentX := a.styles.doc.GetPaddingLeft()
 	contentY := a.styles.doc.GetPaddingTop()
-	headerHeight := lipgloss.Height(a.renderHeader(lay.contentWidth))
+	headerHeight := headerBarHeight
 	bodyY := contentY + headerHeight
 
 	streamX := contentX
@@ -973,7 +1147,7 @@ func (a App) inputBounds() (int, int, int, int) {
 	lay := a.computeLayout()
 	contentX := a.styles.doc.GetPaddingLeft()
 	contentY := a.styles.doc.GetPaddingTop()
-	headerHeight := lipgloss.Height(a.renderHeader(lay.contentWidth))
+	headerHeight := headerBarHeight
 	bodyY := contentY + headerHeight
 
 	streamX := contentX
@@ -993,7 +1167,7 @@ func (a App) activityBounds() (int, int, int, int) {
 	lay := a.computeLayout()
 	contentX := a.styles.doc.GetPaddingLeft()
 	contentY := a.styles.doc.GetPaddingTop()
-	headerHeight := lipgloss.Height(a.renderHeader(lay.contentWidth))
+	headerHeight := headerBarHeight
 	bodyY := contentY + headerHeight
 
 	streamX := contentX
@@ -1101,7 +1275,7 @@ func (a App) shouldHandleTabAsInput(typed tea.KeyMsg) bool {
 }
 
 func (a *App) focusNext() {
-	order := []panel{panelSessions, panelTranscript, panelActivity, panelInput}
+	order := panelOrder
 	current := 0
 	for i, item := range order {
 		if item == a.focus {
@@ -1115,7 +1289,7 @@ func (a *App) focusNext() {
 }
 
 func (a *App) focusPrev() {
-	order := []panel{panelSessions, panelTranscript, panelActivity, panelInput}
+	order := panelOrder
 	current := 0
 	for i, item := range order {
 		if item == a.focus {
@@ -1177,9 +1351,9 @@ func (a *App) applyComponentLayout(rebuildTranscript bool) {
 		a.activity.Height = 0
 	}
 
-	a.providerPicker.SetSize(max(24, clamp(lay.rightWidth-14, 28, 52)), max(4, clamp(lay.rightHeight-10, 6, 10)))
-	a.modelPicker.SetSize(max(24, clamp(lay.rightWidth-14, 28, 52)), max(4, clamp(lay.rightHeight-10, 6, 10)))
-	a.fileBrowser.SetHeight(max(6, clamp(lay.rightHeight-8, 8, 16)))
+	a.providerPicker.SetSize(max(24, tuiutils.Clamp(lay.rightWidth-14, 28, 52)), max(4, tuiutils.Clamp(lay.rightHeight-10, 6, 10)))
+	a.modelPicker.SetSize(max(24, tuiutils.Clamp(lay.rightWidth-14, 28, 52)), max(4, tuiutils.Clamp(lay.rightHeight-10, 6, 10)))
+	a.fileBrowser.SetHeight(max(6, tuiutils.Clamp(lay.rightHeight-8, 8, 16)))
 	if rebuildTranscript || prevTranscriptWidth != a.transcript.Width {
 		a.rebuildTranscript()
 	} else if a.transcript.AtBottom() || a.isBusy() {
@@ -1199,18 +1373,18 @@ func (a App) composerInnerWidth(totalWidth int) int {
 }
 
 func (a App) composerHeight() int {
-	return clamp(a.input.LineCount(), composerMinHeight, composerMaxHeight)
+	return tuiutils.Clamp(a.input.LineCount(), composerMinHeight, composerMaxHeight)
 }
 
 func (a *App) growComposerForNewline() {
-	nextHeight := clamp(a.input.LineCount()+1, composerMinHeight, composerMaxHeight)
+	nextHeight := tuiutils.Clamp(a.input.LineCount()+1, composerMinHeight, composerMaxHeight)
 	if nextHeight > a.input.Height() {
 		a.input.SetHeight(nextHeight)
 	}
 }
 
 func (a *App) normalizeComposerHeight() {
-	targetHeight := clamp(a.input.LineCount(), composerMinHeight, composerMaxHeight)
+	targetHeight := tuiutils.Clamp(a.input.LineCount(), composerMinHeight, composerMaxHeight)
 	if targetHeight != a.input.Height() {
 		a.input.SetHeight(targetHeight)
 	}
@@ -1326,31 +1500,13 @@ func (a *App) handleImmediateSlashCommand(input string) (bool, tea.Cmd) {
 	}
 }
 
-func (a App) currentStatusSnapshot() statusSnapshot {
-	picker := "none"
-	switch a.state.ActivePicker {
-	case pickerProvider:
-		picker = "provider"
-	case pickerModel:
-		picker = "model"
-	case pickerFile:
-		picker = "file"
-	}
-
-	return statusSnapshot{
-		ActiveSessionID:    a.state.ActiveSessionID,
-		ActiveSessionTitle: a.state.ActiveSessionTitle,
-		IsAgentRunning:     a.state.IsAgentRunning,
-		IsCompacting:       a.state.IsCompacting,
-		CurrentProvider:    a.state.CurrentProvider,
-		CurrentModel:       a.state.CurrentModel,
-		CurrentWorkdir:     a.state.CurrentWorkdir,
-		CurrentTool:        a.state.CurrentTool,
-		ExecutionError:     a.state.ExecutionError,
-		FocusLabel:         a.focusLabel(),
-		PickerLabel:        picker,
-		MessageCount:       len(a.activeMessages),
-	}
+func (a App) currentStatusSnapshot() tuistatus.Snapshot {
+	return tuistatus.BuildFromUIState(
+		a.state,
+		len(a.activeMessages),
+		a.focusLabel(),
+		tuiutils.PickerLabelFromMode(a.state.ActivePicker),
+	)
 }
 
 func (a *App) startDraftSession() {
@@ -1362,6 +1518,10 @@ func (a *App) startDraftSession() {
 	a.state.StatusText = statusDraft
 	a.state.ExecutionError = ""
 	a.state.CurrentTool = ""
+	a.state.ActiveRunID = ""
+	a.state.ToolStates = nil
+	a.state.RunContext = tuistate.ContextWindowState{}
+	a.state.TokenUsage = tuistate.TokenUsageState{}
 	a.clearRunProgress()
 	a.input.Reset()
 	a.state.InputText = ""
@@ -1387,24 +1547,24 @@ func (a *App) requestModelCatalogRefresh(providerID string) tea.Cmd {
 }
 
 func ListenForRuntimeEvent(sub <-chan agentruntime.RuntimeEvent) tea.Cmd {
-	return func() tea.Msg {
-		event, ok := <-sub
-		if !ok {
-			return RuntimeClosedMsg{}
-		}
-		return RuntimeMsg{Event: event}
-	}
+	return tuiservices.ListenForRuntimeEventCmd(
+		sub,
+		func(event agentruntime.RuntimeEvent) tea.Msg { return RuntimeMsg{Event: event} },
+		func() tea.Msg { return RuntimeClosedMsg{} },
+	)
 }
 
-func runAgent(runtime agentruntime.Runtime, sessionID string, workdir string, content string) tea.Cmd {
-	return func() tea.Msg {
-		err := runtime.Run(context.Background(), agentruntime.UserInput{
+func runAgent(runtime agentruntime.Runtime, runID string, sessionID string, workdir string, content string) tea.Cmd {
+	return tuiservices.RunAgentCmd(
+		runtime,
+		agentruntime.UserInput{
 			SessionID: sessionID,
+			RunID:     strings.TrimSpace(runID),
 			Content:   content,
 			Workdir:   workdir,
-		})
-		return runFinishedMsg{err: err}
-	}
+		},
+		func(err error) tea.Msg { return runFinishedMsg{Err: err} },
+	)
 }
 
 func runSessionWorkdirCommand(
@@ -1414,96 +1574,33 @@ func runSessionWorkdirCommand(
 	raw string,
 ) tea.Cmd {
 	return func() tea.Msg {
-		requested, err := parseWorkspaceSlashCommand(raw)
-		if err != nil {
-			return sessionWorkdirResultMsg{err: err}
-		}
-		if strings.TrimSpace(requested) == "" {
-			workdir := strings.TrimSpace(currentWorkdir)
-			if workdir == "" {
-				return sessionWorkdirResultMsg{err: fmt.Errorf("usage: /cwd <path>")}
-			}
-			return sessionWorkdirResultMsg{
-				notice:  fmt.Sprintf("[System] Current workspace is %s.", workdir),
-				workdir: workdir,
-			}
-		}
-
-		if strings.TrimSpace(sessionID) == "" {
-			workdir, err := resolveWorkspacePath(currentWorkdir, requested)
-			if err != nil {
-				return sessionWorkdirResultMsg{err: err}
-			}
-			return sessionWorkdirResultMsg{
-				notice:  fmt.Sprintf("[System] Draft workspace switched to %s.", workdir),
-				workdir: workdir,
-			}
-		}
-
-		session, err := runtime.SetSessionWorkdir(context.Background(), sessionID, requested)
-		if err != nil {
-			return sessionWorkdirResultMsg{err: err}
-		}
-		workdir := strings.TrimSpace(session.Workdir)
-		if workdir == "" {
-			workdir = strings.TrimSpace(currentWorkdir)
-		}
+		result := tuicommands.ExecuteSessionWorkdirCommand(
+			runtime,
+			sessionID,
+			currentWorkdir,
+			raw,
+			parseWorkspaceSlashCommand,
+			tuiworkspace.ResolveWorkspacePath,
+			tuiworkspace.SelectSessionWorkdir,
+		)
 		return sessionWorkdirResultMsg{
-			notice:  fmt.Sprintf("[System] Session workspace switched to %s.", workdir),
-			workdir: workdir,
+			Notice:  result.Notice,
+			Workdir: result.Workdir,
+			Err:     result.Err,
 		}
 	}
 }
 
-func resolveWorkspacePath(base string, requested string) (string, error) {
-	base = strings.TrimSpace(base)
-	if base == "" {
-		workingDir, err := os.Getwd()
-		if err != nil {
-			return "", fmt.Errorf("workspace: resolve current directory: %w", err)
-		}
-		base = workingDir
-	}
-
-	target := strings.TrimSpace(requested)
-	if target == "" {
-		target = "."
-	}
-	if !filepath.IsAbs(target) {
-		target = filepath.Join(base, target)
-	}
-
-	absolute, err := filepath.Abs(target)
-	if err != nil {
-		return "", fmt.Errorf("workspace: resolve path: %w", err)
-	}
-	info, err := os.Stat(absolute)
-	if err != nil {
-		return "", fmt.Errorf("workspace: resolve path: %w", err)
-	}
-	if !info.IsDir() {
-		return "", fmt.Errorf("workspace: %q is not a directory", absolute)
-	}
-	return filepath.Clean(absolute), nil
-}
-
-func selectSessionWorkdir(sessionWorkdir string, defaultWorkdir string) string {
-	workdir := strings.TrimSpace(sessionWorkdir)
-	if workdir != "" {
-		return workdir
-	}
-	return strings.TrimSpace(defaultWorkdir)
-}
-
-// runCompact 在独立命令中触发 runtime compact，并把结果回传给 TUI。
+// runCompact 鍦ㄧ嫭绔嬪懡浠や腑瑙﹀彂 runtime compact锛屽苟鎶婄粨鏋滃洖浼犵粰 TUI銆
 func runCompact(runtime agentruntime.Runtime, sessionID string) tea.Cmd {
-	return func() tea.Msg {
-		_, err := runtime.Compact(context.Background(), agentruntime.CompactInput{SessionID: sessionID})
-		return compactFinishedMsg{err: err}
-	}
+	return tuiservices.RunCompactCmd(
+		runtime,
+		agentruntime.CompactInput{SessionID: sessionID},
+		func(err error) tea.Msg { return compactFinishedMsg{Err: err} },
+	)
 }
 
-// isBusy 统一判断当前界面是否存在进行中的 agent 或 compact 操作。
+// isBusy 缁熶竴鍒ゆ柇褰撳墠鐣岄潰鏄惁瀛樺湪杩涜涓殑 agent 鎴?compact 鎿嶄綔銆
 func (a App) isBusy() bool {
-	return a.state.IsAgentRunning || a.state.IsCompacting
+	return tuiutils.IsBusy(a.state.IsAgentRunning, a.state.IsCompacting)
 }

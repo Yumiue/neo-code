@@ -1,23 +1,16 @@
 package tui
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"fmt"
-	"io/fs"
-	"os/exec"
 	"path/filepath"
-	"regexp"
-	"sort"
 	"strings"
-	"time"
-	"unicode"
-	"unicode/utf16"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"neo-code/internal/config"
+	tuiinfra "neo-code/internal/tui/infra"
+	tuiservices "neo-code/internal/tui/services"
 )
 
 const (
@@ -30,12 +23,6 @@ const (
 	maxFileSuggestions     = 6
 )
 
-type workspaceCommandResultMsg struct {
-	command string
-	output  string
-	err     error
-}
-
 type tokenSelector int
 
 const (
@@ -44,8 +31,6 @@ const (
 )
 
 var workspaceCommandExecutor = defaultWorkspaceCommandExecutor
-
-var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
 func isWorkspaceCommandInput(input string) bool {
 	return strings.HasPrefix(strings.TrimSpace(input), workspaceCommandPrefix)
@@ -64,14 +49,18 @@ func extractWorkspaceCommand(input string) (string, error) {
 }
 
 func runWorkspaceCommand(configManager *config.Manager, workdir string, raw string) tea.Cmd {
-	return func() tea.Msg {
-		command, output, err := executeWorkspaceCommand(context.Background(), configManager, workdir, raw)
-		return workspaceCommandResultMsg{
-			command: command,
-			output:  output,
-			err:     err,
-		}
-	}
+	return tuiservices.RunWorkspaceCommandCmd(
+		func(ctx context.Context) (string, string, error) {
+			return executeWorkspaceCommand(ctx, configManager, workdir, raw)
+		},
+		func(command string, output string, err error) tea.Msg {
+			return workspaceCommandResultMsg{
+				Command: command,
+				Output:  output,
+				Err:     err,
+			}
+		},
+	)
 }
 
 func executeWorkspaceCommand(ctx context.Context, configManager *config.Manager, workdir string, raw string) (string, string, error) {
@@ -86,57 +75,15 @@ func executeWorkspaceCommand(ctx context.Context, configManager *config.Manager,
 }
 
 func defaultWorkspaceCommandExecutor(ctx context.Context, cfg config.Config, workdir string, command string) (string, error) {
-	command = strings.TrimSpace(command)
-	if command == "" {
-		return "", errors.New("command is empty")
-	}
-	targetWorkdir := strings.TrimSpace(workdir)
-	if targetWorkdir == "" {
-		targetWorkdir = cfg.Workdir
-	}
-
-	timeoutSec := cfg.ToolTimeoutSec
-	if timeoutSec <= 0 {
-		timeoutSec = config.DefaultToolTimeoutSec
-	}
-
-	runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
-	defer cancel()
-
-	args := shellArgs(cfg.Shell, command)
-	cmd := exec.CommandContext(runCtx, args[0], args[1:]...)
-	cmd.Dir = targetWorkdir
-	output, err := cmd.CombinedOutput()
-	text := sanitizeWorkspaceOutput(output)
-
-	if runCtx.Err() == context.DeadlineExceeded {
-		return text, fmt.Errorf("command timed out after %ds", timeoutSec)
-	}
-	if err != nil {
-		return text, err
-	}
-	if text == "" {
-		return "(no output)", nil
-	}
-	return text, nil
+	return tuiinfra.DefaultWorkspaceCommandExecutor(ctx, cfg, workdir, command)
 }
 
 func shellArgs(shell string, command string) []string {
-	switch strings.ToLower(strings.TrimSpace(shell)) {
-	case "powershell", "pwsh":
-		return []string{"powershell", "-NoProfile", "-Command", powershellUTF8Command(command)}
-	case "bash":
-		return []string{"bash", "-lc", command}
-	case "sh":
-		return []string{"sh", "-lc", command}
-	default:
-		return []string{"powershell", "-NoProfile", "-Command", powershellUTF8Command(command)}
-	}
+	return tuiinfra.ShellArgs(shell, command)
 }
 
 func powershellUTF8Command(command string) string {
-	utf8Setup := "[Console]::InputEncoding=[System.Text.Encoding]::UTF8; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $OutputEncoding=[System.Text.Encoding]::UTF8; chcp 65001 > $null"
-	return utf8Setup + "; " + command
+	return tuiinfra.PowerShellUTF8Command(command)
 }
 
 func formatWorkspaceCommandResult(command string, output string, err error) string {
@@ -158,97 +105,11 @@ func formatWorkspaceCommandResult(command string, output string, err error) stri
 }
 
 func sanitizeWorkspaceOutput(raw []byte) string {
-	text := decodeWorkspaceOutput(raw)
-	text = strings.ToValidUTF8(text, "?")
-	text = ansiEscapePattern.ReplaceAllString(text, "")
-	text = strings.ReplaceAll(text, "\r\n", "\n")
-	text = strings.ReplaceAll(text, "\r", "\n")
-	text = strings.Map(func(r rune) rune {
-		switch {
-		case r == '\n' || r == '\t':
-			return r
-		case r < 0x20:
-			return -1
-		default:
-			return r
-		}
-	}, text)
-	return strings.TrimSpace(text)
+	return tuiinfra.SanitizeWorkspaceOutput(raw)
 }
 
 func decodeWorkspaceOutput(raw []byte) string {
-	if len(raw) == 0 {
-		return ""
-	}
-
-	switch {
-	case bytes.HasPrefix(raw, []byte{0xFF, 0xFE}):
-		return decodeUTF16(raw[2:], true)
-	case bytes.HasPrefix(raw, []byte{0xFE, 0xFF}):
-		return decodeUTF16(raw[2:], false)
-	}
-
-	if len(raw)%2 == 0 {
-		le := decodeUTF16(raw, true)
-		be := decodeUTF16(raw, false)
-		rawText := string(raw)
-		rawScore := decodedTextScore(rawText)
-		leScore := decodedTextScore(le)
-		beScore := decodedTextScore(be)
-
-		bestText := rawText
-		bestScore := rawScore
-		if leScore > bestScore {
-			bestText = le
-			bestScore = leScore
-		}
-		if beScore > bestScore {
-			bestText = be
-		}
-		return bestText
-	}
-
-	return string(raw)
-}
-
-func decodedTextScore(text string) int {
-	if text == "" {
-		return 0
-	}
-
-	score := 0
-	for _, r := range text {
-		switch {
-		case r == '\n' || r == '\r' || r == '\t':
-			score += 1
-		case r == unicode.ReplacementChar:
-			score -= 6
-		case unicode.IsPrint(r):
-			score += 2
-		default:
-			score -= 3
-		}
-	}
-	return score
-}
-
-func decodeUTF16(raw []byte, littleEndian bool) string {
-	if len(raw) < 2 {
-		return string(raw)
-	}
-	if len(raw)%2 != 0 {
-		raw = raw[:len(raw)-1]
-	}
-
-	words := make([]uint16, 0, len(raw)/2)
-	for i := 0; i < len(raw); i += 2 {
-		if littleEndian {
-			words = append(words, uint16(raw[i])|uint16(raw[i+1])<<8)
-		} else {
-			words = append(words, uint16(raw[i])<<8|uint16(raw[i+1]))
-		}
-	}
-	return string(utf16.Decode(words))
+	return tuiinfra.DecodeWorkspaceOutput(raw)
 }
 
 func (a *App) refreshFileCandidates() error {
@@ -257,56 +118,15 @@ func (a *App) refreshFileCandidates() error {
 		return err
 	}
 	a.fileCandidates = candidates
-	if workdir := strings.TrimSpace(a.state.CurrentWorkdir); workdir != "" {
-		if absolute, absErr := filepath.Abs(workdir); absErr == nil {
-			a.fileBrowser.CurrentDirectory = absolute
-		}
+	if absolute := tuiservices.ResolveWorkspaceDirectory(a.state.CurrentWorkdir); absolute != "" {
+		a.fileBrowser.CurrentDirectory = absolute
 	}
 	a.refreshCommandMenu()
 	return nil
 }
 
 func collectWorkspaceFiles(root string, limit int) ([]string, error) {
-	root, err := filepath.Abs(root)
-	if err != nil {
-		return nil, err
-	}
-
-	var (
-		candidates []string
-		limitErr   = errors.New("file limit reached")
-	)
-
-	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-
-		name := d.Name()
-		if d.IsDir() {
-			switch name {
-			case ".git", ".gocache", "node_modules":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		candidates = append(candidates, filepath.ToSlash(rel))
-		if limit > 0 && len(candidates) >= limit {
-			return limitErr
-		}
-		return nil
-	})
-	if err != nil && !errors.Is(err, limitErr) {
-		return nil, err
-	}
-
-	sort.Strings(candidates)
-	return candidates, nil
+	return tuiservices.CollectWorkspaceFiles(root, limit)
 }
 
 func (a App) resolveFileReferenceSuggestions(input string) (start int, end int, query string, suggestions []string, ok bool) {
@@ -321,29 +141,7 @@ func (a App) resolveFileReferenceSuggestions(input string) (start int, end int, 
 }
 
 func collectFileSuggestionMatches(query string, candidates []string, limit int) []string {
-	if len(candidates) == 0 || limit <= 0 {
-		return nil
-	}
-	prefixMatches := make([]string, 0, maxFileSuggestions)
-	containsMatches := make([]string, 0, maxFileSuggestions)
-	for _, candidate := range candidates {
-		lower := strings.ToLower(candidate)
-		switch {
-		case query == "" || strings.HasPrefix(lower, query):
-			prefixMatches = append(prefixMatches, candidate)
-		case strings.Contains(lower, query):
-			containsMatches = append(containsMatches, candidate)
-		}
-		if len(prefixMatches)+len(containsMatches) >= maxFileSuggestions {
-			break
-		}
-	}
-
-	out := append(prefixMatches, containsMatches...)
-	if len(out) > limit {
-		out = out[:limit]
-	}
-	return out
+	return tuiservices.SuggestFileMatches(query, candidates, limit)
 }
 
 func tokenRange(input string, selector tokenSelector) (start int, end int, token string, ok bool) {

@@ -41,7 +41,7 @@ func TestWorkspaceCommandHelpers(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected workspaceCommandResultMsg, got %T", msg)
 		}
-		if result.err != nil || result.command != "git status" || result.output != "ok" {
+		if result.Err != nil || result.Command != "git status" || result.Output != "ok" {
 			t.Fatalf("unexpected runWorkspaceCommand result: %+v", result)
 		}
 	})

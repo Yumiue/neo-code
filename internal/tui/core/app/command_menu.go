@@ -1,11 +1,18 @@
-package tui
+﻿package tui
 
 import (
+	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+
+	agentruntime "neo-code/internal/runtime"
+	tuicomponents "neo-code/internal/tui/components"
+	tuiutils "neo-code/internal/tui/core/utils"
+	tuistate "neo-code/internal/tui/state"
 )
 
 const (
@@ -13,18 +20,142 @@ const (
 	commandMenuBrowse  = "@ browse files..."
 )
 
+type commandMenuItem struct {
+	title           string
+	description     string
+	filter          string
+	highlight       bool
+	replacement     string
+	useReplaceRange bool
+	replaceStart    int
+	replaceEnd      int
+	openFileBrowser bool
+}
+
+func (c commandMenuItem) Title() string {
+	return c.title
+}
+
+func (c commandMenuItem) Description() string {
+	return c.description
+}
+
+func (c commandMenuItem) FilterValue() string {
+	base := strings.TrimSpace(c.filter)
+	if base != "" {
+		return strings.ToLower(base)
+	}
+	return strings.ToLower(c.title + " " + c.description)
+}
+
+type commandMenuDelegate struct {
+	styles styles
+}
+
+func (d commandMenuDelegate) Height() int {
+	return 1
+}
+
+func (d commandMenuDelegate) Spacing() int {
+	return 0
+}
+
+func (d commandMenuDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd {
+	return nil
+}
+
+func (d commandMenuDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	entry, ok := item.(commandMenuItem)
+	if !ok {
+		return
+	}
+	fmt.Fprint(w, tuicomponents.RenderCommandMenuRow(tuicomponents.CommandMenuRowData{
+		Title:            entry.title,
+		Description:      entry.description,
+		Highlight:        entry.highlight,
+		Selected:         index == m.Index(),
+		Width:            m.Width(),
+		UsageStyle:       d.styles.commandUsage,
+		UsageMatchStyle:  d.styles.commandUsageMatch,
+		DescriptionStyle: d.styles.commandDesc,
+	}))
+}
+
+type sessionItem struct {
+	Summary agentruntime.SessionSummary
+	Active  bool
+}
+
+func (s sessionItem) FilterValue() string {
+	return strings.ToLower(s.Summary.Title)
+}
+
+type selectionItem struct {
+	id          string
+	name        string
+	description string
+}
+
+func (s selectionItem) Title() string {
+	return s.name
+}
+
+func (s selectionItem) Description() string {
+	return s.description
+}
+
+func (s selectionItem) FilterValue() string {
+	return strings.ToLower(s.id + " " + s.name + " " + s.description)
+}
+
+type sessionDelegate struct {
+	styles styles
+}
+
+func (d sessionDelegate) Height() int {
+	return 3
+}
+
+func (d sessionDelegate) Spacing() int {
+	return 1
+}
+
+func (d sessionDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd {
+	return nil
+}
+
+func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	session, ok := item.(sessionItem)
+	if !ok {
+		return
+	}
+	fmt.Fprint(w, tuicomponents.RenderSessionRow(tuicomponents.SessionRowData{
+		Title:           session.Summary.Title,
+		UpdatedAtLabel:  session.Summary.UpdatedAt.Format("01-02 15:04"),
+		Active:          session.Active,
+		Selected:        index == m.Index(),
+		Width:           m.Width(),
+		RowStyle:        d.styles.sessionRow,
+		RowActiveStyle:  d.styles.sessionRowActive,
+		RowFocusStyle:   d.styles.sessionRowFocused,
+		MetaStyle:       d.styles.sessionMeta,
+		MetaActiveStyle: d.styles.sessionMetaActive,
+		MetaFocusStyle:  d.styles.sessionMetaFocus,
+	}))
+}
+
 func (a *App) refreshCommandMenu() {
 	input := a.input.Value()
 	if a.state.ActivePicker != pickerNone {
 		a.commandMenu.SetItems(nil)
-		a.commandMenuMeta = commandMenuMeta{}
+		a.commandMenuMeta = tuistate.CommandMenuMeta{}
 		return
 	}
 
 	items, meta := a.buildCommandMenuItems(input, a.transcript.Width)
 	if len(items) == 0 {
 		a.commandMenu.SetItems(nil)
-		a.commandMenuMeta = commandMenuMeta{}
+		a.commandMenuMeta = tuistate.CommandMenuMeta{}
 		return
 	}
 
@@ -50,13 +181,13 @@ func (a *App) refreshCommandMenu() {
 
 func (a *App) resizeCommandMenu() {
 	width := max(24, a.transcript.Width)
-	rows := clamp(len(a.commandMenu.Items()), 0, maxCommandMenuRows)
+	rows := tuiutils.Clamp(len(a.commandMenu.Items()), 0, maxCommandMenuRows)
 	a.commandMenu.SetSize(max(16, width-4), max(1, rows))
 }
 
-func (a App) buildCommandMenuItems(input string, width int) ([]commandMenuItem, commandMenuMeta) {
+func (a App) buildCommandMenuItems(input string, width int) ([]commandMenuItem, tuistate.CommandMenuMeta) {
 	if suggestions := a.fileMenuSuggestions(input); len(suggestions) > 0 {
-		return suggestions, commandMenuMeta{Title: fileMenuTitle}
+		return suggestions, tuistate.CommandMenuMeta{Title: fileMenuTitle}
 	}
 
 	trimmed := strings.TrimSpace(input)
@@ -64,7 +195,7 @@ func (a App) buildCommandMenuItems(input string, width int) ([]commandMenuItem, 
 		replacement := trimmed
 		item := commandMenuItem{
 			title:       workspaceCommandUsage,
-			description: trimMiddle(a.state.CurrentWorkdir, max(24, width-28)),
+			description: tuiutils.TrimMiddle(a.state.CurrentWorkdir, max(24, width-28)),
 			highlight:   true,
 			replacement: replacement,
 		}
@@ -75,12 +206,12 @@ func (a App) buildCommandMenuItems(input string, width int) ([]commandMenuItem, 
 			item.replaceStart = start
 			item.replaceEnd = end
 		}
-		return []commandMenuItem{item}, commandMenuMeta{Title: shellMenuTitle}
+		return []commandMenuItem{item}, tuistate.CommandMenuMeta{Title: shellMenuTitle}
 	}
 
 	suggestions := a.matchingSlashCommands(trimmed)
 	if len(suggestions) == 0 {
-		return nil, commandMenuMeta{}
+		return nil, tuistate.CommandMenuMeta{}
 	}
 
 	start, end, _, _ := tokenRange(input, tokenSelectorFirst)
@@ -97,7 +228,7 @@ func (a App) buildCommandMenuItems(input string, width int) ([]commandMenuItem, 
 			replaceEnd:      end,
 		})
 	}
-	return items, commandMenuMeta{Title: commandMenuTitle}
+	return items, tuistate.CommandMenuMeta{Title: commandMenuTitle}
 }
 
 func (a App) fileMenuSuggestions(input string) []commandMenuItem {
@@ -206,3 +337,4 @@ func (a *App) openFileBrowser() {
 	a.input.Blur()
 	a.applyComponentLayout(true)
 }
+

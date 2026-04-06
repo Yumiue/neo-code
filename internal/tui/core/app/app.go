@@ -1,7 +1,7 @@
 package tui
 
 import (
-	"fmt"
+	"context"
 	"time"
 
 	"github.com/charmbracelet/bubbles/filepicker"
@@ -17,19 +17,60 @@ import (
 	"neo-code/internal/config"
 	"neo-code/internal/provider"
 	agentruntime "neo-code/internal/runtime"
+	tuibootstrap "neo-code/internal/tui/bootstrap"
+	tuistate "neo-code/internal/tui/state"
 )
 
-type App struct {
-	state            UIState
-	configManager    *config.Manager
-	providerSvc      ProviderController
-	runtime          agentruntime.Runtime
+type panel = tuistate.Panel
+
+const (
+	panelSessions   panel = tuistate.PanelSessions
+	panelTranscript panel = tuistate.PanelTranscript
+	panelActivity   panel = tuistate.PanelActivity
+	panelInput      panel = tuistate.PanelInput
+)
+
+type pickerMode = tuistate.PickerMode
+
+const (
+	pickerNone     pickerMode = tuistate.PickerNone
+	pickerProvider pickerMode = tuistate.PickerProvider
+	pickerModel    pickerMode = tuistate.PickerModel
+	pickerFile     pickerMode = tuistate.PickerFile
+)
+
+type RuntimeMsg = tuistate.RuntimeMsg
+type RuntimeClosedMsg = tuistate.RuntimeClosedMsg
+type runFinishedMsg = tuistate.RunFinishedMsg
+type modelCatalogRefreshMsg = tuistate.ModelCatalogRefreshMsg
+type compactFinishedMsg = tuistate.CompactFinishedMsg
+type localCommandResultMsg = tuistate.LocalCommandResultMsg
+type sessionWorkdirResultMsg = tuistate.SessionWorkdirResultMsg
+type workspaceCommandResultMsg = tuistate.WorkspaceCommandResultMsg
+
+type ProviderController interface {
+	ListProviders(ctx context.Context) ([]config.ProviderCatalogItem, error)
+	SelectProvider(ctx context.Context, providerID string) (config.ProviderSelection, error)
+	ListModels(ctx context.Context) ([]config.ModelDescriptor, error)
+	ListModelsSnapshot(ctx context.Context) ([]config.ModelDescriptor, error)
+	SetCurrentModel(ctx context.Context, modelID string) (config.ProviderSelection, error)
+}
+
+// appServices 聚合 App 需要的服务依赖，避免与渲染状态混在同一层级。
+type appServices struct {
+	configManager *config.Manager
+	providerSvc   ProviderController
+	runtime       agentruntime.Runtime
+}
+
+// appComponents 聚合 Bubble Tea 组件与渲染器。
+type appComponents struct {
 	keys             keyMap
 	help             help.Model
 	spinner          spinner.Model
 	sessions         list.Model
 	commandMenu      list.Model
-	commandMenuMeta  commandMenuMeta
+	commandMenuMeta  tuistate.CommandMenuMeta
 	providerPicker   list.Model
 	modelPicker      list.Model
 	fileBrowser      filepicker.Model
@@ -38,6 +79,10 @@ type App struct {
 	activity         viewport.Model
 	input            textarea.Model
 	markdownRenderer markdownContentRenderer
+}
+
+// appRuntimeState 聚合运行期易变字段，降低 App 顶层字段密度。
+type appRuntimeState struct {
 	codeCopyBlocks   map[int]string
 	pendingCopyID    int
 	nowFn            func() time.Time
@@ -47,29 +92,49 @@ type App struct {
 	inputBurstCount  int
 	pasteMode        bool
 	activeMessages   []provider.Message
-	activities       []activityEntry
+	activities       []tuistate.ActivityEntry
 	fileCandidates   []string
 	modelRefreshID   string
 	focus            panel
 	runProgressValue float64
 	runProgressKnown bool
 	runProgressLabel string
-	width            int
-	height           int
-	styles           styles
+}
+
+type App struct {
+	state tuistate.UIState
+	appServices
+	appComponents
+	appRuntimeState
+	width  int
+	height int
+	styles styles
 }
 
 func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime.Runtime, providerSvc ProviderController) (App, error) {
-	if configManager == nil {
-		return App{}, fmt.Errorf("tui: config manager is nil")
+	return NewWithBootstrap(tuibootstrap.Options{
+		Config:          cfg,
+		ConfigManager:   configManager,
+		Runtime:         runtime,
+		ProviderService: providerSvc,
+	})
+}
+
+// NewWithBootstrap 通过 bootstrap 层完成依赖装配，再构建可运行的 TUI App。
+func NewWithBootstrap(options tuibootstrap.Options) (App, error) {
+	container, err := tuibootstrap.Build(options)
+	if err != nil {
+		return App{}, err
 	}
-	if providerSvc == nil {
-		return App{}, fmt.Errorf("tui: provider service is nil")
-	}
-	if cfg == nil {
-		snapshot := configManager.Get()
-		cfg = &snapshot
-	}
+	return newApp(container)
+}
+
+// newApp 根据 bootstrap 装配结果初始化 App 状态与组件。
+func newApp(container tuibootstrap.Container) (App, error) {
+	cfg := container.Config
+	configManager := container.ConfigManager
+	runtime := container.Runtime
+	providerSvc := container.ProviderService
 
 	uiStyles := newStyles()
 	markdownRenderer, err := newMarkdownRenderer()
@@ -135,7 +200,7 @@ func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime
 	progressBar.Width = 22
 
 	app := App{
-		state: UIState{
+		state: tuistate.UIState{
 			StatusText:         statusReady,
 			CurrentProvider:    cfg.SelectedProvider,
 			CurrentModel:       cfg.CurrentModel,
@@ -143,28 +208,34 @@ func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime
 			ActiveSessionTitle: draftSessionTitle,
 			Focus:              panelInput,
 		},
-		configManager:    configManager,
-		providerSvc:      providerSvc,
-		runtime:          runtime,
-		keys:             keys,
-		help:             h,
-		spinner:          spin,
-		sessions:         sessionList,
-		commandMenu:      commandMenu,
-		providerPicker:   newSelectionPickerItems(nil),
-		modelPicker:      newSelectionPickerItems(nil),
-		fileBrowser:      fileBrowser,
-		progress:         progressBar,
-		transcript:       viewport.New(0, 0),
-		activity:         viewport.New(0, 0),
-		input:            input,
-		markdownRenderer: markdownRenderer,
-		codeCopyBlocks:   make(map[int]string),
-		nowFn:            time.Now,
-		focus:            panelInput,
-		width:            128,
-		height:           40,
-		styles:           uiStyles,
+		appServices: appServices{
+			configManager: configManager,
+			providerSvc:   providerSvc,
+			runtime:       runtime,
+		},
+		appComponents: appComponents{
+			keys:             keys,
+			help:             h,
+			spinner:          spin,
+			sessions:         sessionList,
+			commandMenu:      commandMenu,
+			providerPicker:   newSelectionPickerItems(nil),
+			modelPicker:      newSelectionPickerItems(nil),
+			fileBrowser:      fileBrowser,
+			progress:         progressBar,
+			transcript:       viewport.New(0, 0),
+			activity:         viewport.New(0, 0),
+			input:            input,
+			markdownRenderer: markdownRenderer,
+		},
+		appRuntimeState: appRuntimeState{
+			codeCopyBlocks: make(map[int]string),
+			nowFn:          time.Now,
+			focus:          panelInput,
+		},
+		width:  128,
+		height: 40,
+		styles: uiStyles,
 	}
 
 	if err := app.refreshSessions(); err != nil {

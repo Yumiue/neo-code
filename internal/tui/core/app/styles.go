@@ -1,4 +1,4 @@
-package tui
+﻿package tui
 
 import (
 	"strings"
@@ -303,31 +303,6 @@ func wrapCodeBlock(text string, width int) string {
 	return strings.Join(out, "\n")
 }
 
-func trimRunes(text string, limit int) string {
-	runes := []rune(text)
-	if len(runes) <= limit || limit < 4 {
-		return text
-	}
-	return string(runes[:limit-3]) + "..."
-}
-
-func trimMiddle(text string, limit int) string {
-	runes := []rune(text)
-	if len(runes) <= limit || limit < 7 {
-		return text
-	}
-	left := (limit - 3) / 2
-	right := limit - 3 - left
-	return string(runes[:left]) + "..." + string(runes[len(runes)-right:])
-}
-
-func fallback(value string, fallbackValue string) string {
-	if strings.TrimSpace(value) == "" {
-		return fallbackValue
-	}
-	return value
-}
-
 func preview(text string, width int, lines int) string {
 	rawLines := strings.Split(strings.TrimSpace(text), "\n")
 	out := make([]string, 0, lines)
@@ -351,12 +326,3 @@ func preview(text string, width int, lines int) string {
 	return joined
 }
 
-func clamp(value int, minValue int, maxValue int) int {
-	if value < minValue {
-		return minValue
-	}
-	if value > maxValue {
-		return maxValue
-	}
-	return value
-}

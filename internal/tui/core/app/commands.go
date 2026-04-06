@@ -9,6 +9,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"neo-code/internal/config"
+	tuicommands "neo-code/internal/tui/core/commands"
+	tuistatus "neo-code/internal/tui/core/status"
+	tuiservices "neo-code/internal/tui/services"
 )
 
 const (
@@ -91,30 +94,8 @@ const (
 	statusCodeCopyError = "Failed to copy code block"
 )
 
-type slashCommand struct {
-	Usage       string
-	Description string
-}
-
-type commandSuggestion struct {
-	Command slashCommand
-	Match   bool
-}
-
-type statusSnapshot struct {
-	ActiveSessionID    string
-	ActiveSessionTitle string
-	IsAgentRunning     bool
-	IsCompacting       bool
-	CurrentProvider    string
-	CurrentModel       string
-	CurrentWorkdir     string
-	CurrentTool        string
-	ExecutionError     string
-	FocusLabel         string
-	PickerLabel        string
-	MessageCount       int
-}
+type slashCommand = tuicommands.SlashCommand
+type commandSuggestion = tuicommands.CommandSuggestion
 
 var builtinSlashCommands = []slashCommand{
 	{Usage: slashUsageHelp, Description: "Show slash command help"},
@@ -256,90 +237,77 @@ func (a *App) selectCurrentModel(modelID string) {
 }
 
 func (a App) matchingSlashCommands(input string) []commandSuggestion {
-	if !strings.HasPrefix(input, slashPrefix) {
-		return nil
-	}
-
-	query := strings.ToLower(strings.TrimSpace(input))
-	if isCompleteSlashCommand(query) {
-		return nil
-	}
-	out := make([]commandSuggestion, 0, len(builtinSlashCommands))
-	for _, command := range builtinSlashCommands {
-		normalized := strings.ToLower(command.Usage)
-		match := query == slashPrefix || strings.HasPrefix(normalized, query)
-		if query == slashPrefix || match || strings.Contains(normalized, query) {
-			out = append(out, commandSuggestion{Command: command, Match: match})
-		}
-	}
-	return out
+	return tuicommands.MatchSlashCommands(input, slashPrefix, builtinSlashCommands)
 }
 
 func isCompleteSlashCommand(input string) bool {
-	for _, command := range builtinSlashCommands {
-		if strings.EqualFold(strings.TrimSpace(command.Usage), strings.TrimSpace(input)) {
-			return true
-		}
-	}
-	return false
+	return tuicommands.IsCompleteSlashCommand(input, builtinSlashCommands)
 }
 
 func runProviderSelection(providerSvc ProviderController, providerName string) tea.Cmd {
-	return func() tea.Msg {
-		selection, err := providerSvc.SelectProvider(context.Background(), providerName)
-		if err != nil {
-			return localCommandResultMsg{err: err}
-		}
-		return localCommandResultMsg{
-			notice:          fmt.Sprintf("[System] Current provider switched to %s.", selection.ProviderID),
-			providerChanged: true,
-		}
-	}
+	return tuiservices.SelectProviderCmd(
+		providerSvc,
+		providerName,
+		func(selection config.ProviderSelection, err error) tea.Msg {
+			if err != nil {
+				return localCommandResultMsg{Err: err}
+			}
+			return localCommandResultMsg{
+				Notice:          fmt.Sprintf("[System] Current provider switched to %s.", selection.ProviderID),
+				ProviderChanged: true,
+			}
+		},
+	)
 }
 
 func runModelSelection(providerSvc ProviderController, modelID string) tea.Cmd {
-	return func() tea.Msg {
-		selection, err := providerSvc.SetCurrentModel(context.Background(), modelID)
-		if err != nil {
-			return localCommandResultMsg{err: err}
-		}
-		return localCommandResultMsg{
-			notice:       fmt.Sprintf("[System] Current model switched to %s.", selection.ModelID),
-			modelChanged: true,
-		}
-	}
+	return tuiservices.SelectModelCmd(
+		providerSvc,
+		modelID,
+		func(selection config.ProviderSelection, err error) tea.Msg {
+			if err != nil {
+				return localCommandResultMsg{Err: err}
+			}
+			return localCommandResultMsg{
+				Notice:       fmt.Sprintf("[System] Current model switched to %s.", selection.ModelID),
+				ModelChanged: true,
+			}
+		},
+	)
 }
 
-func runLocalCommand(configManager *config.Manager, providerSvc ProviderController, snapshot statusSnapshot, raw string) tea.Cmd {
-	return func() tea.Msg {
-		notice, err := executeLocalCommand(context.Background(), configManager, providerSvc, snapshot, raw)
-		result := localCommandResultMsg{notice: notice, err: err}
-		if err == nil {
-			cfg := configManager.Get()
-			result.providerChanged = !strings.EqualFold(snapshot.CurrentProvider, cfg.SelectedProvider)
-			result.modelChanged = !strings.EqualFold(snapshot.CurrentModel, cfg.CurrentModel)
-		}
-		return result
-	}
+func runLocalCommand(configManager *config.Manager, providerSvc ProviderController, snapshot tuistatus.Snapshot, raw string) tea.Cmd {
+	return tuiservices.RunLocalCommandCmd(
+		func(ctx context.Context) (string, error) {
+			return executeLocalCommand(ctx, configManager, providerSvc, snapshot, raw)
+		},
+		func(notice string, err error) tea.Msg {
+			result := localCommandResultMsg{Notice: notice, Err: err}
+			if err == nil {
+				cfg := configManager.Get()
+				result.ProviderChanged = !strings.EqualFold(snapshot.CurrentProvider, cfg.SelectedProvider)
+				result.ModelChanged = !strings.EqualFold(snapshot.CurrentModel, cfg.CurrentModel)
+			}
+			return result
+		},
+	)
 }
 
 func runModelCatalogRefresh(providerSvc ProviderController, providerID string) tea.Cmd {
-	providerID = strings.TrimSpace(providerID)
-	if providerSvc == nil || providerID == "" {
-		return nil
-	}
-
-	return func() tea.Msg {
-		models, err := providerSvc.ListModels(context.Background())
-		return modelCatalogRefreshMsg{
-			providerID: providerID,
-			models:     models,
-			err:        err,
-		}
-	}
+	return tuiservices.RefreshModelCatalogCmd(
+		providerSvc,
+		providerID,
+		func(providerID string, models []config.ModelDescriptor, err error) tea.Msg {
+			return modelCatalogRefreshMsg{
+				ProviderID: providerID,
+				Models:     models,
+				Err:        err,
+			}
+		},
+	)
 }
 
-func executeLocalCommand(ctx context.Context, configManager *config.Manager, providerSvc ProviderController, snapshot statusSnapshot, raw string) (string, error) {
+func executeLocalCommand(ctx context.Context, configManager *config.Manager, providerSvc ProviderController, snapshot tuistatus.Snapshot, raw string) (string, error) {
 	fields := strings.Fields(strings.TrimSpace(raw))
 	if len(fields) == 0 {
 		return "", fmt.Errorf("empty command")
@@ -357,47 +325,8 @@ func executeLocalCommand(ctx context.Context, configManager *config.Manager, pro
 	}
 }
 
-func executeStatusCommand(snapshot statusSnapshot) string {
-	sessionID := snapshot.ActiveSessionID
-	if strings.TrimSpace(sessionID) == "" {
-		sessionID = "<draft>"
-	}
-	sessionTitle := snapshot.ActiveSessionTitle
-	if strings.TrimSpace(sessionTitle) == "" {
-		sessionTitle = draftSessionTitle
-	}
-	running := "no"
-	if snapshot.IsAgentRunning || snapshot.IsCompacting {
-		running = "yes"
-	}
-	currentTool := snapshot.CurrentTool
-	if strings.TrimSpace(currentTool) == "" {
-		currentTool = "<none>"
-	}
-	errorText := snapshot.ExecutionError
-	if strings.TrimSpace(errorText) == "" {
-		errorText = "<none>"
-	}
-	picker := snapshot.PickerLabel
-	if strings.TrimSpace(picker) == "" {
-		picker = "none"
-	}
-
-	lines := []string{
-		"Status:",
-		"Session: " + sessionTitle,
-		"Session ID: " + sessionID,
-		"Running: " + running,
-		"Provider: " + snapshot.CurrentProvider,
-		"Model: " + snapshot.CurrentModel,
-		"Workdir: " + snapshot.CurrentWorkdir,
-		"Focus: " + snapshot.FocusLabel,
-		"Picker: " + picker,
-		"Current Tool: " + currentTool,
-		fmt.Sprintf("Messages: %d", snapshot.MessageCount),
-		"Error: " + errorText,
-	}
-	return strings.Join(lines, "\n")
+func executeStatusCommand(snapshot tuistatus.Snapshot) string {
+	return tuistatus.Format(snapshot, draftSessionTitle)
 }
 
 func executeProviderCommand(ctx context.Context, providerSvc ProviderController, value string) (string, error) {
@@ -421,28 +350,13 @@ func slashHelpText() string {
 }
 
 func splitFirstWord(input string) (string, string) {
-	input = strings.TrimSpace(input)
-	if input == "" {
-		return "", ""
-	}
-	index := strings.IndexAny(input, " \t")
-	if index < 0 {
-		return input, ""
-	}
-	return input[:index], strings.TrimSpace(input[index+1:])
+	return tuicommands.SplitFirstWord(input)
 }
 
 func isWorkspaceSlashCommand(raw string) bool {
-	command, _ := splitFirstWord(strings.ToLower(strings.TrimSpace(raw)))
-	return command == slashCommandCWD
+	return tuicommands.IsWorkspaceSlashCommand(raw, slashCommandCWD)
 }
 
 func parseWorkspaceSlashCommand(raw string) (string, error) {
-	command, args := splitFirstWord(strings.TrimSpace(raw))
-	switch strings.ToLower(command) {
-	case slashCommandCWD:
-		return strings.TrimSpace(args), nil
-	default:
-		return "", fmt.Errorf("unknown command %q", command)
-	}
+	return tuicommands.ParseWorkspaceSlashCommand(raw, slashCommandCWD)
 }

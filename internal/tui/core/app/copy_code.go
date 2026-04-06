@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	tuiinfra "neo-code/internal/tui/infra"
 )
 
 type copyCodeButtonBinding struct {
@@ -32,7 +32,8 @@ type markdownSegment struct {
 
 var (
 	copyCodeButtonPattern = regexp.MustCompile(`\[Copy code #([0-9]+)\]`)
-	clipboardWriteAll     = clipboard.WriteAll
+	copyCodeANSIPattern   = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+	clipboardWriteAll     = tuiinfra.CopyText
 )
 
 func splitMarkdownSegments(content string) []markdownSegment {
@@ -233,7 +234,7 @@ func (a *App) setCodeCopyBlocks(bindings []copyCodeButtonBinding) {
 }
 
 func parseCopyCodeButton(line string) (id int, startCol int, endCol int, ok bool) {
-	clean := ansiEscapePattern.ReplaceAllString(line, "")
+	clean := copyCodeANSIPattern.ReplaceAllString(line, "")
 	matches := copyCodeButtonPattern.FindStringSubmatchIndex(clean)
 	if len(matches) < 4 {
 		return 0, 0, 0, false
