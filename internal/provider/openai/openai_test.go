@@ -1,9 +1,11 @@
 package openai
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1243,8 +1245,13 @@ func TestBuildAssistantMsg_WithToolCalls(t *testing.T) {
 	if len(msg.ToolCalls) != 2 {
 		t.Fatalf("expected 2 tool calls, got %d", len(msg.ToolCalls))
 	}
-	if msg.ToolCalls[0].Name != "edit" || msg.ToolCalls[1].Name != "read" {
-		t.Fatalf("unexpected tool calls: %+v", msg.ToolCalls)
+	// 使用 map 检查，避免依赖 Go map 迭代的不确定顺序
+	names := make(map[string]bool)
+	for _, tc := range msg.ToolCalls {
+		names[tc.Name] = true
+	}
+	if !names["edit"] || !names["read"] {
+		t.Fatalf("expected tool calls 'edit' and 'read', got %+v", msg.ToolCalls)
 	}
 }
 
@@ -1401,4 +1408,215 @@ type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+// --- 重连消息完整性测试 ---
+
+// TestReconnect_NoEmptyAssistantOnFirstFailure 验证首次请求失败（未收到任何 SSE 数据）
+// 时，重连不会向消息列表注入空的 assistant 消息。
+func TestReconnect_NoEmptyAssistantOnFirstFailure(t *testing.T) {
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
+
+	attempt := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt++
+
+		// 解码请求中的消息，验证消息结构
+		var payload chatCompletionRequest
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode request: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		if attempt == 1 {
+			// 首次请求：返回 500（无 SSE 数据），不应注入空 assistant 消息
+			if len(payload.Messages) != 1 {
+				t.Errorf("first attempt: expected 1 message, got %d", len(payload.Messages))
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":{"message":"temporarily unavailable"}}`))
+			return
+		}
+
+		// 第二次请求：仍应只有原始 1 条消息（无空 assistant 注入）
+		if len(payload.Messages) != 1 {
+			t.Errorf("second attempt: expected 1 message (no empty assistant), got %d; messages: %+v",
+				len(payload.Messages), payload.Messages)
+		}
+		for _, msg := range payload.Messages {
+			if msg.Role == "assistant" {
+				t.Errorf("second attempt: unexpected assistant message injected: %+v", msg)
+			}
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSEChunk(t, w, map[string]any{
+			"choices": []map[string]any{
+				{"index": 0, "delta": map[string]any{"content": "ok"}},
+			},
+		})
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	p, err := New(resolvedConfig(server.URL, config.OpenAIDefaultModel))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p.client = server.Client()
+
+	events := make(chan domain.StreamEvent, 4)
+	err = p.Chat(context.Background(), domain.ChatRequest{
+		Model:    config.OpenAIDefaultModel,
+		Messages: []domain.Message{{Role: "user", Content: "hello"}},
+	}, events)
+	if err != nil {
+		t.Fatalf("Chat() should succeed after reconnect, got: %v", err)
+	}
+	if attempt != 2 {
+		t.Fatalf("expected exactly 2 attempts, got %d", attempt)
+	}
+}
+
+// TestReconnect_SingleAssistantSnapshotNotDuplicated 验证多次重连时，每次请求
+// 只包含原始消息 + 恰好 1 条 assistant 快照，不会出现旧快照残留。
+// 使用自定义 RoundTripper 模拟流中途中断（非 EOF 错误）。
+func TestReconnect_SingleAssistantSnapshotNotDuplicated(t *testing.T) {
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
+
+	attempt := 0
+
+	// 使用 httptest.Server 作为成功响应的代理，RoundTripper 控制中断
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSEChunk(t, w, map[string]any{
+			"choices": []map[string]any{
+				{"index": 0, "delta": map[string]any{"content": " done"}},
+			},
+		})
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	rt := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		attempt++
+
+		// 读取并缓存请求体，以便解码后仍可转发给真实 transport
+		bodyBytes, err := io.ReadAll(req.Body)
+		_ = req.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("read request body: %w", err)
+		}
+
+		// 解码请求消息，用于断言
+		var payload chatCompletionRequest
+		if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+			return nil, fmt.Errorf("decode request: %w", err)
+		}
+
+		// 恢复请求体，确保后续 transport 可以读取
+		req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		req.ContentLength = int64(len(bodyBytes))
+
+		switch attempt {
+		case 1:
+			// 首次请求：正常消息（system + user），发送部分 SSE 后流中断
+			if len(payload.Messages) != 2 {
+				t.Errorf("attempt 1: expected 2 messages, got %d", len(payload.Messages))
+			}
+			sseData := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n"
+			body := io.MultiReader(strings.NewReader(sseData), &errReader{err: io.ErrClosedPipe})
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       io.NopCloser(body),
+			}, nil
+
+		case 2:
+			// 第二次请求：应包含原始 2 条 + 1 条 assistant（"partial"），再次中断
+			if len(payload.Messages) != 3 {
+				t.Errorf("attempt 2: expected 3 messages, got %d; messages: %+v",
+					len(payload.Messages), payload.Messages)
+			}
+			assistMsg := payload.Messages[2]
+			if assistMsg.Role != "assistant" || assistMsg.Content != "partial" {
+				t.Errorf("attempt 2: expected assistant content 'partial', got role=%q content=%q",
+					assistMsg.Role, assistMsg.Content)
+			}
+			assistCount := countMessagesByRole(payload.Messages, "assistant")
+			if assistCount != 1 {
+				t.Errorf("attempt 2: expected 1 assistant message, got %d", assistCount)
+			}
+
+			sseData := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\" more\"}}]}\n\n"
+			body := io.MultiReader(strings.NewReader(sseData), &errReader{err: io.ErrClosedPipe})
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       io.NopCloser(body),
+			}, nil
+
+		default:
+			// 第三次请求：应包含原始 2 条 + 1 条 assistant（"partial more"）
+			if len(payload.Messages) != 3 {
+				t.Errorf("attempt 3: expected 3 messages, got %d; messages: %+v",
+					len(payload.Messages), payload.Messages)
+			}
+			assistMsg := payload.Messages[2]
+			if assistMsg.Role != "assistant" || assistMsg.Content != "partial more" {
+				t.Errorf("attempt 3: expected assistant content 'partial more', got role=%q content=%q",
+					assistMsg.Role, assistMsg.Content)
+			}
+			// 确认仍然只有 1 条 assistant 消息（旧快照未残留）
+			assistCount := countMessagesByRole(payload.Messages, "assistant")
+			if assistCount != 1 {
+				t.Errorf("attempt 3: expected 1 assistant message, got %d", assistCount)
+			}
+
+			// 委托给 test server 返回完整响应
+			return http.DefaultTransport.RoundTrip(req)
+		}
+	})
+
+	p, err := New(resolvedConfig(server.URL, config.OpenAIDefaultModel), withTransport(rt))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	events := make(chan domain.StreamEvent, 16)
+	err = p.Chat(context.Background(), domain.ChatRequest{
+		SystemPrompt: "you are helpful",
+		Model:        config.OpenAIDefaultModel,
+		Messages:     []domain.Message{{Role: "user", Content: "hello"}},
+	}, events)
+	if err != nil {
+		t.Fatalf("Chat() should succeed after reconnect, got: %v", err)
+	}
+	if attempt != 3 {
+		t.Fatalf("expected exactly 3 attempts, got %d", attempt)
+	}
+
+	// 验证最终累积的文本（三次请求的增量合并）
+	var fullText strings.Builder
+	for _, evt := range drainStreamEvents(events) {
+		if evt.Type == domain.StreamEventTextDelta {
+			fullText.WriteString(requireTextDeltaPayload(t, evt).Text)
+		}
+	}
+	expectedText := "partial more done"
+	if fullText.String() != expectedText {
+		t.Fatalf("expected full text %q, got %q", expectedText, fullText.String())
+	}
+}
+
+// countMessagesByRole 统计消息列表中指定角色的消息数量。
+func countMessagesByRole(messages []openAIMessage, role string) int {
+	count := 0
+	for _, msg := range messages {
+		if msg.Role == role {
+			count++
+		}
+	}
+	return count
 }

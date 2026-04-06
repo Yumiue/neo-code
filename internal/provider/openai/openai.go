@@ -109,6 +109,10 @@ func (p *Provider) DiscoverModels(ctx context.Context) ([]config.ModelDescriptor
 func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) error {
 	const maxReconnects = 3
 
+	// 保存原始消息列表的副本，避免重连时反复 append 到同一个切片导致上下文污染
+	originalMessages := make([]provider.Message, len(req.Messages))
+	copy(originalMessages, req.Messages)
+
 	// 跨重连周期持久化的累积状态：已收到的文本和 tool call
 	var (
 		accumText  strings.Builder
@@ -117,9 +121,16 @@ func (p *Provider) Chat(ctx context.Context, req provider.ChatRequest, events ch
 
 	for attempt := 0; attempt <= maxReconnects; attempt++ {
 		if attempt > 0 {
-			// 将已累积内容作为 assistant 消息注入，使新请求能从断点继续
-			req.Messages = append(req.Messages,
-				p.buildAssistantMsg(&accumText, accumCalls))
+			// 从原始消息出发构造本次请求的完整消息列表
+			req.Messages = make([]provider.Message, len(originalMessages), len(originalMessages)+1)
+			copy(req.Messages, originalMessages)
+
+			// 仅在有实际累积内容时注入 assistant 快照，避免插入空消息
+			if accumText.Len() > 0 || len(accumCalls) > 0 {
+				req.Messages = append(req.Messages,
+					p.buildAssistantMsg(&accumText, accumCalls))
+			}
+
 			// 指数退避等待
 			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
 			select {
