@@ -199,7 +199,7 @@ func NewRecommendedPolicyEngine() (*PolicyEngine, error) {
 			Reason:           reasonAllowWebfetchDomain,
 			ActionTypes:      []ActionType{ActionTypeRead},
 			ResourcePatterns: []string{"webfetch"},
-			HostPatterns:     []string{"github.com", "*.github.com", "docs.*"},
+			HostPatterns:     []string{"github.com", "*.github.com"},
 			RequireHostMatch: true,
 		},
 		{
@@ -209,7 +209,7 @@ func NewRecommendedPolicyEngine() (*PolicyEngine, error) {
 			Reason:             reasonAskWebfetchDomain,
 			ActionTypes:        []ActionType{ActionTypeRead},
 			ResourcePatterns:   []string{"webfetch"},
-			HostPatterns:       []string{"github.com", "*.github.com", "docs.*"},
+			HostPatterns:       []string{"github.com", "*.github.com"},
 			RequireHostMissing: true,
 		},
 	}

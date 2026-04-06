@@ -187,7 +187,13 @@ func (m *DefaultManager) Execute(ctx context.Context, input ToolCallInput) (Tool
 		result.ToolCallID = input.ID
 		return result, err
 	}
-	if m.sessionDecisions != nil {
+	// deny 规则始终优先，避免 session 记忆覆盖硬性安全策略。
+	if decision.Decision == security.DecisionDeny {
+		result := blockedToolResult(input, decision)
+		return result, permissionErrorFromDecision(decision)
+	}
+	// session 记忆仅用于自动处理 ask，不提升原本已 allow 的策略结果。
+	if decision.Decision == security.DecisionAsk && m.sessionDecisions != nil {
 		if rememberedDecision, rememberedScope, ok := m.sessionDecisions.resolve(input.SessionID, action); ok {
 			decision = security.CheckResult{
 				Decision: rememberedDecision,

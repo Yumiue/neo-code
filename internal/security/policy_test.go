@@ -124,6 +124,21 @@ func TestPolicyEngineRecommendedRules(t *testing.T) {
 			wantDecision: DecisionAsk,
 			wantRuleID:   "ask-webfetch-non-whitelist",
 		},
+		{
+			name: "webfetch docs wildcard host is not implicitly trusted",
+			action: Action{
+				Type: ActionTypeRead,
+				Payload: ActionPayload{
+					ToolName:   "webfetch",
+					Resource:   "webfetch",
+					Operation:  "fetch",
+					TargetType: TargetTypeURL,
+					Target:     "https://docs.attacker.com",
+				},
+			},
+			wantDecision: DecisionAsk,
+			wantRuleID:   "ask-webfetch-non-whitelist",
+		},
 	}
 
 	for _, tt := range tests {

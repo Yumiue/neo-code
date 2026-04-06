@@ -675,6 +675,66 @@ func TestDefaultManagerSessionPermissionMemory(t *testing.T) {
 			t.Fatalf("expected glob allow via filesystem_read category, got %v", err)
 		}
 	})
+
+	t.Run("remembered allow does not override hard deny", func(t *testing.T) {
+		t.Parallel()
+
+		registry := NewRegistry()
+		readTool := &managerStubTool{name: "filesystem_read_file", content: "ok"}
+		registry.Register(readTool)
+
+		engine, err := security.NewStaticGateway(security.DecisionAllow, []security.Rule{
+			{
+				ID:       "deny-private-key",
+				Type:     security.ActionTypeRead,
+				Resource: "filesystem_read_file",
+				Decision: security.DecisionDeny,
+				Reason:   "private key blocked",
+			},
+		})
+		if err != nil {
+			t.Fatalf("new engine: %v", err)
+		}
+		manager, err := NewManager(registry, engine, nil)
+		if err != nil {
+			t.Fatalf("new manager: %v", err)
+		}
+
+		sessionID := "session-deny-priority"
+		action := security.Action{
+			Type: security.ActionTypeRead,
+			Payload: security.ActionPayload{
+				ToolName:   "filesystem_read_file",
+				Resource:   "filesystem_read_file",
+				Operation:  "read_file",
+				TargetType: security.TargetTypePath,
+				Target:     "README.md",
+			},
+		}
+		if err := manager.RememberSessionDecision(sessionID, action, SessionPermissionScopeAlways); err != nil {
+			t.Fatalf("remember allow: %v", err)
+		}
+
+		_, execErr := manager.Execute(context.Background(), ToolCallInput{
+			ID:        "call-deny-priority",
+			Name:      "filesystem_read_file",
+			Arguments: []byte(`{"path":"C:/Users/test/.ssh/id_rsa"}`),
+			SessionID: sessionID,
+		})
+		var permissionErr *PermissionDecisionError
+		if !errors.As(execErr, &permissionErr) {
+			t.Fatalf("expected permission error, got %v", execErr)
+		}
+		if permissionErr.Decision() != "deny" {
+			t.Fatalf("expected hard deny to win, got %q", permissionErr.Decision())
+		}
+		if permissionErr.RuleID() != "deny-private-key" {
+			t.Fatalf("expected deny rule id, got %q", permissionErr.RuleID())
+		}
+		if readTool.callCount != 0 {
+			t.Fatalf("expected blocked call not to execute tool, got %d", readTool.callCount)
+		}
+	})
 }
 
 func TestBuildPermissionAction(t *testing.T) {

@@ -2559,3 +2559,47 @@ func TestProviderRetryBackoff(t *testing.T) {
 		})
 	}
 }
+
+func TestPermissionEventViewPayloadMapping(t *testing.T) {
+	t.Parallel()
+
+	view := permissionEventView{
+		toolName:   "webfetch",
+		actionType: string(security.ActionTypeRead),
+		operation:  "fetch",
+		targetType: string(security.TargetTypeURL),
+		target:     "https://example.com",
+		decision:   "ask",
+		reason:     "need approval",
+		ruleID:     "rule-1",
+		scope:      string(tools.SessionPermissionScopeAlways),
+		resolvedAs: "rejected",
+	}
+
+	requestPayload := view.toRequestPayload()
+	if requestPayload.ToolName != view.toolName ||
+		requestPayload.ActionType != view.actionType ||
+		requestPayload.Operation != view.operation ||
+		requestPayload.TargetType != view.targetType ||
+		requestPayload.Target != view.target ||
+		requestPayload.Decision != view.decision ||
+		requestPayload.Reason != view.reason ||
+		requestPayload.RuleID != view.ruleID ||
+		requestPayload.RememberScope != view.scope {
+		t.Fatalf("unexpected request payload: %+v", requestPayload)
+	}
+
+	resolvedPayload := view.toResolvedPayload()
+	if resolvedPayload.ToolName != view.toolName ||
+		resolvedPayload.ActionType != view.actionType ||
+		resolvedPayload.Operation != view.operation ||
+		resolvedPayload.TargetType != view.targetType ||
+		resolvedPayload.Target != view.target ||
+		resolvedPayload.Decision != view.decision ||
+		resolvedPayload.Reason != view.reason ||
+		resolvedPayload.RuleID != view.ruleID ||
+		resolvedPayload.RememberScope != view.scope ||
+		resolvedPayload.ResolvedAs != view.resolvedAs {
+		t.Fatalf("unexpected resolved payload: %+v", resolvedPayload)
+	}
+}
