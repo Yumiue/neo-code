@@ -68,7 +68,7 @@ func NewProgram(ctx context.Context) (*tea.Program, error) {
 		toolManager,
 		sessionStore,
 		providerRegistry,
-		agentcontext.NewBuilder(),
+		agentcontext.NewBuilderWithToolPolicies(toolRegistry),
 	)
 
 	tuiApp, err := tui.New(&cfg, manager, runtimeSvc, providerSelection)

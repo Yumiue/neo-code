@@ -19,6 +19,7 @@ type SpecListInput struct {
 // Manager is the runtime-facing tool execution and schema exposure boundary.
 type Manager interface {
 	ListAvailableSpecs(ctx context.Context, input SpecListInput) ([]provider.ToolSpec, error)
+	MicroCompactPolicy(name string) MicroCompactPolicy
 	Execute(ctx context.Context, input ToolCallInput) (ToolResult, error)
 }
 
@@ -27,6 +28,10 @@ type Executor interface {
 	ListAvailableSpecs(ctx context.Context, input SpecListInput) ([]provider.ToolSpec, error)
 	Execute(ctx context.Context, input ToolCallInput) (ToolResult, error)
 	Supports(name string) bool
+}
+
+type microCompactPolicyExecutor interface {
+	MicroCompactPolicy(name string) MicroCompactPolicy
 }
 
 // WorkspaceSandbox enforces workspace-oriented constraints before execution.
@@ -149,6 +154,17 @@ func (m *DefaultManager) ListAvailableSpecs(ctx context.Context, input SpecListI
 		return nil, errors.New("tools: manager executor is nil")
 	}
 	return m.executor.ListAvailableSpecs(ctx, input)
+}
+
+// MicroCompactPolicy 返回工具的 micro compact 策略；无法判断时按默认可压缩处理。
+func (m *DefaultManager) MicroCompactPolicy(name string) MicroCompactPolicy {
+	if m == nil || m.executor == nil {
+		return MicroCompactPolicyCompact
+	}
+	if source, ok := m.executor.(microCompactPolicyExecutor); ok {
+		return source.MicroCompactPolicy(name)
+	}
+	return MicroCompactPolicyCompact
 }
 
 // Execute runs the tool if the permission engine allows it and the sandbox

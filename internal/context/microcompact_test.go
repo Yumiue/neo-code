@@ -4,7 +4,17 @@ import (
 	"testing"
 
 	"neo-code/internal/provider"
+	"neo-code/internal/tools"
 )
+
+type stubMicroCompactPolicySource map[string]tools.MicroCompactPolicy
+
+func (s stubMicroCompactPolicySource) MicroCompactPolicy(name string) tools.MicroCompactPolicy {
+	if policy, ok := s[name]; ok {
+		return policy
+	}
+	return tools.MicroCompactPolicyCompact
+}
 
 func TestMicroCompactMessagesClearsOlderCompactableToolResults(t *testing.T) {
 	t.Parallel()
@@ -105,7 +115,7 @@ func TestMicroCompactMessagesKeepsProtectedTailUntouched(t *testing.T) {
 	}
 }
 
-func TestMicroCompactMessagesSkipsNonCompactableErrorsAndOrphans(t *testing.T) {
+func TestMicroCompactMessagesKeepsPreservedToolsErrorsAndOrphans(t *testing.T) {
 	t.Parallel()
 
 	messages := []provider.Message{
@@ -140,9 +150,11 @@ func TestMicroCompactMessagesSkipsNonCompactableErrorsAndOrphans(t *testing.T) {
 		{Role: provider.RoleTool, ToolCallID: "call-4", Content: ""},
 	}
 
-	got := microCompactMessages(messages)
+	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{
+		"custom_tool": tools.MicroCompactPolicyPreserveHistory,
+	})
 	if got[1].Content != "custom result" {
-		t.Fatalf("expected non-compactable tool result to remain, got %q", got[1].Content)
+		t.Fatalf("expected preserved tool result to remain, got %q", got[1].Content)
 	}
 	if got[3].Content != "edit failed" {
 		t.Fatalf("expected error tool result to remain, got %q", got[3].Content)
@@ -158,7 +170,7 @@ func TestMicroCompactMessagesSkipsNonCompactableErrorsAndOrphans(t *testing.T) {
 	}
 }
 
-func TestMicroCompactMessagesClearsOnlyCompactableResultsInMixedToolSpan(t *testing.T) {
+func TestMicroCompactMessagesClearsOnlyNonPreservedResultsInMixedToolSpan(t *testing.T) {
 	t.Parallel()
 
 	messages := []provider.Message{
@@ -190,15 +202,52 @@ func TestMicroCompactMessagesClearsOnlyCompactableResultsInMixedToolSpan(t *test
 		{Role: provider.RoleAssistant, Content: "current reply"},
 	}
 
-	got := microCompactMessages(messages)
+	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{
+		"custom_tool": tools.MicroCompactPolicyPreserveHistory,
+	})
 	if got[2].Content != microCompactClearedMessage {
-		t.Fatalf("expected compactable tool result to be cleared, got %q", got[2].Content)
+		t.Fatalf("expected default compactable tool result to be cleared, got %q", got[2].Content)
 	}
 	if got[3].Content != "custom result" {
-		t.Fatalf("expected non-compactable tool result in mixed span to remain, got %q", got[3].Content)
+		t.Fatalf("expected preserved tool result in mixed span to remain, got %q", got[3].Content)
 	}
 	if len(got[1].ToolCalls) != 2 {
 		t.Fatalf("expected assistant tool call metadata to remain intact, got %+v", got[1].ToolCalls)
+	}
+}
+
+func TestMicroCompactMessagesTreatsNewToolsAsCompactableByDefault(t *testing.T) {
+	t.Parallel()
+
+	messages := []provider.Message{
+		{Role: provider.RoleUser, Content: "older user"},
+		{
+			Role: provider.RoleAssistant,
+			ToolCalls: []provider.ToolCall{
+				{ID: "call-1", Name: "repo_search", Arguments: "{}"},
+			},
+		},
+		{Role: provider.RoleTool, ToolCallID: "call-1", Content: "old repo search result"},
+		{
+			Role: provider.RoleAssistant,
+			ToolCalls: []provider.ToolCall{
+				{ID: "call-2", Name: "bash", Arguments: "{}"},
+			},
+		},
+		{Role: provider.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
+		{
+			Role: provider.RoleAssistant,
+			ToolCalls: []provider.ToolCall{
+				{ID: "call-3", Name: "webfetch", Arguments: "{}"},
+			},
+		},
+		{Role: provider.RoleTool, ToolCallID: "call-3", Content: "latest webfetch result"},
+		{Role: provider.RoleUser, Content: "latest explicit instruction"},
+	}
+
+	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{})
+	if got[2].Content != microCompactClearedMessage {
+		t.Fatalf("expected new tool result to be compacted by default, got %q", got[2].Content)
 	}
 }
 

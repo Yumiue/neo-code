@@ -144,6 +144,7 @@ type stubTool struct {
 	content   string
 	isError   bool
 	err       error
+	policy    tools.MicroCompactPolicy
 	callCount int
 	lastInput tools.ToolCallInput
 	executeFn func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error)
@@ -159,6 +160,10 @@ func (t *stubTool) Description() string {
 
 func (t *stubTool) Schema() map[string]any {
 	return map[string]any{"type": "object"}
+}
+
+func (t *stubTool) MicroCompactPolicy() tools.MicroCompactPolicy {
+	return t.policy
 }
 
 func (t *stubTool) Execute(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
@@ -202,6 +207,7 @@ type stubToolManager struct {
 	result       tools.ToolResult
 	err          error
 	listErr      error
+	policies     map[string]tools.MicroCompactPolicy
 	listCalls    int
 	executeCalls int
 	lastInput    tools.ToolCallInput
@@ -216,6 +222,13 @@ func (m *stubToolManager) ListAvailableSpecs(ctx context.Context, input tools.Sp
 		return nil, m.listErr
 	}
 	return append([]provider.ToolSpec(nil), m.specs...), nil
+}
+
+func (m *stubToolManager) MicroCompactPolicy(name string) tools.MicroCompactPolicy {
+	if policy, ok := m.policies[name]; ok {
+		return policy
+	}
+	return tools.MicroCompactPolicyCompact
 }
 
 func (m *stubToolManager) Execute(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
@@ -563,6 +576,68 @@ func TestServiceRunPersistsSessionProviderAndModel(t *testing.T) {
 	}
 	if session.Model != cfg.CurrentModel {
 		t.Fatalf("expected session model %q, got %q", cfg.CurrentModel, session.Model)
+	}
+}
+
+func TestServiceRunDefaultBuilderUsesToolManagerMicroCompactPolicies(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "preserve_tool", content: "default", policy: tools.MicroCompactPolicyPreserveHistory})
+	registry.Register(&stubTool{name: "bash", content: "default"})
+	registry.Register(&stubTool{name: "webfetch", content: "default"})
+
+	session := newSession("preserve history")
+	session.ID = "session-preserve-history"
+	session.Messages = []provider.Message{
+		{Role: provider.RoleUser, Content: "older user"},
+		{
+			Role: provider.RoleAssistant,
+			ToolCalls: []provider.ToolCall{
+				{ID: "call-1", Name: "preserve_tool", Arguments: "{}"},
+			},
+		},
+		{Role: provider.RoleTool, ToolCallID: "call-1", Content: "preserved result"},
+		{
+			Role: provider.RoleAssistant,
+			ToolCalls: []provider.ToolCall{
+				{ID: "call-2", Name: "bash", Arguments: "{}"},
+			},
+		},
+		{Role: provider.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
+		{
+			Role: provider.RoleAssistant,
+			ToolCalls: []provider.ToolCall{
+				{ID: "call-3", Name: "webfetch", Arguments: "{}"},
+			},
+		},
+		{Role: provider.RoleTool, ToolCallID: "call-3", Content: "latest webfetch result"},
+	}
+	store.sessions[session.ID] = cloneSession(session)
+
+	scripted := &scriptedProvider{
+		responses: []provider.ChatResponse{{
+			Message:      provider.Message{Role: provider.RoleAssistant, Content: "done"},
+			FinishReason: "stop",
+		}},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: session.ID,
+		RunID:     "run-preserve-history-policy",
+		Content:   "latest explicit instruction",
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if len(scripted.requests) != 1 {
+		t.Fatalf("expected 1 provider request, got %d", len(scripted.requests))
+	}
+	if got := scripted.requests[0].Messages[2].Content; got != "preserved result" {
+		t.Fatalf("expected preserved tool result to remain visible, got %q", got)
 	}
 }
 

@@ -218,6 +218,9 @@ type stubToolForBootstrap struct {
 func (s stubToolForBootstrap) Name() string           { return s.name }
 func (s stubToolForBootstrap) Description() string    { return "stub" }
 func (s stubToolForBootstrap) Schema() map[string]any { return map[string]any{"type": "object"} }
+func (s stubToolForBootstrap) MicroCompactPolicy() tools.MicroCompactPolicy {
+	return tools.MicroCompactPolicyCompact
+}
 func (s stubToolForBootstrap) Execute(ctx context.Context, call tools.ToolCallInput) (tools.ToolResult, error) {
 	return tools.ToolResult{Name: s.name, Content: s.content}, nil
 }

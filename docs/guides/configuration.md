@@ -327,4 +327,6 @@ context:
 | `context.compact.max_summary_chars` | int | `1200` | compact summary 最大字符数 |
 | `context.compact.micro_compact_disabled` | bool | `false` | 是否关闭默认启用的读时 micro compact；设为 `true` 可快速回退到仅 trim、不做旧工具结果清理 |
 
+新增工具默认会参与 micro compact；如果某个工具的历史结果必须保留，需要在 `internal/tools` 的工具实现中显式声明保留策略。
+
 更多行为说明见 [context-compact.md](../context-compact.md)。

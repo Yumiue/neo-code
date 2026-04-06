@@ -15,18 +15,13 @@ const (
 	microCompactRetainedToolSpans = 2
 )
 
-var microCompactableTools = map[string]struct{}{
-	tools.ToolNameBash:                {},
-	tools.ToolNameWebFetch:            {},
-	tools.ToolNameFilesystemReadFile:  {},
-	tools.ToolNameFilesystemGrep:      {},
-	tools.ToolNameFilesystemGlob:      {},
-	tools.ToolNameFilesystemEdit:      {},
-	tools.ToolNameFilesystemWriteFile: {},
-}
-
 // microCompactMessages 对裁剪后的消息做只读投影式微压缩，仅清理旧工具结果内容。
 func microCompactMessages(messages []provider.Message) []provider.Message {
+	return microCompactMessagesWithPolicies(messages, nil)
+}
+
+// microCompactMessagesWithPolicies 按工具策略对裁剪后的消息做只读投影式微压缩。
+func microCompactMessagesWithPolicies(messages []provider.Message, policies MicroCompactPolicySource) []provider.Message {
 	cloned := cloneContextMessages(messages)
 	if len(cloned) == 0 {
 		return cloned
@@ -45,7 +40,7 @@ func microCompactMessages(messages []provider.Message) []provider.Message {
 			continue
 		}
 
-		compactableIDs := compactableToolCallIDs(cloned[span.Start].ToolCalls)
+		compactableIDs := compactableToolCallIDs(cloned[span.Start].ToolCalls, policies)
 		if len(compactableIDs) == 0 {
 			continue
 		}
@@ -92,7 +87,7 @@ func isToolCallSpan(messages []provider.Message, span internalcompact.MessageSpa
 }
 
 // compactableToolCallIDs 返回 assistant tool call 中可参与微压缩的调用 ID 集合。
-func compactableToolCallIDs(calls []provider.ToolCall) map[string]struct{} {
+func compactableToolCallIDs(calls []provider.ToolCall, policies MicroCompactPolicySource) map[string]struct{} {
 	if len(calls) == 0 {
 		return nil
 	}
@@ -100,7 +95,7 @@ func compactableToolCallIDs(calls []provider.ToolCall) map[string]struct{} {
 	ids := make(map[string]struct{}, len(calls))
 	for _, call := range calls {
 		toolName := strings.TrimSpace(call.Name)
-		if _, ok := microCompactableTools[toolName]; !ok {
+		if !toolParticipatesInMicroCompact(toolName, policies) {
 			continue
 		}
 		callID := strings.TrimSpace(call.ID)
@@ -113,6 +108,14 @@ func compactableToolCallIDs(calls []provider.ToolCall) map[string]struct{} {
 		return nil
 	}
 	return ids
+}
+
+// toolParticipatesInMicroCompact 判断工具是否应参与 micro compact；未知工具默认视为可压缩。
+func toolParticipatesInMicroCompact(toolName string, policies MicroCompactPolicySource) bool {
+	if policies == nil {
+		return true
+	}
+	return policies.MicroCompactPolicy(toolName) != tools.MicroCompactPolicyPreserveHistory
 }
 
 // hasCompactableToolContent 判断工具块中是否存在会影响保留预算的有效工具结果内容。

@@ -69,6 +69,11 @@ func (t *Tool) Schema() map[string]any {
 	}
 }
 
+// MicroCompactPolicy 声明 bash 工具的历史结果默认参与 micro compact 清理。
+func (t *Tool) MicroCompactPolicy() tools.MicroCompactPolicy {
+	return tools.MicroCompactPolicyCompact
+}
+
 func (t *Tool) Execute(ctx context.Context, call tools.ToolCallInput) (tools.ToolResult, error) {
 	var in input
 	if err := json.Unmarshal(call.Arguments, &in); err != nil {

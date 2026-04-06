@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"neo-code/internal/provider"
+	"neo-code/internal/tools"
 )
 
 // Builder builds the provider-facing context for a single model round.
@@ -22,6 +23,11 @@ type BuildInput struct {
 type BuildResult struct {
 	SystemPrompt string
 	Messages     []provider.Message
+}
+
+// MicroCompactPolicySource 定义 context 读取工具 micro compact 策略的最小依赖。
+type MicroCompactPolicySource interface {
+	MicroCompactPolicy(name string) tools.MicroCompactPolicy
 }
 
 // CompactOptions controls read-time compact behavior inside the context builder.

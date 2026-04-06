@@ -11,6 +11,7 @@ type Tool interface {
 	Name() string
 	Description() string
 	Schema() map[string]any
+	MicroCompactPolicy() MicroCompactPolicy
 	Execute(ctx context.Context, call ToolCallInput) (ToolResult, error)
 }
 

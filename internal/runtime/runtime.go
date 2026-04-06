@@ -86,7 +86,7 @@ func NewWithFactory(
 		toolManager = tools.NewRegistry()
 	}
 	if contextBuilder == nil {
-		contextBuilder = agentcontext.NewBuilder()
+		contextBuilder = agentcontext.NewBuilderWithToolPolicies(toolManager)
 	}
 
 	return &Service{

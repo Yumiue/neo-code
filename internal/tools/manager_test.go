@@ -25,6 +25,8 @@ func (t *managerStubTool) Description() string { return "stub tool" }
 
 func (t *managerStubTool) Schema() map[string]any { return map[string]any{"type": "object"} }
 
+func (t *managerStubTool) MicroCompactPolicy() MicroCompactPolicy { return MicroCompactPolicyCompact }
+
 func (t *managerStubTool) Execute(ctx context.Context, call ToolCallInput) (ToolResult, error) {
 	t.callCount++
 	t.lastCall = call
