@@ -90,14 +90,19 @@ func (s *memoryStore) ListSummaries(ctx context.Context) ([]SessionSummary, erro
 
 type scriptedProvider struct {
 	name      string
-	responses []provider.ChatResponse
 	streams   [][]provider.StreamEvent
+	responses []scriptedResponse
 	requests  []provider.ChatRequest
 	callCount int
-	chatFn    func(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) (provider.ChatResponse, error)
+	chatFn    func(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) error
 }
 
-func (p *scriptedProvider) Chat(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) (provider.ChatResponse, error) {
+type scriptedResponse struct {
+	Message      provider.Message
+	FinishReason string
+}
+
+func (p *scriptedProvider) Chat(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) error {
 	p.requests = append(p.requests, cloneChatRequest(req))
 
 	callIndex := p.callCount
@@ -112,15 +117,39 @@ func (p *scriptedProvider) Chat(ctx context.Context, req provider.ChatRequest, e
 			select {
 			case events <- event:
 			case <-ctx.Done():
-				return provider.ChatResponse{}, ctx.Err()
+				return ctx.Err()
 			}
 		}
 	}
-
-	if callIndex >= len(p.responses) {
-		return provider.ChatResponse{}, fmt.Errorf("unexpected provider call %d", callIndex)
+	if callIndex < len(p.responses) {
+		response := p.responses[callIndex]
+		for index, toolCall := range response.Message.ToolCalls {
+			select {
+			case events <- provider.NewToolCallStartStreamEvent(index, toolCall.ID, toolCall.Name):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			select {
+			case events <- provider.NewToolCallDeltaStreamEvent(index, toolCall.ID, toolCall.Arguments):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		if response.Message.Content != "" {
+			select {
+			case events <- provider.NewTextDeltaStreamEvent(response.Message.Content):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		select {
+		case events <- provider.NewMessageDoneStreamEvent(response.FinishReason, nil):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
-	return p.responses[callIndex], nil
+
+	return nil
 }
 
 type scriptedProviderFactory struct {
@@ -211,6 +240,12 @@ type stubToolManager struct {
 	listCalls    int
 	executeCalls int
 	lastInput    tools.ToolCallInput
+	rememberErr  error
+	remembered   []struct {
+		sessionID string
+		action    security.Action
+		scope     tools.SessionPermissionScope
+	}
 }
 
 func (m *stubToolManager) ListAvailableSpecs(ctx context.Context, input tools.SpecListInput) ([]provider.ToolSpec, error) {
@@ -241,11 +276,23 @@ func (m *stubToolManager) Execute(ctx context.Context, input tools.ToolCallInput
 	return result, m.err
 }
 
+func (m *stubToolManager) RememberSessionDecision(sessionID string, action security.Action, scope tools.SessionPermissionScope) error {
+	m.remembered = append(m.remembered, struct {
+		sessionID string
+		action    security.Action
+		scope     tools.SessionPermissionScope
+	}{
+		sessionID: sessionID,
+		action:    action,
+		scope:     scope,
+	})
+	return m.rememberErr
+}
+
 func TestServiceRun(t *testing.T) {
 	tests := []struct {
 		name                string
 		input               UserInput
-		providerResponses   []provider.ChatResponse
 		providerStreams     [][]provider.StreamEvent
 		registerTool        tools.Tool
 		contextBuilder      agentcontext.Builder
@@ -258,19 +305,10 @@ func TestServiceRun(t *testing.T) {
 		{
 			name:  "normal dialogue exits after final assistant reply",
 			input: UserInput{RunID: "run-normal", Content: "hello"},
-			providerResponses: []provider.ChatResponse{
-				{
-					Message: provider.Message{
-						Role:    "assistant",
-						Content: "plain answer",
-					},
-					FinishReason: "stop",
-				},
-			},
 			providerStreams: [][]provider.StreamEvent{
 				{
-					{Type: provider.StreamEventTextDelta, Text: "plain "},
-					{Type: provider.StreamEventTextDelta, Text: "answer"},
+					provider.NewTextDeltaStreamEvent("plain "),
+					provider.NewTextDeltaStreamEvent("answer"),
 				},
 			},
 			contextBuilder: &stubContextBuilder{
@@ -306,26 +344,15 @@ func TestServiceRun(t *testing.T) {
 		{
 			name:  "tool call triggers execute and follow-up provider round",
 			input: UserInput{RunID: "run-tool", Content: "edit file"},
-			providerResponses: []provider.ChatResponse{
+			// 第一轮：工具调用事件流（tool_call_start + tool_call_delta）
+			// 第二轮：普通文本回复
+			providerStreams: [][]provider.StreamEvent{
 				{
-					Message: provider.Message{
-						Role: "assistant",
-						ToolCalls: []provider.ToolCall{
-							{
-								ID:        "call-1",
-								Name:      "filesystem_edit",
-								Arguments: `{"path":"main.go"}`,
-							},
-						},
-					},
-					FinishReason: "tool_calls",
+					provider.NewToolCallStartStreamEvent(0, "call-1", "filesystem_edit"),
+					provider.NewToolCallDeltaStreamEvent(0, "call-1", `{"path":"main.go"}`),
 				},
 				{
-					Message: provider.Message{
-						Role:    "assistant",
-						Content: "done",
-					},
-					FinishReason: "stop",
+					provider.NewTextDeltaStreamEvent("done"),
 				},
 			},
 			registerTool: &stubTool{
@@ -384,8 +411,7 @@ func TestServiceRun(t *testing.T) {
 			}
 
 			scripted := &scriptedProvider{
-				responses: tt.providerResponses,
-				streams:   tt.providerStreams,
+				streams: tt.providerStreams,
 			}
 			factory := &scriptedProviderFactory{provider: scripted}
 
@@ -422,6 +448,142 @@ func TestServiceRun(t *testing.T) {
 	}
 }
 
+func TestServiceRunMergesLateToolCallMetadata(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	tool := &stubTool{name: "filesystem_edit", content: "tool output"}
+	registry := tools.NewRegistry()
+	registry.Register(tool)
+
+	scripted := &scriptedProvider{
+		streams: [][]provider.StreamEvent{
+			{
+				provider.NewToolCallDeltaStreamEvent(0, "", `{"path":"main.go"`),
+				provider.NewToolCallStartStreamEvent(0, "call-late", "filesystem_edit"),
+				provider.NewToolCallDeltaStreamEvent(0, "call-late", `}`),
+			},
+			{provider.NewTextDeltaStreamEvent("done")},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
+	if err := service.Run(context.Background(), UserInput{RunID: "run-late-tool-metadata", Content: "edit"}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if tool.callCount != 1 {
+		t.Fatalf("expected tool to execute once, got %d", tool.callCount)
+	}
+	if tool.lastInput.ID != "call-late" {
+		t.Fatalf("expected merged tool call id %q, got %q", "call-late", tool.lastInput.ID)
+	}
+	if tool.lastInput.Name != "filesystem_edit" {
+		t.Fatalf("expected merged tool name %q, got %q", "filesystem_edit", tool.lastInput.Name)
+	}
+	if got := string(tool.lastInput.Arguments); got != `{"path":"main.go"}` {
+		t.Fatalf("expected merged tool arguments %q, got %q", `{"path":"main.go"}`, got)
+	}
+
+	session := onlySession(t, store)
+	if len(session.Messages) < 3 {
+		t.Fatalf("expected assistant/tool follow-up messages, got %+v", session.Messages)
+	}
+	if len(session.Messages[1].ToolCalls) != 1 {
+		t.Fatalf("expected persisted assistant tool call, got %+v", session.Messages[1])
+	}
+	if session.Messages[1].ToolCalls[0].ID != "call-late" || session.Messages[1].ToolCalls[0].Name != "filesystem_edit" {
+		t.Fatalf("expected merged assistant tool call metadata, got %+v", session.Messages[1].ToolCalls[0])
+	}
+	if session.Messages[2].ToolCallID != "call-late" {
+		t.Fatalf("expected tool result to reference merged tool call id, got %+v", session.Messages[2])
+	}
+}
+
+func TestServiceRunRejectsToolCallWithoutID(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	tool := &stubTool{name: "filesystem_edit", content: "tool output"}
+	registry := tools.NewRegistry()
+	registry.Register(tool)
+
+	scripted := &scriptedProvider{
+		streams: [][]provider.StreamEvent{
+			{
+				provider.NewToolCallStartStreamEvent(0, "", "filesystem_edit"),
+				provider.NewToolCallDeltaStreamEvent(0, "", `{}`),
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
+	err := service.Run(context.Background(), UserInput{RunID: "run-missing-tool-id", Content: "edit"})
+	if err == nil || !containsError(err, "without id") {
+		t.Fatalf("expected missing tool id error, got %v", err)
+	}
+	if tool.callCount != 0 {
+		t.Fatalf("expected tool execution to be blocked, got %d calls", tool.callCount)
+	}
+}
+
+func TestServiceRunRejectsMalformedProviderStreamEvent(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	scripted := &scriptedProvider{
+		streams: [][]provider.StreamEvent{
+			{
+				{Type: provider.StreamEventTextDelta},
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
+	err := service.Run(context.Background(), UserInput{RunID: "run-malformed-stream-event", Content: "hello"})
+	if err == nil || !containsError(err, "text_delta event payload is nil") {
+		t.Fatalf("expected malformed stream event error, got %v", err)
+	}
+}
+
+func TestServiceRunMalformedProviderStreamEventDoesNotDeadlock(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	stream := []provider.StreamEvent{{Type: provider.StreamEventTextDelta}}
+	for i := 0; i < 40; i++ {
+		stream = append(stream, provider.NewTextDeltaStreamEvent("ignored"))
+	}
+	scripted := &scriptedProvider{
+		streams: [][]provider.StreamEvent{stream},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- service.Run(context.Background(), UserInput{RunID: "run-malformed-stream-no-deadlock", Content: "hello"})
+	}()
+
+	select {
+	case err := <-errCh:
+		if err == nil || !containsError(err, "text_delta event payload is nil") {
+			t.Fatalf("expected malformed stream event error, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected run to fail instead of deadlocking on malformed stream event")
+	}
+}
+
 type stubCompactRunner struct {
 	runFn  func(ctx context.Context, input contextcompact.Input) (contextcompact.Result, error)
 	calls  []contextcompact.Input
@@ -444,6 +606,9 @@ func TestServiceRunDelegatesToContextBuilder(t *testing.T) {
 
 	manager := newRuntimeConfigManager(t)
 	store := newMemoryStore()
+	session := newSession("memory reject")
+	session.ID = "session-memory-reject"
+	store.sessions[session.ID] = cloneSession(session)
 	registry := tools.NewRegistry()
 	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
 
@@ -459,14 +624,8 @@ func TestServiceRunDelegatesToContextBuilder(t *testing.T) {
 	}
 
 	scripted := &scriptedProvider{
-		responses: []provider.ChatResponse{
-			{
-				Message: provider.Message{
-					Role:    "assistant",
-					Content: "done",
-				},
-				FinishReason: "stop",
-			},
+		streams: [][]provider.StreamEvent{
+			{provider.NewTextDeltaStreamEvent("done")},
 		},
 	}
 
@@ -533,7 +692,7 @@ func TestServiceRunCanDisableMicroCompactViaConfig(t *testing.T) {
 	}
 
 	scripted := &scriptedProvider{
-		responses: []provider.ChatResponse{{
+		responses: []scriptedResponse{{
 			Message:      provider.Message{Role: provider.RoleAssistant, Content: "done"},
 			FinishReason: "stop",
 		}},
@@ -558,10 +717,9 @@ func TestServiceRunPersistsSessionProviderAndModel(t *testing.T) {
 	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
 
 	scripted := &scriptedProvider{
-		responses: []provider.ChatResponse{{
-			Message:      provider.Message{Role: provider.RoleAssistant, Content: "done"},
-			FinishReason: "stop",
-		}},
+		streams: [][]provider.StreamEvent{
+			{provider.NewTextDeltaStreamEvent("done")},
+		},
 	}
 
 	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
@@ -618,7 +776,7 @@ func TestServiceRunDefaultBuilderUsesToolManagerMicroCompactPolicies(t *testing.
 	store.sessions[session.ID] = cloneSession(session)
 
 	scripted := &scriptedProvider{
-		responses: []provider.ChatResponse{{
+		responses: []scriptedResponse{{
 			Message:      provider.Message{Role: provider.RoleAssistant, Content: "done"},
 			FinishReason: "stop",
 		}},
@@ -681,7 +839,7 @@ func TestServiceRunDefaultBuilderUsesGenericToolManagerMicroCompactPolicies(t *t
 	store.sessions[session.ID] = cloneSession(session)
 
 	scripted := &scriptedProvider{
-		responses: []provider.ChatResponse{{
+		responses: []scriptedResponse{{
 			Message:      provider.Message{Role: provider.RoleAssistant, Content: "done"},
 			FinishReason: "stop",
 		}},
@@ -776,23 +934,12 @@ func TestServiceRunUsesToolManager(t *testing.T) {
 	}
 
 	scripted := &scriptedProvider{
-		responses: []provider.ChatResponse{
+		streams: [][]provider.StreamEvent{
 			{
-				Message: provider.Message{
-					Role: "assistant",
-					ToolCalls: []provider.ToolCall{
-						{ID: "call-manager", Name: "filesystem_edit", Arguments: `{"path":"main.go"}`},
-					},
-				},
-				FinishReason: "tool_calls",
+				provider.NewToolCallStartStreamEvent(0, "call-manager", "filesystem_edit"),
+				provider.NewToolCallDeltaStreamEvent(0, "call-manager", `{"path":"main.go"}`),
 			},
-			{
-				Message: provider.Message{
-					Role:    "assistant",
-					Content: "done",
-				},
-				FinishReason: "stop",
-			},
+			{provider.NewTextDeltaStreamEvent("done")},
 		},
 	}
 
@@ -827,13 +974,16 @@ func TestServiceRunUsesToolManager(t *testing.T) {
 	}
 }
 
-func TestServiceRunEmitsPermissionRequestAndResolvedForAsk(t *testing.T) {
+func TestServiceRunWaitsForPermissionResolutionAndContinues(t *testing.T) {
 	t.Parallel()
 
 	manager := newRuntimeConfigManager(t)
 	store := newMemoryStore()
+	session := newSession("memory reject")
+	session.ID = "session-memory-reject"
+	store.sessions[session.ID] = cloneSession(session)
 	registry := tools.NewRegistry()
-	tool := &stubTool{name: "webfetch", content: "should-not-run"}
+	tool := &stubTool{name: "webfetch", content: "fetched"}
 	registry.Register(tool)
 
 	engine, err := security.NewStaticGateway(security.DecisionAllow, []security.Rule{
@@ -854,52 +1004,75 @@ func TestServiceRunEmitsPermissionRequestAndResolvedForAsk(t *testing.T) {
 	}
 
 	scripted := &scriptedProvider{
-		responses: []provider.ChatResponse{
+		streams: [][]provider.StreamEvent{
 			{
-				Message: provider.Message{
-					Role: "assistant",
-					ToolCalls: []provider.ToolCall{
-						{ID: "call-ask", Name: "webfetch", Arguments: `{"url":"https://example.com/private"}`},
-					},
-				},
-				FinishReason: "tool_calls",
+				provider.NewToolCallStartStreamEvent(0, "call-ask", "webfetch"),
+				provider.NewToolCallDeltaStreamEvent(0, "call-ask", `{"url":"https://example.com/private"}`),
 			},
-			{
-				Message:      provider.Message{Role: "assistant", Content: "done"},
-				FinishReason: "stop",
-			},
+			{provider.NewTextDeltaStreamEvent("done")},
 		},
 	}
 
 	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{provider: scripted}, nil)
-	if err := service.Run(context.Background(), UserInput{RunID: "run-permission-ask", Content: "fetch private"}); err != nil {
+	runErrCh := make(chan error, 1)
+	go func() {
+		runErrCh <- service.Run(context.Background(), UserInput{RunID: "run-permission-ask", Content: "fetch private"})
+	}()
+
+	var requestPayload PermissionRequestPayload
+	deadline := time.After(3 * time.Second)
+waitRequest:
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting permission request event")
+		case event := <-service.Events():
+			if event.Type != EventPermissionRequest {
+				continue
+			}
+			payload, ok := event.Payload.(PermissionRequestPayload)
+			if !ok {
+				t.Fatalf("expected PermissionRequestPayload, got %#v", event.Payload)
+			}
+			requestPayload = payload
+			break waitRequest
+		}
+	}
+
+	if strings.TrimSpace(requestPayload.RequestID) == "" {
+		t.Fatalf("expected non-empty permission request id")
+	}
+	if strings.TrimSpace(requestPayload.RememberScope) != "" {
+		t.Fatalf("expected empty remember scope for permission_request, got %q", requestPayload.RememberScope)
+	}
+	if requestPayload.ToolName != "webfetch" || requestPayload.Decision != "ask" {
+		t.Fatalf("unexpected permission request payload: %+v", requestPayload)
+	}
+
+	if err := service.ResolvePermission(context.Background(), PermissionResolutionInput{
+		RequestID: requestPayload.RequestID,
+		Decision:  PermissionResolutionAllowSession,
+	}); err != nil {
+		t.Fatalf("ResolvePermission() error = %v", err)
+	}
+	if err := <-runErrCh; err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if tool.callCount != 0 {
-		t.Fatalf("expected blocked tool not to execute, got %d", tool.callCount)
+	if tool.callCount != 1 {
+		t.Fatalf("expected allowed tool to execute once, got %d", tool.callCount)
 	}
 
 	events := collectRuntimeEvents(service.Events())
 	assertEventSequence(t, events, []EventType{
-		EventPermissionRequest,
 		EventPermissionResolved,
 		EventToolResult,
 		EventAgentDone,
 	})
 	assertNoEventType(t, events, EventError)
 
-	var (
-		requestPayload  PermissionRequestPayload
-		resolvedPayload PermissionResolvedPayload
-	)
+	var resolvedPayload PermissionResolvedPayload
 	for _, event := range events {
 		switch event.Type {
-		case EventPermissionRequest:
-			payload, ok := event.Payload.(PermissionRequestPayload)
-			if !ok {
-				t.Fatalf("expected PermissionRequestPayload, got %#v", event.Payload)
-			}
-			requestPayload = payload
 		case EventPermissionResolved:
 			payload, ok := event.Payload.(PermissionResolvedPayload)
 			if !ok {
@@ -909,17 +1082,14 @@ func TestServiceRunEmitsPermissionRequestAndResolvedForAsk(t *testing.T) {
 		}
 	}
 
-	if requestPayload.ToolName != "webfetch" || requestPayload.Decision != "ask" {
-		t.Fatalf("unexpected permission request payload: %+v", requestPayload)
-	}
-	if requestPayload.RuleID != "ask-webfetch" {
-		t.Fatalf("expected rule id ask-webfetch, got %+v", requestPayload)
-	}
-	if resolvedPayload.ToolName != "webfetch" || resolvedPayload.Decision != "ask" {
+	if resolvedPayload.ToolName != "webfetch" || resolvedPayload.Decision != "allow" {
 		t.Fatalf("unexpected permission resolved payload: %+v", resolvedPayload)
 	}
-	if resolvedPayload.ResolvedAs != "rejected" {
-		t.Fatalf("expected resolved_as rejected, got %+v", resolvedPayload)
+	if resolvedPayload.ResolvedAs != "approved" {
+		t.Fatalf("expected resolved_as approved, got %+v", resolvedPayload)
+	}
+	if resolvedPayload.RememberScope != string(tools.SessionPermissionScopeAlways) {
+		t.Fatalf("expected remember scope always_session, got %+v", resolvedPayload)
 	}
 }
 
@@ -950,20 +1120,12 @@ func TestServiceRunEmitsPermissionResolvedForDeny(t *testing.T) {
 	}
 
 	scripted := &scriptedProvider{
-		responses: []provider.ChatResponse{
+		streams: [][]provider.StreamEvent{
 			{
-				Message: provider.Message{
-					Role: "assistant",
-					ToolCalls: []provider.ToolCall{
-						{ID: "call-deny", Name: "bash", Arguments: `{"command":"echo hi"}`},
-					},
-				},
-				FinishReason: "tool_calls",
+				provider.NewToolCallStartStreamEvent(0, "call-deny", "bash"),
+				provider.NewToolCallDeltaStreamEvent(0, "call-deny", `{"command":"echo hi"}`),
 			},
-			{
-				Message:      provider.Message{Role: "assistant", Content: "done"},
-				FinishReason: "stop",
-			},
+			{provider.NewTextDeltaStreamEvent("done")},
 		},
 	}
 
@@ -1003,6 +1165,97 @@ func TestServiceRunEmitsPermissionResolvedForDeny(t *testing.T) {
 	t.Fatalf("expected permission resolved event payload")
 }
 
+func TestServiceRunEmitsRememberScopeWhenSessionRejectMemoryHits(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	session := newSession("memory reject")
+	session.ID = "session-memory-reject"
+	store.sessions[session.ID] = cloneSession(session)
+	registry := tools.NewRegistry()
+	tool := &stubTool{name: "webfetch", content: "should-not-run"}
+	registry.Register(tool)
+
+	engine, err := security.NewStaticGateway(security.DecisionAllow, []security.Rule{
+		{
+			ID:       "ask-webfetch",
+			Type:     security.ActionTypeRead,
+			Resource: "webfetch",
+			Decision: security.DecisionAsk,
+			Reason:   "requires approval",
+		},
+	})
+	if err != nil {
+		t.Fatalf("new static gateway: %v", err)
+	}
+	toolManager, err := tools.NewManager(registry, engine, nil)
+	if err != nil {
+		t.Fatalf("new tool manager: %v", err)
+	}
+	if err := toolManager.RememberSessionDecision("session-memory-reject", security.Action{
+		Type: security.ActionTypeRead,
+		Payload: security.ActionPayload{
+			ToolName:   "webfetch",
+			Resource:   "webfetch",
+			Operation:  "fetch",
+			TargetType: security.TargetTypeURL,
+			Target:     "https://example.com/private",
+		},
+	}, tools.SessionPermissionScopeReject); err != nil {
+		t.Fatalf("remember session reject: %v", err)
+	}
+
+	scripted := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: provider.Message{
+					Role: "assistant",
+					ToolCalls: []provider.ToolCall{
+						{ID: "call-memory-reject", Name: "webfetch", Arguments: `{"url":"https://example.com/private"}`},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+			{
+				Message:      provider.Message{Role: "assistant", Content: "done"},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{provider: scripted}, nil)
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: "session-memory-reject",
+		RunID:     "run-memory-reject",
+		Content:   "fetch private",
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if tool.callCount != 0 {
+		t.Fatalf("expected remembered reject to skip tool execution, got %d", tool.callCount)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{EventPermissionResolved, EventToolResult, EventAgentDone})
+	assertNoEventType(t, events, EventPermissionRequest)
+
+	for _, event := range events {
+		if event.Type != EventPermissionResolved {
+			continue
+		}
+		payload, ok := event.Payload.(PermissionResolvedPayload)
+		if !ok {
+			t.Fatalf("expected PermissionResolvedPayload, got %#v", event.Payload)
+		}
+		if payload.RememberScope != string(tools.SessionPermissionScopeReject) {
+			t.Fatalf("expected remember_scope reject, got %+v", payload)
+		}
+		return
+	}
+	t.Fatalf("expected permission resolved event payload")
+}
+
 func TestServiceRunHandlesToolManagerSpecError(t *testing.T) {
 	manager := newRuntimeConfigManager(t)
 	store := newMemoryStore()
@@ -1035,14 +1288,8 @@ func TestServiceNewWithFactoryDefaultsToolManager(t *testing.T) {
 	store := newMemoryStore()
 	service := NewWithFactory(manager, nil, store, &scriptedProviderFactory{
 		provider: &scriptedProvider{
-			responses: []provider.ChatResponse{
-				{
-					Message: provider.Message{
-						Role:    provider.RoleAssistant,
-						Content: "done",
-					},
-					FinishReason: "stop",
-				},
+			streams: [][]provider.StreamEvent{
+				{provider.NewTextDeltaStreamEvent("done")},
 			},
 		},
 	}, nil)
@@ -1084,15 +1331,10 @@ func TestServiceRunErrorPaths(t *testing.T) {
 			input:    UserInput{RunID: "run-max-loops", Content: "loop"},
 			maxLoops: 1,
 			provider: &scriptedProvider{
-				responses: []provider.ChatResponse{
+				streams: [][]provider.StreamEvent{
 					{
-						Message: provider.Message{
-							Role: "assistant",
-							ToolCalls: []provider.ToolCall{
-								{ID: "loop-call", Name: "filesystem_edit", Arguments: `{"path":"x"}`},
-							},
-						},
-						FinishReason: "tool_calls",
+						provider.NewToolCallStartStreamEvent(0, "loop-call", "filesystem_edit"),
+						provider.NewToolCallDeltaStreamEvent(0, "loop-call", `{"path":"x"}`),
 					},
 				},
 			},
@@ -1128,14 +1370,8 @@ func TestServiceRunErrorPaths(t *testing.T) {
 				Content:   "continue",
 			},
 			provider: &scriptedProvider{
-				responses: []provider.ChatResponse{
-					{
-						Message: provider.Message{
-							Role:    "assistant",
-							Content: "resumed",
-						},
-						FinishReason: "stop",
-					},
+				streams: [][]provider.StreamEvent{
+					{provider.NewTextDeltaStreamEvent("resumed")},
 				},
 			},
 			seedSession: &Session{
@@ -1166,23 +1402,18 @@ func TestServiceRunErrorPaths(t *testing.T) {
 				callIdx := 0
 				return &scriptedProvider{
 					name: "retry-then-success",
-					chatFn: func(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) (provider.ChatResponse, error) {
+					chatFn: func(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) error {
 						callIdx++
 						if callIdx == 1 {
-							return provider.ChatResponse{}, &provider.ProviderError{
+							return &provider.ProviderError{
 								StatusCode: 500,
 								Code:       provider.ErrorCodeServer,
 								Message:    "internal server error",
 								Retryable:  true,
 							}
 						}
-						return provider.ChatResponse{
-							Message: provider.Message{
-								Role:    "assistant",
-								Content: "recovered",
-							},
-							FinishReason: "stop",
-						}, nil
+						events <- provider.NewTextDeltaStreamEvent("recovered")
+						return nil
 					},
 				}
 			}(),
@@ -1206,8 +1437,8 @@ func TestServiceRunErrorPaths(t *testing.T) {
 			input: UserInput{RunID: "run-no-retry", Content: "hello"},
 			provider: &scriptedProvider{
 				name: "auth-error-no-retry",
-				chatFn: func(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) (provider.ChatResponse, error) {
-					return provider.ChatResponse{}, &provider.ProviderError{
+				chatFn: func(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) error {
+					return &provider.ProviderError{
 						StatusCode: 401,
 						Code:       provider.ErrorCodeAuthFailed,
 						Message:    "invalid api key",
@@ -1229,8 +1460,8 @@ func TestServiceRunErrorPaths(t *testing.T) {
 			input: UserInput{RunID: "run-retry-exhausted", Content: "hello"},
 			provider: &scriptedProvider{
 				name: "always-500",
-				chatFn: func(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) (provider.ChatResponse, error) {
-					return provider.ChatResponse{}, &provider.ProviderError{
+				chatFn: func(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) error {
+					return &provider.ProviderError{
 						StatusCode: 500,
 						Code:       provider.ErrorCodeServer,
 						Message:    "internal server error",
@@ -1313,10 +1544,10 @@ func TestServiceCancelActiveRun(t *testing.T) {
 	started := make(chan struct{})
 	scripted := &scriptedProvider{
 		name: "cancel-active-run-provider",
-		chatFn: func(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) (provider.ChatResponse, error) {
+		chatFn: func(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) error {
 			close(started)
 			<-ctx.Done()
-			return provider.ChatResponse{}, ctx.Err()
+			return ctx.Err()
 		},
 	}
 
@@ -1356,10 +1587,10 @@ func TestServiceRunCanceledByProvider(t *testing.T) {
 	started := make(chan struct{})
 	scripted := &scriptedProvider{
 		name: "blocking-provider",
-		chatFn: func(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) (provider.ChatResponse, error) {
+		chatFn: func(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) error {
 			close(started)
 			<-ctx.Done()
-			return provider.ChatResponse{}, ctx.Err()
+			return ctx.Err()
 		},
 	}
 
@@ -1401,10 +1632,10 @@ func TestServiceRunPreservesProviderErrorAfterCancel(t *testing.T) {
 	providerErr := errors.New("provider failed after cancel")
 	scripted := &scriptedProvider{
 		name: "provider-error-after-cancel",
-		chatFn: func(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) (provider.ChatResponse, error) {
+		chatFn: func(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) error {
 			close(started)
 			<-ctx.Done()
-			return provider.ChatResponse{}, providerErr
+			return providerErr
 		},
 	}
 
@@ -1453,15 +1684,10 @@ func TestServiceRunCanceledDuringToolExecution(t *testing.T) {
 
 	scripted := &scriptedProvider{
 		name: "tool-cancel-provider",
-		responses: []provider.ChatResponse{
+		streams: [][]provider.StreamEvent{
 			{
-				Message: provider.Message{
-					Role: "assistant",
-					ToolCalls: []provider.ToolCall{
-						{ID: "cancel-call", Name: "filesystem_edit", Arguments: `{"path":"main.go"}`},
-					},
-				},
-				FinishReason: "tool_calls",
+				provider.NewToolCallStartStreamEvent(0, "cancel-call", "filesystem_edit"),
+				provider.NewToolCallDeltaStreamEvent(0, "cancel-call", `{"path":"main.go"}`),
 			},
 		},
 	}
@@ -1518,15 +1744,10 @@ func TestServiceRunPreservesToolErrorAfterCancel(t *testing.T) {
 
 	scripted := &scriptedProvider{
 		name: "tool-error-after-cancel-provider",
-		responses: []provider.ChatResponse{
+		streams: [][]provider.StreamEvent{
 			{
-				Message: provider.Message{
-					Role: "assistant",
-					ToolCalls: []provider.ToolCall{
-						{ID: "tool-error-call", Name: "filesystem_edit", Arguments: `{"path":"main.go"}`},
-					},
-				},
-				FinishReason: "tool_calls",
+				provider.NewToolCallStartStreamEvent(0, "tool-error-call", "filesystem_edit"),
+				provider.NewToolCallDeltaStreamEvent(0, "tool-error-call", `{"path":"main.go"}`),
 			},
 		},
 	}
@@ -1615,23 +1836,12 @@ func TestServiceRunToolTimeoutIsNotCancellation(t *testing.T) {
 
 	scripted := &scriptedProvider{
 		name: "timeout-provider",
-		responses: []provider.ChatResponse{
+		streams: [][]provider.StreamEvent{
 			{
-				Message: provider.Message{
-					Role: "assistant",
-					ToolCalls: []provider.ToolCall{
-						{ID: "timeout-call", Name: "filesystem_edit", Arguments: `{"path":"main.go"}`},
-					},
-				},
-				FinishReason: "tool_calls",
+				provider.NewToolCallStartStreamEvent(0, "timeout-call", "filesystem_edit"),
+				provider.NewToolCallDeltaStreamEvent(0, "timeout-call", `{"path":"main.go"}`),
 			},
-			{
-				Message: provider.Message{
-					Role:    "assistant",
-					Content: "done after timeout",
-				},
-				FinishReason: "stop",
-			},
+			{provider.NewTextDeltaStreamEvent("done after timeout")},
 		},
 	}
 
@@ -1785,28 +1995,25 @@ func TestServiceCompactUsesSessionProviderAndModelWhenPresent(t *testing.T) {
 	registry.Register(&stubTool{name: "filesystem_read_file", content: "ok"})
 
 	scripted := &scriptedProvider{
-		responses: []provider.ChatResponse{{
-			Message: provider.Message{
-				Role: provider.RoleAssistant,
-				Content: strings.Join([]string{
-					"[compact_summary]",
-					"done:",
-					"- ok",
-					"",
-					"in_progress:",
-					"- continue",
-					"",
-					"decisions:",
-					"- kept existing provider and model",
-					"",
-					"code_changes:",
-					"- none",
-					"",
-					"constraints:",
-					"- none",
-				}, "\n"),
-			},
-		}},
+		streams: [][]provider.StreamEvent{
+			{provider.NewTextDeltaStreamEvent(strings.Join([]string{
+				"[compact_summary]",
+				"done:",
+				"- ok",
+				"",
+				"in_progress:",
+				"- continue",
+				"",
+				"decisions:",
+				"- kept existing provider and model",
+				"",
+				"code_changes:",
+				"- none",
+				"",
+				"constraints:",
+				"- none",
+			}, "\n"))},
+		},
 	}
 	factory := &scriptedProviderFactory{provider: scripted}
 	service := NewWithFactory(manager, registry, store, factory, nil)
@@ -1860,28 +2067,25 @@ func TestServiceCompactFallsBackToCurrentProviderWhenSessionMetadataMissing(t *t
 	registry.Register(&stubTool{name: "filesystem_read_file", content: "ok"})
 
 	scripted := &scriptedProvider{
-		responses: []provider.ChatResponse{{
-			Message: provider.Message{
-				Role: provider.RoleAssistant,
-				Content: strings.Join([]string{
-					"[compact_summary]",
-					"done:",
-					"- ok",
-					"",
-					"in_progress:",
-					"- continue",
-					"",
-					"decisions:",
-					"- fallback to current selection",
-					"",
-					"code_changes:",
-					"- none",
-					"",
-					"constraints:",
-					"- none",
-				}, "\n"),
-			},
-		}},
+		streams: [][]provider.StreamEvent{
+			{provider.NewTextDeltaStreamEvent(strings.Join([]string{
+				"[compact_summary]",
+				"done:",
+				"- ok",
+				"",
+				"in_progress:",
+				"- continue",
+				"",
+				"decisions:",
+				"- fallback to current selection",
+				"",
+				"code_changes:",
+				"- none",
+				"",
+				"constraints:",
+				"- none",
+			}, "\n"))},
+		},
 	}
 	factory := &scriptedProviderFactory{provider: scripted}
 	service := NewWithFactory(manager, registry, store, factory, nil)
@@ -1920,20 +2124,12 @@ func TestServiceManualCompactThenRunContinuesToolRound(t *testing.T) {
 	registry.Register(tool)
 
 	scripted := &scriptedProvider{
-		responses: []provider.ChatResponse{
+		streams: [][]provider.StreamEvent{
 			{
-				Message: provider.Message{
-					Role: "assistant",
-					ToolCalls: []provider.ToolCall{
-						{ID: "call-1", Name: "filesystem_read_file", Arguments: `{"path":"main.go"}`},
-					},
-				},
-				FinishReason: "tool_calls",
+				provider.NewToolCallStartStreamEvent(0, "call-1", "filesystem_read_file"),
+				provider.NewToolCallDeltaStreamEvent(0, "call-1", `{"path":"main.go"}`),
 			},
-			{
-				Message:      provider.Message{Role: "assistant", Content: "done"},
-				FinishReason: "stop",
-			},
+			{provider.NewTextDeltaStreamEvent("done")},
 		},
 	}
 
@@ -2008,17 +2204,15 @@ func TestServiceSerializesRunAndCompact(t *testing.T) {
 	providerStarted := make(chan struct{})
 	unblockProvider := make(chan struct{})
 	scripted := &scriptedProvider{
-		chatFn: func(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) (provider.ChatResponse, error) {
+		chatFn: func(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) error {
 			select {
 			case <-providerStarted:
 			default:
 				close(providerStarted)
 			}
 			<-unblockProvider
-			return provider.ChatResponse{
-				Message:      provider.Message{Role: provider.RoleAssistant, Content: "done"},
-				FinishReason: "stop",
-			}, nil
+			events <- provider.NewTextDeltaStreamEvent("done")
+			return nil
 		},
 	}
 
@@ -2142,20 +2336,12 @@ func TestServiceRunUsesSessionWorkdirForContextAndTools(t *testing.T) {
 
 	builder := &stubContextBuilder{}
 	scripted := &scriptedProvider{
-		responses: []provider.ChatResponse{
+		streams: [][]provider.StreamEvent{
 			{
-				Message: provider.Message{
-					Role: "assistant",
-					ToolCalls: []provider.ToolCall{
-						{ID: "call-session-workdir", Name: "filesystem_edit", Arguments: `{"path":"main.go"}`},
-					},
-				},
-				FinishReason: "tool_calls",
+				provider.NewToolCallStartStreamEvent(0, "call-session-workdir", "filesystem_edit"),
+				provider.NewToolCallDeltaStreamEvent(0, "call-session-workdir", `{"path":"main.go"}`),
 			},
-			{
-				Message:      provider.Message{Role: "assistant", Content: "done"},
-				FinishReason: "stop",
-			},
+			{provider.NewTextDeltaStreamEvent("done")},
 		},
 	}
 
@@ -2192,11 +2378,8 @@ func TestServiceRunUsesInputWorkdirForNewSession(t *testing.T) {
 	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
 	builder := &stubContextBuilder{}
 	scripted := &scriptedProvider{
-		responses: []provider.ChatResponse{
-			{
-				Message:      provider.Message{Role: "assistant", Content: "done"},
-				FinishReason: "stop",
-			},
+		streams: [][]provider.StreamEvent{
+			{provider.NewTextDeltaStreamEvent("done")},
 		},
 	}
 
@@ -2598,5 +2781,49 @@ func TestProviderRetryBackoff(t *testing.T) {
 				t.Fatalf("providerRetryBackoff(%d) = %v, want within [%v, %v]", tt.attempt, got, tt.min, tt.max)
 			}
 		})
+	}
+}
+
+func TestPermissionEventViewPayloadMapping(t *testing.T) {
+	t.Parallel()
+
+	view := permissionEventView{
+		toolName:   "webfetch",
+		actionType: string(security.ActionTypeRead),
+		operation:  "fetch",
+		targetType: string(security.TargetTypeURL),
+		target:     "https://example.com",
+		decision:   "ask",
+		reason:     "need approval",
+		ruleID:     "rule-1",
+		scope:      string(tools.SessionPermissionScopeAlways),
+		resolvedAs: "rejected",
+	}
+
+	requestPayload := view.toRequestPayload()
+	if requestPayload.ToolName != view.toolName ||
+		requestPayload.ActionType != view.actionType ||
+		requestPayload.Operation != view.operation ||
+		requestPayload.TargetType != view.targetType ||
+		requestPayload.Target != view.target ||
+		requestPayload.Decision != view.decision ||
+		requestPayload.Reason != view.reason ||
+		requestPayload.RuleID != view.ruleID ||
+		requestPayload.RememberScope != view.scope {
+		t.Fatalf("unexpected request payload: %+v", requestPayload)
+	}
+
+	resolvedPayload := view.toResolvedPayload()
+	if resolvedPayload.ToolName != view.toolName ||
+		resolvedPayload.ActionType != view.actionType ||
+		resolvedPayload.Operation != view.operation ||
+		resolvedPayload.TargetType != view.targetType ||
+		resolvedPayload.Target != view.target ||
+		resolvedPayload.Decision != view.decision ||
+		resolvedPayload.Reason != view.reason ||
+		resolvedPayload.RuleID != view.ruleID ||
+		resolvedPayload.RememberScope != view.scope ||
+		resolvedPayload.ResolvedAs != view.resolvedAs {
+		t.Fatalf("unexpected resolved payload: %+v", resolvedPayload)
 	}
 }

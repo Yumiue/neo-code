@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"neo-code/internal/security"
 )
 
 type stubTool struct {
@@ -225,5 +227,18 @@ func TestRegistryMicroCompactPolicyNormalizesNameAndNilRegistry(t *testing.T) {
 	var nilRegistry *Registry
 	if got := nilRegistry.MicroCompactPolicy("whatever"); got != MicroCompactPolicyCompact {
 		t.Fatalf("expected nil registry default compact policy, got %q", got)
+	}
+}
+
+func TestRegistryRememberSessionDecisionUnsupported(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	err := registry.RememberSessionDecision("session-1", security.Action{}, SessionPermissionScopeAlways)
+	if err == nil {
+		t.Fatalf("expected unsupported error")
+	}
+	if !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("expected unsupported error, got %v", err)
 	}
 }
