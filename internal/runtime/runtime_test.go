@@ -1207,19 +1207,13 @@ func TestServiceRunEmitsRememberScopeWhenSessionRejectMemoryHits(t *testing.T) {
 	}
 
 	scripted := &scriptedProvider{
-		responses: []scriptedResponse{
+		streams: [][]provider.StreamEvent{
 			{
-				Message: provider.Message{
-					Role: "assistant",
-					ToolCalls: []provider.ToolCall{
-						{ID: "call-memory-reject", Name: "webfetch", Arguments: `{"url":"https://example.com/private"}`},
-					},
-				},
-				FinishReason: "tool_calls",
+				provider.NewToolCallStartStreamEvent(0, "call-memory-reject", "webfetch"),
+				provider.NewToolCallDeltaStreamEvent(0, "call-memory-reject", `{"url":"https://example.com/private"}`),
 			},
 			{
-				Message:      provider.Message{Role: "assistant", Content: "done"},
-				FinishReason: "stop",
+				provider.NewTextDeltaStreamEvent("done"),
 			},
 		},
 	}
