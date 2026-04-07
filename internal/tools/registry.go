@@ -114,7 +114,7 @@ func (r *Registry) ListAvailableSpecs(ctx context.Context, input SpecListInput) 
 		return nil, err
 	}
 	for _, adapter := range mcpAdapters {
-		specs = append(specs, provider.ToolSpec{
+		specs = append(specs, providertypes.ToolSpec{
 			Name:        adapter.FullName(),
 			Description: adapter.Description(),
 			Schema:      adapter.Schema(),
