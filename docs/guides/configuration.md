@@ -330,3 +330,17 @@ context:
 新增工具默认会参与 micro compact；如果某个工具的历史结果必须保留，需要在 `internal/tools` 的工具实现中显式声明保留策略。
 
 更多行为说明见 [context-compact.md](../context-compact.md)。
+
+## CLI 工作区覆盖
+
+NeoCode 支持在启动时通过 CLI 参数覆盖当前运行工作区：
+
+```bash
+go run ./cmd/neocode --workdir /path/to/workspace
+```
+
+补充说明：
+
+- `--workdir` 只影响本次启动，不会持久化到 `config.yaml`
+- 运行时工具根目录与 session 存储分桶都会使用该工作区
+- session 现按工作区隔离存储，不同工作区的历史会话默认互不可见

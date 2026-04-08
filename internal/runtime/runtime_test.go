@@ -2311,7 +2311,7 @@ func TestServiceConstructorsAndDelegates(t *testing.T) {
 		t.Fatalf("expected loaded session %q, got %q", session.ID, loaded.ID)
 	}
 
-	sessionStore := agentsession.NewStore(t.TempDir())
+	sessionStore := agentsession.NewStore(t.TempDir(), t.TempDir())
 	if sessionStore == nil {
 		t.Fatalf("expected JSON session store")
 	}
