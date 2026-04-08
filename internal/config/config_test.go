@@ -1105,6 +1105,33 @@ func TestAutoCompactConfigApplyDefaultsPreservesExplicit(t *testing.T) {
 	}
 }
 
+func TestAutoCompactConfigApplyDefaultsNilReceiver(t *testing.T) {
+	t.Parallel()
+
+	var cfg *AutoCompactConfig
+	cfg.ApplyDefaults(AutoCompactConfig{InputTokenThreshold: 50000})
+}
+
+func TestContextConfigApplyDefaultsPropagatesAutoCompactDefaults(t *testing.T) {
+	t.Parallel()
+
+	cfg := ContextConfig{}
+	cfg.ApplyDefaults(ContextConfig{
+		AutoCompact: AutoCompactConfig{
+			InputTokenThreshold: 50000,
+		},
+		Compact: CompactConfig{
+			ManualStrategy:           CompactManualStrategyKeepRecent,
+			ManualKeepRecentMessages: 10,
+			MaxSummaryChars:          1200,
+		},
+	})
+
+	if cfg.AutoCompact.InputTokenThreshold != 50000 {
+		t.Fatalf("expected auto compact threshold=50000, got %d", cfg.AutoCompact.InputTokenThreshold)
+	}
+}
+
 func TestAutoCompactConfigValidateEnabledWithoutThreshold(t *testing.T) {
 	t.Parallel()
 

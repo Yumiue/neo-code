@@ -3038,6 +3038,278 @@ func TestCallProviderWithRetryReturnsCombinedForwardError(t *testing.T) {
 	}
 }
 
+func TestServiceRunPersistsAndRestoresTokenUsage(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	builder := &stubContextBuilder{}
+	scripted := &scriptedProvider{}
+	scripted.chatFn = func(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error {
+		usage := &providertypes.Usage{}
+		if scripted.callCount == 1 {
+			usage.InputTokens = 100
+			usage.OutputTokens = 50
+		} else {
+			usage.InputTokens = 25
+			usage.OutputTokens = 10
+		}
+
+		select {
+		case events <- providertypes.NewTextDeltaStreamEvent("assistant reply"):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		select {
+		case events <- providertypes.NewMessageDoneStreamEvent("stop", usage):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return nil
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, builder)
+
+	if err := service.Run(context.Background(), UserInput{
+		RunID:   "run-token-usage-first",
+		Content: "hello",
+	}); err != nil {
+		t.Fatalf("first Run() error = %v", err)
+	}
+
+	firstSession := onlySession(t, store)
+	if firstSession.TokenInputTotal != 100 {
+		t.Fatalf("expected first session input total 100, got %d", firstSession.TokenInputTotal)
+	}
+	if firstSession.TokenOutputTotal != 50 {
+		t.Fatalf("expected first session output total 50, got %d", firstSession.TokenOutputTotal)
+	}
+	if len(builder.builds) != 1 {
+		t.Fatalf("expected 1 build after first run, got %d", len(builder.builds))
+	}
+	if builder.builds[0].Metadata.SessionInputTokens != 0 {
+		t.Fatalf("expected first build to start from zero input tokens, got %d", builder.builds[0].Metadata.SessionInputTokens)
+	}
+	if builder.builds[0].Metadata.SessionOutputTokens != 0 {
+		t.Fatalf("expected first build to start from zero output tokens, got %d", builder.builds[0].Metadata.SessionOutputTokens)
+	}
+
+	firstEvents := collectRuntimeEvents(service.Events())
+	var firstTokenUsage TokenUsagePayload
+	foundFirstTokenUsage := false
+	for _, event := range firstEvents {
+		if event.Type != EventTokenUsage {
+			continue
+		}
+		payload, ok := event.Payload.(TokenUsagePayload)
+		if !ok {
+			t.Fatalf("expected TokenUsagePayload, got %T", event.Payload)
+		}
+		firstTokenUsage = payload
+		foundFirstTokenUsage = true
+	}
+	if !foundFirstTokenUsage {
+		t.Fatalf("expected token usage event in %+v", firstEvents)
+	}
+	if firstTokenUsage.InputTokens != 100 || firstTokenUsage.OutputTokens != 50 {
+		t.Fatalf("unexpected first token usage payload: %+v", firstTokenUsage)
+	}
+	if firstTokenUsage.SessionInputTokens != 100 || firstTokenUsage.SessionOutputTokens != 50 {
+		t.Fatalf("expected first session totals to be accumulated, got %+v", firstTokenUsage)
+	}
+
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: firstSession.ID,
+		RunID:     "run-token-usage-second",
+		Content:   "continue",
+	}); err != nil {
+		t.Fatalf("second Run() error = %v", err)
+	}
+
+	secondSession, err := store.Load(context.Background(), firstSession.ID)
+	if err != nil {
+		t.Fatalf("load second session: %v", err)
+	}
+	if secondSession.TokenInputTotal != 125 {
+		t.Fatalf("expected second session input total 125, got %d", secondSession.TokenInputTotal)
+	}
+	if secondSession.TokenOutputTotal != 60 {
+		t.Fatalf("expected second session output total 60, got %d", secondSession.TokenOutputTotal)
+	}
+	if len(builder.builds) != 2 {
+		t.Fatalf("expected 2 builds after second run, got %d", len(builder.builds))
+	}
+	if builder.builds[1].Metadata.SessionInputTokens != 100 {
+		t.Fatalf("expected restored session input tokens 100, got %d", builder.builds[1].Metadata.SessionInputTokens)
+	}
+	if builder.builds[1].Metadata.SessionOutputTokens != 50 {
+		t.Fatalf("expected restored session output tokens 50, got %d", builder.builds[1].Metadata.SessionOutputTokens)
+	}
+
+	secondEvents := collectRuntimeEvents(service.Events())
+	var secondTokenUsage TokenUsagePayload
+	foundSecondTokenUsage := false
+	for _, event := range secondEvents {
+		if event.Type != EventTokenUsage {
+			continue
+		}
+		payload, ok := event.Payload.(TokenUsagePayload)
+		if !ok {
+			t.Fatalf("expected TokenUsagePayload, got %T", event.Payload)
+		}
+		secondTokenUsage = payload
+		foundSecondTokenUsage = true
+	}
+	if !foundSecondTokenUsage {
+		t.Fatalf("expected token usage event in %+v", secondEvents)
+	}
+	if secondTokenUsage.InputTokens != 25 || secondTokenUsage.OutputTokens != 10 {
+		t.Fatalf("unexpected second token usage payload: %+v", secondTokenUsage)
+	}
+	if secondTokenUsage.SessionInputTokens != 125 || secondTokenUsage.SessionOutputTokens != 60 {
+		t.Fatalf("expected second session totals to be accumulated, got %+v", secondTokenUsage)
+	}
+}
+
+func TestServiceRunAutoCompactsAndResetsSessionTokens(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Context.AutoCompact.Enabled = true
+		cfg.Context.AutoCompact.InputTokenThreshold = 100
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store := newMemoryStore()
+	session := agentsession.New("auto-compact")
+	session.ID = "session-auto-compact"
+	session.TokenInputTotal = 100
+	session.TokenOutputTotal = 40
+	session.Messages = []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "older request"},
+		{Role: providertypes.RoleAssistant, Content: "older answer"},
+	}
+	store.sessions[session.ID] = cloneSession(session)
+
+	registry := tools.NewRegistry()
+	tool := &stubTool{name: "filesystem_read_file", content: "file content"}
+	registry.Register(tool)
+
+	builder := &stubContextBuilder{
+		buildFn: func(ctx context.Context, input agentcontext.BuildInput) (agentcontext.BuildResult, error) {
+			return agentcontext.BuildResult{
+				SystemPrompt:      "auto compact prompt",
+				Messages:          append([]providertypes.Message(nil), input.Messages...),
+				ShouldAutoCompact: input.Metadata.SessionInputTokens >= input.Compact.AutoCompactThreshold,
+			}, nil
+		},
+	}
+	scripted := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					ToolCalls: []providertypes.ToolCall{
+						{ID: "call-1", Name: "filesystem_read_file", Arguments: `{"path":"main.go"}`},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+			{
+				Message:      providertypes.Message{Content: "done"},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, builder)
+	compactRunner := &stubCompactRunner{
+		result: contextcompact.Result{
+			Messages: []providertypes.Message{
+				{Role: providertypes.RoleAssistant, Content: "[compact_summary]\ndone:\n- archived\n\nin_progress:\n- continue"},
+				{Role: providertypes.RoleAssistant, Content: "latest answer"},
+			},
+			Applied: true,
+			Metrics: contextcompact.Metrics{
+				BeforeChars: 60,
+				AfterChars:  24,
+				SavedRatio:  0.6,
+				TriggerMode: string(contextcompact.ModeManual),
+			},
+			TranscriptID:   "transcript_auto",
+			TranscriptPath: "/tmp/auto.jsonl",
+		},
+	}
+	service.compactRunner = compactRunner
+
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: session.ID,
+		RunID:     "run-auto-compact",
+		Content:   "continue",
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if len(compactRunner.calls) != 1 {
+		t.Fatalf("expected auto compact to run once, got %d", len(compactRunner.calls))
+	}
+	if len(builder.builds) != 2 {
+		t.Fatalf("expected 2 build attempts, got %d", len(builder.builds))
+	}
+	if builder.builds[0].Metadata.SessionInputTokens != 100 {
+		t.Fatalf("expected first build to see pre-compact tokens, got %d", builder.builds[0].Metadata.SessionInputTokens)
+	}
+	if builder.builds[0].Metadata.SessionOutputTokens != 40 {
+		t.Fatalf("expected first build to see pre-compact output tokens, got %d", builder.builds[0].Metadata.SessionOutputTokens)
+	}
+	if builder.builds[0].Compact.AutoCompactThreshold != 100 {
+		t.Fatalf("expected auto compact threshold 100, got %d", builder.builds[0].Compact.AutoCompactThreshold)
+	}
+	if builder.builds[1].Metadata.SessionInputTokens != 0 {
+		t.Fatalf("expected second build to see reset input tokens, got %d", builder.builds[1].Metadata.SessionInputTokens)
+	}
+	if builder.builds[1].Metadata.SessionOutputTokens != 0 {
+		t.Fatalf("expected second build to see reset output tokens, got %d", builder.builds[1].Metadata.SessionOutputTokens)
+	}
+
+	if service.sessionInputTokens != 0 {
+		t.Fatalf("expected service input tokens to reset, got %d", service.sessionInputTokens)
+	}
+	if service.sessionOutputTokens != 0 {
+		t.Fatalf("expected service output tokens to reset, got %d", service.sessionOutputTokens)
+	}
+
+	saved, err := store.Load(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("load compacted session: %v", err)
+	}
+	if saved.TokenInputTotal != 0 {
+		t.Fatalf("expected persisted input tokens to reset, got %d", saved.TokenInputTotal)
+	}
+	if saved.TokenOutputTotal != 0 {
+		t.Fatalf("expected persisted output tokens to reset, got %d", saved.TokenOutputTotal)
+	}
+	if tool.callCount != 1 {
+		t.Fatalf("expected tool to execute once, got %d", tool.callCount)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{
+		EventUserMessage,
+		EventCompactStart,
+		EventCompactDone,
+		EventToolStart,
+		EventToolResult,
+		EventAgentDone,
+	})
+	assertNoEventType(t, events, EventCompactError)
+}
+
 func TestRestoreSessionTokens(t *testing.T) {
 	t.Parallel()
 
@@ -3089,7 +3361,7 @@ func TestAutoCompactThresholdEnabled(t *testing.T) {
 	cfg := config.Config{
 		Context: config.ContextConfig{
 			AutoCompact: config.AutoCompactConfig{
-				Enabled:            true,
+				Enabled:             true,
 				InputTokenThreshold: 50000,
 			},
 		},
@@ -3110,7 +3382,7 @@ func TestAutoCompactThresholdDisabled(t *testing.T) {
 	cfg := config.Config{
 		Context: config.ContextConfig{
 			AutoCompact: config.AutoCompactConfig{
-				Enabled:            false,
+				Enabled:             false,
 				InputTokenThreshold: 50000,
 			},
 		},
@@ -3131,7 +3403,7 @@ func TestAutoCompactThresholdZeroValue(t *testing.T) {
 	cfg := config.Config{
 		Context: config.ContextConfig{
 			AutoCompact: config.AutoCompactConfig{
-				Enabled:            true,
+				Enabled:             true,
 				InputTokenThreshold: 0,
 			},
 		},
@@ -3147,7 +3419,7 @@ func TestTokenUsageRecordedOnMessageDone(t *testing.T) {
 	t.Parallel()
 
 	service := &Service{
-		events:           make(chan RuntimeEvent, 128),
+		events:              make(chan RuntimeEvent, 128),
 		sessionInputTokens:  0,
 		sessionOutputTokens: 0,
 	}
@@ -3171,8 +3443,8 @@ func TestTokenUsageRecordedOnMessageDone(t *testing.T) {
 				service.sessionInputTokens += payload.Usage.InputTokens
 				service.sessionOutputTokens += payload.Usage.OutputTokens
 				service.emit(context.Background(), EventTokenUsage, "test-run-id", "test-session-id", TokenUsagePayload{
-					InputTokens:        payload.Usage.InputTokens,
-					OutputTokens:       payload.Usage.OutputTokens,
+					InputTokens:         payload.Usage.InputTokens,
+					OutputTokens:        payload.Usage.OutputTokens,
 					SessionInputTokens:  service.sessionInputTokens,
 					SessionOutputTokens: service.sessionOutputTokens,
 				})
