@@ -133,17 +133,17 @@ type ProviderFactory interface {
 }
 
 type Service struct {
-	configManager   *config.Manager      // 配置管理器，提供当前选中的 provider、model、workdir 等配置读取能力。
-	sessionStore    agentsession.Store   // 会话持久化接口，负责保存和加载聊天会话。
-	toolManager     tools.Manager        // 工具管理器，统一工具 schema 暴露与执行入口。
-	providerFactory ProviderFactory      // Provider 工厂接口，根据配置动态创建具体的 provider 实例。
-	contextBuilder  agentcontext.Builder // 上下文构建器，负责组装 system prompt 与本轮发给模型的消息上下文。
-	compactRunner   contextcompact.Runner
-	events          chan RuntimeEvent
-	operationMu     sync.Mutex         // 运行级互斥：串行化 Run 与 Compact，避免并发写同一会话。
-	runMu           sync.Mutex         // 仅保护 activeRun* 字段的并发读写。
-	activeRunToken  uint64             // 当前活跃运行的令牌标识，用于标记正在执行的 Run 实例。
-	nextRunToken    uint64             // 下一个运行令牌的递增计数器，用于区分不同 Run 的生命周期。
+	configManager       *config.Manager      // 配置管理器，提供当前选中的 provider、model、workdir 等配置读取能力。
+	sessionStore        agentsession.Store   // 会话持久化接口，负责保存和加载聊天会话。
+	toolManager         tools.Manager        // 工具管理器，统一工具 schema 暴露与执行入口。
+	providerFactory     ProviderFactory      // Provider 工厂接口，根据配置动态创建具体的 provider 实例。
+	contextBuilder      agentcontext.Builder // 上下文构建器，负责组装 system prompt 与本轮发给模型的消息上下文。
+	compactRunner       contextcompact.Runner
+	events              chan RuntimeEvent
+	operationMu         sync.Mutex         // 运行级互斥：串行化 Run 与 Compact，避免并发写同一会话。
+	runMu               sync.Mutex         // 仅保护 activeRun* 字段的并发读写。
+	activeRunToken      uint64             // 当前活跃运行的令牌标识，用于标记正在执行的 Run 实例。
+	nextRunToken        uint64             // 下一个运行令牌的递增计数器，用于区分不同 Run 的生命周期。
 	activeRunCancel     context.CancelFunc // 当前活跃 Run 的取消函数。
 	sessionInputTokens  int                // 当前会话累计输入 token。
 	sessionOutputTokens int                // 当前会话累计输出 token。
@@ -532,11 +532,15 @@ func handleProviderStreamEvent(
 			acc.accumulateToolCallDelta(payload.Index, payload.ID, payload.ArgumentsDelta)
 		}
 	case providertypes.StreamEventMessageDone:
-		if _, err := event.MessageDoneValue(); err != nil {
+		payload, err := event.MessageDoneValue()
+		if err != nil {
 			return err
 		}
 		if acc != nil {
 			acc.messageDone = true
+		}
+		if onMessageDone != nil {
+			onMessageDone(payload)
 		}
 	default:
 		return fmt.Errorf("runtime: unsupported provider stream event type %q", event.Type)
@@ -579,8 +583,8 @@ func (s *Service) forwardProviderEvents(
 						s.sessionInputTokens += done.Usage.InputTokens
 						s.sessionOutputTokens += done.Usage.OutputTokens
 						s.emit(ctx, EventTokenUsage, runID, sessionID, TokenUsagePayload{
-							InputTokens:        done.Usage.InputTokens,
-							OutputTokens:       done.Usage.OutputTokens,
+							InputTokens:         done.Usage.InputTokens,
+							OutputTokens:        done.Usage.OutputTokens,
 							SessionInputTokens:  s.sessionInputTokens,
 							SessionOutputTokens: s.sessionOutputTokens,
 						})
