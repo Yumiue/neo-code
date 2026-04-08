@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -153,8 +154,16 @@ func TestHashWorkspaceRootNormalizesChinesePathVariants(t *testing.T) {
 
 	upperVariant := strings.ToUpper(normalized)
 	lowerVariant := strings.ToLower(normalized)
-	if got, want := hashWorkspaceRoot(upperVariant), hashWorkspaceRoot(lowerVariant); got != want {
-		t.Fatalf("expected case variants to hash equally, got %q and %q", got, want)
+	gotCaseUpper := hashWorkspaceRoot(upperVariant)
+	gotCaseLower := hashWorkspaceRoot(lowerVariant)
+	if goruntime.GOOS == "windows" {
+		if gotCaseUpper != gotCaseLower {
+			t.Fatalf("expected case variants to hash equally on windows, got %q and %q", gotCaseUpper, gotCaseLower)
+		}
+	} else {
+		if gotCaseUpper == gotCaseLower {
+			t.Fatalf("expected case variants to hash differently on case-sensitive platforms, got %q", gotCaseUpper)
+		}
 	}
 }
 

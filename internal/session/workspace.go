@@ -4,6 +4,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 )
 
@@ -24,13 +25,16 @@ func hashWorkspaceRoot(workspaceRoot string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-// workspacePathKey 负责生成工作区路径的稳定比较键，并与项目级 transcript 哈希规则保持一致。
+// workspacePathKey 负责生成工作区路径的稳定比较键，并在 Windows 下兼容大小写不敏感路径。
 func workspacePathKey(workspaceRoot string) string {
 	normalized := normalizeWorkspaceRoot(workspaceRoot)
 	if normalized == "" {
 		return ""
 	}
-	return strings.ToLower(normalized)
+	if goruntime.GOOS == "windows" {
+		return strings.ToLower(normalized)
+	}
+	return normalized
 }
 
 // normalizeWorkspaceRoot 负责将工作区根目录规范化为绝对清洗路径。
