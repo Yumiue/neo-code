@@ -17,7 +17,11 @@ func TestJSONStoreSaveLoadAndListSummaries(t *testing.T) {
 	t.Parallel()
 
 	baseDir := t.TempDir()
-	store := NewJSONStore(baseDir)
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		t.Fatalf("mkdir workspace root: %v", err)
+	}
+	store := NewJSONStore(baseDir, workspaceRoot)
 
 	older := &Session{
 		ID:        "session-old",
@@ -61,7 +65,7 @@ func TestJSONStoreSaveLoadAndListSummaries(t *testing.T) {
 		t.Fatalf("unexpected loaded messages: %+v", loaded.Messages)
 	}
 
-	rawPath := filepath.Join(baseDir, sessionsDirName, newer.ID+".json")
+	rawPath := filepath.Join(sessionDirectory(baseDir, workspaceRoot), newer.ID+".json")
 	raw, err := os.ReadFile(rawPath)
 	if err != nil {
 		t.Fatalf("read saved session: %v", err)
@@ -70,8 +74,8 @@ func TestJSONStoreSaveLoadAndListSummaries(t *testing.T) {
 		t.Fatalf("expected persisted session file to include workdir, got:\n%s", string(raw))
 	}
 
-	mustWriteSessionFile(t, filepath.Join(baseDir, sessionsDirName, "invalid.json"), "{invalid")
-	if err := os.MkdirAll(filepath.Join(baseDir, sessionsDirName, "directory"), 0o755); err != nil {
+	mustWriteSessionFile(t, filepath.Join(sessionDirectory(baseDir, workspaceRoot), "invalid.json"), "{invalid")
+	if err := os.MkdirAll(filepath.Join(sessionDirectory(baseDir, workspaceRoot), "directory"), 0o755); err != nil {
 		t.Fatalf("mkdir stray directory: %v", err)
 	}
 
@@ -87,11 +91,78 @@ func TestJSONStoreSaveLoadAndListSummaries(t *testing.T) {
 	}
 }
 
+func TestJSONStoreScopesSessionsByWorkspaceRoot(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	workspaceA := filepath.Join(t.TempDir(), "中文项目A")
+	workspaceB := filepath.Join(t.TempDir(), "中文项目B")
+	if err := os.MkdirAll(workspaceA, 0o755); err != nil {
+		t.Fatalf("mkdir workspaceA: %v", err)
+	}
+	if err := os.MkdirAll(workspaceB, 0o755); err != nil {
+		t.Fatalf("mkdir workspaceB: %v", err)
+	}
+
+	storeA := NewJSONStore(baseDir, workspaceA)
+	storeB := NewJSONStore(baseDir, workspaceB)
+
+	sessionA := &Session{ID: "session-a", Title: "A", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	sessionB := &Session{ID: "session-b", Title: "B", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := storeA.Save(context.Background(), sessionA); err != nil {
+		t.Fatalf("save sessionA: %v", err)
+	}
+	if err := storeB.Save(context.Background(), sessionB); err != nil {
+		t.Fatalf("save sessionB: %v", err)
+	}
+
+	summariesA, err := storeA.ListSummaries(context.Background())
+	if err != nil {
+		t.Fatalf("ListSummaries() for storeA error: %v", err)
+	}
+	if len(summariesA) != 1 || summariesA[0].ID != sessionA.ID {
+		t.Fatalf("expected storeA to only list sessionA, got %+v", summariesA)
+	}
+
+	summariesB, err := storeB.ListSummaries(context.Background())
+	if err != nil {
+		t.Fatalf("ListSummaries() for storeB error: %v", err)
+	}
+	if len(summariesB) != 1 || summariesB[0].ID != sessionB.ID {
+		t.Fatalf("expected storeB to only list sessionB, got %+v", summariesB)
+	}
+
+	if _, err := storeA.Load(context.Background(), sessionB.ID); err == nil {
+		t.Fatalf("expected storeA to fail loading session from another workspace bucket")
+	}
+}
+
+func TestHashWorkspaceRootNormalizesChinesePathVariants(t *testing.T) {
+	t.Parallel()
+
+	base := filepath.Join(t.TempDir(), "中文项目")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatalf("mkdir base: %v", err)
+	}
+
+	normalized := normalizeWorkspaceRoot(base)
+	slashVariant := strings.ReplaceAll(normalized, `\`, `/`)
+	if got, want := hashWorkspaceRoot(normalized), hashWorkspaceRoot(slashVariant); got != want {
+		t.Fatalf("expected slash variants to hash equally, got %q and %q", got, want)
+	}
+
+	upperVariant := strings.ToUpper(normalized)
+	lowerVariant := strings.ToLower(normalized)
+	if got, want := hashWorkspaceRoot(upperVariant), hashWorkspaceRoot(lowerVariant); got != want {
+		t.Fatalf("expected case variants to hash equally, got %q and %q", got, want)
+	}
+}
+
 func TestJSONStoreErrors(t *testing.T) {
 	t.Parallel()
 
 	baseDir := t.TempDir()
-	store := NewJSONStore(baseDir)
+	store := NewJSONStore(baseDir, t.TempDir())
 
 	cancelledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -114,7 +185,8 @@ func TestJSONStoreCorruptedSessionBehaviors(t *testing.T) {
 	t.Parallel()
 
 	baseDir := t.TempDir()
-	store := NewJSONStore(baseDir)
+	workspaceRoot := t.TempDir()
+	store := NewJSONStore(baseDir, workspaceRoot)
 
 	valid := &Session{
 		ID:        "valid-session",
@@ -127,7 +199,7 @@ func TestJSONStoreCorruptedSessionBehaviors(t *testing.T) {
 		t.Fatalf("Save valid session: %v", err)
 	}
 
-	mustWriteSessionFile(t, filepath.Join(baseDir, sessionsDirName, "broken.json"), "{broken")
+	mustWriteSessionFile(t, filepath.Join(sessionDirectory(baseDir, workspaceRoot), "broken.json"), "{broken")
 
 	_, err := store.Load(context.Background(), "broken")
 	if err == nil || !strings.Contains(err.Error(), "decode session broken") {
@@ -152,7 +224,7 @@ func TestJSONStoreSaveInvalidBaseDir(t *testing.T) {
 		t.Fatalf("write base file: %v", err)
 	}
 
-	store := NewJSONStore(baseFile)
+	store := NewJSONStore(baseFile, t.TempDir())
 	err := store.Save(context.Background(), &Session{
 		ID:        "session-x",
 		Title:     "Broken Save",
@@ -195,7 +267,7 @@ func TestNewUsesDefaultWorkdirAndEmptyMessages(t *testing.T) {
 func TestNewWithWorkdirTrimAndTitleSanitize(t *testing.T) {
 	t.Parallel()
 
-	tooLong := strings.Repeat("中", 45) // rune 长度 > 40
+	tooLong := strings.Repeat("测", 45)
 	workdir := "   /tmp/workdir   "
 
 	session := NewWithWorkdir(tooLong, workdir)
@@ -221,7 +293,7 @@ func TestNewWithWorkdirFallsBackDefaultTitle(t *testing.T) {
 func TestNewStoreReturnsJSONStore(t *testing.T) {
 	t.Parallel()
 
-	store := NewStore(t.TempDir())
+	store := NewStore(t.TempDir(), t.TempDir())
 	if store == nil {
 		t.Fatalf("expected non-nil store")
 	}
@@ -231,13 +303,11 @@ func TestJSONStoreListSummariesReadDirFailure(t *testing.T) {
 	t.Parallel()
 
 	baseDir := t.TempDir()
-	store := NewJSONStore(baseDir)
+	workspaceRoot := t.TempDir()
+	store := NewJSONStore(baseDir, workspaceRoot)
 
-	// 把 sessions 目录位置占成普通文件，触发 ReadDir 失败路径。
-	sessionsPath := filepath.Join(baseDir, sessionsDirName)
-	if err := os.WriteFile(sessionsPath, []byte("not-a-dir"), 0o644); err != nil {
-		t.Fatalf("write %s: %v", sessionsPath, err)
-	}
+	sessionsPath := sessionDirectory(baseDir, workspaceRoot)
+	mustWriteSessionFile(t, sessionsPath, "not-a-dir")
 
 	_, err := store.ListSummaries(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "create sessions dir") {
@@ -249,7 +319,7 @@ func TestJSONStoreListSummariesContextCanceledDuringIteration(t *testing.T) {
 	t.Parallel()
 
 	baseDir := t.TempDir()
-	store := NewJSONStore(baseDir)
+	store := NewJSONStore(baseDir, t.TempDir())
 
 	for i := 0; i < 10; i++ {
 		s := &Session{
@@ -276,9 +346,10 @@ func TestJSONStoreLoadDecodeErrorWithNonJSONPayload(t *testing.T) {
 	t.Parallel()
 
 	baseDir := t.TempDir()
-	store := NewJSONStore(baseDir)
+	workspaceRoot := t.TempDir()
+	store := NewJSONStore(baseDir, workspaceRoot)
 
-	mustWriteSessionFile(t, filepath.Join(baseDir, sessionsDirName, "decode-bad.json"), "{not-json")
+	mustWriteSessionFile(t, filepath.Join(sessionDirectory(baseDir, workspaceRoot), "decode-bad.json"), "{not-json")
 
 	_, err := store.Load(context.Background(), "decode-bad")
 	if err == nil || !strings.Contains(err.Error(), "decode session decode-bad") {
@@ -290,7 +361,8 @@ func TestJSONStoreListSummariesSkipsUnreadableAndMalformedEntries(t *testing.T) 
 	t.Parallel()
 
 	baseDir := t.TempDir()
-	store := NewJSONStore(baseDir)
+	workspaceRoot := t.TempDir()
+	store := NewJSONStore(baseDir, workspaceRoot)
 
 	valid := &Session{
 		ID:        "valid-summary",
@@ -302,8 +374,8 @@ func TestJSONStoreListSummariesSkipsUnreadableAndMalformedEntries(t *testing.T) 
 		t.Fatalf("save valid session: %v", err)
 	}
 
-	mustWriteSessionFile(t, filepath.Join(baseDir, sessionsDirName, "malformed.json"), "{malformed")
-	mustWriteSessionFile(t, filepath.Join(baseDir, sessionsDirName, "empty-id.json"), `{"id":"   ","title":"x"}`)
+	mustWriteSessionFile(t, filepath.Join(sessionDirectory(baseDir, workspaceRoot), "malformed.json"), "{malformed")
+	mustWriteSessionFile(t, filepath.Join(sessionDirectory(baseDir, workspaceRoot), "empty-id.json"), `{"id":"   ","title":"x"}`)
 
 	summaries, err := store.ListSummaries(context.Background())
 	if err != nil {
@@ -318,7 +390,8 @@ func TestJSONStoreSavePersistsProviderModelAndMessages(t *testing.T) {
 	t.Parallel()
 
 	baseDir := t.TempDir()
-	store := NewJSONStore(baseDir)
+	workspaceRoot := t.TempDir()
+	store := NewJSONStore(baseDir, workspaceRoot)
 
 	session := &Session{
 		ID:        "persist-full-fields",
@@ -345,7 +418,7 @@ func TestJSONStoreSavePersistsProviderModelAndMessages(t *testing.T) {
 		t.Fatalf("save session: %v", err)
 	}
 
-	rawPath := filepath.Join(baseDir, sessionsDirName, session.ID+".json")
+	rawPath := filepath.Join(sessionDirectory(baseDir, workspaceRoot), session.ID+".json")
 	raw, err := os.ReadFile(rawPath)
 	if err != nil {
 		t.Fatalf("read raw file: %v", err)

@@ -192,3 +192,17 @@ MIT
 ## Manual Compact
 
 NeoCode 支持通过 `/compact` 手动压缩当前会话上下文。配置项见 `docs/guides/configuration.md`，流程和摘要约定见 `docs/context-compact.md`。
+
+## CLI Workdir
+
+NeoCode 现在支持通过 CLI 启动参数覆盖本次运行工作区：
+
+```bash
+go run ./cmd/neocode --workdir /path/to/workspace
+```
+
+说明：
+
+- `--workdir` 只影响当前进程，不会写回 `config.yaml`
+- 当前工作区会同时用于工具执行根目录与 session 存储分桶
+- session 历史现在按工作区隔离存储，不同工作区默认互不可见

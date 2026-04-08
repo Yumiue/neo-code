@@ -29,7 +29,7 @@ func TestNewProgram(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 
-	program, err := NewProgram(context.Background())
+	program, err := NewProgram(context.Background(), BootstrapOptions{})
 	if err != nil {
 		t.Fatalf("NewProgram() error = %v", err)
 	}
@@ -61,7 +61,7 @@ func TestNewProgramNormalizesInvalidCurrentModelOnStartup(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	program, err := NewProgram(context.Background())
+	program, err := NewProgram(context.Background(), BootstrapOptions{})
 	if err != nil {
 		t.Fatalf("NewProgram() error = %v", err)
 	}
@@ -515,6 +515,44 @@ func TestBuildToolManagerAllowsWebfetchWhitelist(t *testing.T) {
 	}
 }
 
+func TestBuildRuntimeUsesWorkdirOverride(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	override := filepath.Join(t.TempDir(), "中文工作区")
+	if err := os.MkdirAll(override, 0o755); err != nil {
+		t.Fatalf("mkdir override workdir: %v", err)
+	}
+
+	bundle, err := BuildRuntime(context.Background(), BootstrapOptions{Workdir: override})
+	if err != nil {
+		t.Fatalf("BuildRuntime() error = %v", err)
+	}
+	if bundle.Config.Workdir != filepath.Clean(override) {
+		t.Fatalf("expected workdir %q, got %q", filepath.Clean(override), bundle.Config.Workdir)
+	}
+	if bundle.ConfigManager == nil || bundle.Runtime == nil || bundle.ProviderSelection == nil {
+		t.Fatalf("expected runtime bundle dependencies, got %+v", bundle)
+	}
+}
+
+func TestBuildRuntimeRejectsInvalidWorkdirOverride(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	invalid := filepath.Join(t.TempDir(), "missing", "中文")
+	_, err := BuildRuntime(context.Background(), BootstrapOptions{Workdir: invalid})
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "resolve workdir") {
+		t.Fatalf("expected resolve workdir error, got %v", err)
+	}
+}
+
 func TestEnsureConsoleUTF8SetsOutputThenInput(t *testing.T) {
 	originalOutput := setConsoleOutputCodePage
 	originalInput := setConsoleInputCodePage
@@ -539,7 +577,7 @@ func TestEnsureConsoleUTF8SetsOutputThenInput(t *testing.T) {
 		return nil
 	}
 
-	ensureConsoleUTF8()
+	EnsureConsoleUTF8()
 
 	if len(calls) != 2 || calls[0] != "output" || calls[1] != "input" {
 		t.Fatalf("expected output->input order, got %+v", calls)
@@ -564,7 +602,7 @@ func TestEnsureConsoleUTF8SkipsInputWhenOutputFails(t *testing.T) {
 		return nil
 	}
 
-	ensureConsoleUTF8()
+	EnsureConsoleUTF8()
 
 	if inputCalled {
 		t.Fatalf("expected input code page setup to be skipped when output setup fails")

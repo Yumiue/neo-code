@@ -25,13 +25,13 @@ type Session struct {
 	// Provider 记录最近一次成功运行会话时使用的 provider，用于 compact 优先复用历史配置。
 	Provider string `json:"provider,omitempty"`
 	// Model 记录最近一次成功运行会话时使用的 model，用于 compact 优先复用历史配置。
-	Model     string                  `json:"model,omitempty"`
-	CreatedAt time.Time               `json:"created_at"`
-	UpdatedAt time.Time               `json:"updated_at"`
-	Workdir   string                  `json:"workdir,omitempty"`
-	Messages        []providertypes.Message `json:"messages"`
-	TokenInputTotal int                     `json:"token_input_total,omitempty"`
-	TokenOutputTotal int                    `json:"token_output_total,omitempty"`
+	Model            string                  `json:"model,omitempty"`
+	CreatedAt        time.Time               `json:"created_at"`
+	UpdatedAt        time.Time               `json:"updated_at"`
+	Workdir          string                  `json:"workdir,omitempty"`
+	Messages         []providertypes.Message `json:"messages"`
+	TokenInputTotal  int                     `json:"token_input_total,omitempty"`
+	TokenOutputTotal int                     `json:"token_output_total,omitempty"`
 }
 
 // Summary 表示会话列表视图所需的轻量摘要信息。
@@ -56,15 +56,15 @@ type JSONStore struct {
 }
 
 // NewJSONStore 创建 JSONStore，实际会话目录为 {baseDir}/sessions。
-func NewJSONStore(baseDir string) *JSONStore {
+func NewJSONStore(baseDir string, workspaceRoot string) *JSONStore {
 	return &JSONStore{
-		baseDir: filepath.Join(baseDir, sessionsDirName),
+		baseDir: sessionDirectory(baseDir, workspaceRoot),
 	}
 }
 
 // NewStore 返回默认会话存储实现（当前为 JSONStore）。
-func NewStore(baseDir string) *JSONStore {
-	return NewJSONStore(baseDir)
+func NewStore(baseDir string, workspaceRoot string) *JSONStore {
+	return NewJSONStore(baseDir, workspaceRoot)
 }
 
 // Save 持久化会话到 JSON 文件，采用临时文件 + 原子替换策略。
