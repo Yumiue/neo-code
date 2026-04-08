@@ -271,6 +271,9 @@ func TestDefaultRegisterMCPStdioServerRefreshFailure(t *testing.T) {
 	if !strings.Contains(strings.ToLower(err.Error()), "list tools failed") {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if snapshots := registry.Snapshot(); len(snapshots) != 0 {
+		t.Fatalf("expected failed registration to rollback server, got %+v", snapshots)
+	}
 }
 
 func TestBuildToolRegistryIncludesMCPFromConfig(t *testing.T) {
@@ -432,6 +435,53 @@ func TestBuildMCPRegistryRegisterError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "register failed") {
 		t.Fatalf("expected wrapped register error, got %v", err)
 	}
+}
+
+func TestBuildMCPRegistryRollbackRegisteredServersOnFailure(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default().Clone()
+	cfg.Workdir = t.TempDir()
+	cfg.Tools.MCP.Servers = []config.MCPServerConfig{
+		{ID: "docs", Enabled: true, Source: "stdio"},
+		{ID: "search", Enabled: true, Source: "stdio"},
+	}
+
+	closedByServer := map[string]*bool{
+		"docs":   new(bool),
+		"search": new(bool),
+	}
+
+	originalRegister := registerMCPStdioServer
+	t.Cleanup(func() { registerMCPStdioServer = originalRegister })
+	registerMCPStdioServer = func(registry *mcp.Registry, cfg config.Config, server config.MCPServerConfig) error {
+		client := &closeableStubMCPServerClient{closed: closedByServer[strings.TrimSpace(server.ID)]}
+		if err := registry.RegisterServer(server.ID, "stdio", server.Version, client); err != nil {
+			return err
+		}
+		if strings.EqualFold(strings.TrimSpace(server.ID), "search") {
+			return errors.New("search register failed")
+		}
+		return nil
+	}
+
+	registry, err := buildMCPRegistry(cfg)
+	if err == nil || !strings.Contains(err.Error(), "search register failed") {
+		t.Fatalf("expected wrapped register error, got %v", err)
+	}
+	if registry != nil {
+		t.Fatalf("expected nil registry on build failure")
+	}
+	if !*closedByServer["docs"] || !*closedByServer["search"] {
+		t.Fatalf("expected rollback to close all registered servers, got %+v", closedByServer)
+	}
+}
+
+func TestRollbackMCPServersBoundaries(t *testing.T) {
+	t.Parallel()
+
+	rollbackMCPServers(nil, []string{"docs"})
+	rollbackMCPServers(mcp.NewRegistry(), nil)
 }
 
 func TestInitialMCPRefreshTimeoutAndDurationConversion(t *testing.T) {
@@ -611,6 +661,29 @@ func (s *stubMCPServerClient) CallTool(ctx context.Context, toolName string, arg
 }
 
 func (s *stubMCPServerClient) HealthCheck(ctx context.Context) error {
+	return nil
+}
+
+type closeableStubMCPServerClient struct {
+	closed *bool
+}
+
+func (s *closeableStubMCPServerClient) ListTools(ctx context.Context) ([]mcp.ToolDescriptor, error) {
+	return nil, nil
+}
+
+func (s *closeableStubMCPServerClient) CallTool(ctx context.Context, toolName string, arguments []byte) (mcp.CallResult, error) {
+	return mcp.CallResult{}, nil
+}
+
+func (s *closeableStubMCPServerClient) HealthCheck(ctx context.Context) error {
+	return nil
+}
+
+func (s *closeableStubMCPServerClient) Close() error {
+	if s.closed != nil {
+		*s.closed = true
+	}
 	return nil
 }
 

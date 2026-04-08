@@ -173,6 +173,13 @@ func (r *Registry) Execute(ctx context.Context, input ToolCallInput) (ToolResult
 		result = ApplyOutputLimit(result, DefaultOutputLimitBytes)
 		return result, callErr
 	}
+	if result.IsError {
+		if strings.TrimSpace(result.Content) == "" {
+			result.Content = FormatError(result.Name, "mcp tool returned isError=true", "")
+		}
+		result = ApplyOutputLimit(result, DefaultOutputLimitBytes)
+		return result, errors.New("mcp: tool returned error result")
+	}
 	if result.Content == "" {
 		result.Content = "ok"
 	}

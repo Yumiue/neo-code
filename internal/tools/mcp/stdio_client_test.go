@@ -355,9 +355,19 @@ func TestDecodeCallResultVariants(t *testing.T) {
 		t.Fatalf("unexpected list content decode: %+v", result)
 	}
 
+	result = decodeCallResult(json.RawMessage(`{"content":[{"type":"resource_link","uri":"https://example.com"},{"type":"image","mimeType":"image/png"}]}`))
+	if !strings.Contains(result.Content, `"type":"resource_link"`) || !strings.Contains(result.Content, `"type":"image"`) {
+		t.Fatalf("expected non-text items to be preserved, got %q", result.Content)
+	}
+
 	result = decodeCallResult(json.RawMessage(`{"content":{"nested":"x"}}`))
-	if result.Content == "" {
-		t.Fatalf("expected fallback string content")
+	if !strings.Contains(result.Content, `"nested":"x"`) {
+		t.Fatalf("expected structured map content, got %q", result.Content)
+	}
+
+	result = decodeCallResult(json.RawMessage(`{"content":[],"isError":true}`))
+	if !result.IsError || strings.Contains(strings.ToLower(result.Content), "ok") {
+		t.Fatalf("expected non-ok error fallback content, got %+v", result)
 	}
 
 	result = decodeCallResult(json.RawMessage(`not-json`))
@@ -366,6 +376,44 @@ func TestDecodeCallResultVariants(t *testing.T) {
 	}
 	if _, ok := result.Metadata["raw_result"]; !ok {
 		t.Fatalf("expected raw_result metadata")
+	}
+}
+
+func TestDecodeCallContentItemVariants(t *testing.T) {
+	t.Parallel()
+
+	if got := decodeCallContentItem(nil); got != "" {
+		t.Fatalf("expected empty for nil, got %q", got)
+	}
+	if got := decodeCallContentItem(" text "); got != "text" {
+		t.Fatalf("expected trimmed text, got %q", got)
+	}
+	if got := decodeCallContentItem(map[string]any{"text": " hello "}); got != "hello" {
+		t.Fatalf("expected text extraction, got %q", got)
+	}
+	if got := decodeCallContentItem(map[string]any{"type": "resource_link", "uri": "https://example.com"}); !strings.Contains(got, `"type":"resource_link"`) {
+		t.Fatalf("expected json fallback for object item, got %q", got)
+	}
+	if got := decodeCallContentItem(123); got != "123" {
+		t.Fatalf("expected scalar json fallback, got %q", got)
+	}
+	if got := decodeCallContentItem(map[string]any{"bad": func() {}}); !strings.Contains(got, "bad") {
+		t.Fatalf("expected fmt fallback for non-marshalable map, got %q", got)
+	}
+	if got := decodeCallContentItem(func() {}); !strings.Contains(got, "0x") {
+		t.Fatalf("expected fmt fallback for non-marshalable scalar, got %q", got)
+	}
+}
+
+func TestDecodeCallResultContentFallbackOK(t *testing.T) {
+	t.Parallel()
+
+	result := decodeCallResult(json.RawMessage(`{"content":[]}`))
+	if result.IsError {
+		t.Fatalf("expected non-error result")
+	}
+	if result.Content != "ok" {
+		t.Fatalf("expected ok fallback content, got %q", result.Content)
 	}
 }
 

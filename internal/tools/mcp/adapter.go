@@ -132,10 +132,12 @@ func ensureObjectSchema(schema map[string]any) map[string]any {
 		}
 	}
 
-	if strings.TrimSpace(fmt.Sprintf("%v", cloned["type"])) == "" {
+	if !strings.EqualFold(strings.TrimSpace(fmt.Sprintf("%v", cloned["type"])), "object") {
 		cloned["type"] = "object"
+		cloned["properties"] = map[string]any{}
+		return cloned
 	}
-	if _, ok := cloned["properties"]; !ok {
+	if _, ok := cloned["properties"].(map[string]any); !ok {
 		cloned["properties"] = map[string]any{}
 	}
 	return cloned

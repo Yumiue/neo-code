@@ -413,6 +413,78 @@ func TestRegistryExecuteMCPCallErrorDoesNotReturnOK(t *testing.T) {
 	}
 }
 
+func TestRegistryExecuteMCPIsErrorResultDoesNotFallbackToOK(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	mcpRegistry := mcp.NewRegistry()
+	if err := mcpRegistry.RegisterServer("docs", "stdio", "v1", &stubMCPClient{
+		tools: []mcp.ToolDescriptor{
+			{Name: "search", Description: "search docs", InputSchema: map[string]any{"type": "object"}},
+		},
+		callResult: mcp.CallResult{
+			Content: "",
+			IsError: true,
+		},
+	}); err != nil {
+		t.Fatalf("register mcp server: %v", err)
+	}
+	if err := mcpRegistry.RefreshServerTools(context.Background(), "docs"); err != nil {
+		t.Fatalf("refresh mcp tools: %v", err)
+	}
+	registry.SetMCPRegistry(mcpRegistry)
+
+	result, err := registry.Execute(context.Background(), ToolCallInput{
+		ID:   "mcp-call-iserror",
+		Name: "mcp.docs.search",
+	})
+	if err == nil {
+		t.Fatalf("expected mcp isError to return error")
+	}
+	if !result.IsError {
+		t.Fatalf("expected IsError true")
+	}
+	if strings.EqualFold(strings.TrimSpace(result.Content), "ok") || strings.TrimSpace(result.Content) == "" {
+		t.Fatalf("expected non-ok error content, got %q", result.Content)
+	}
+}
+
+func TestRegistryExecuteMCPIsErrorWithContentKeepsContent(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	mcpRegistry := mcp.NewRegistry()
+	if err := mcpRegistry.RegisterServer("docs", "stdio", "v1", &stubMCPClient{
+		tools: []mcp.ToolDescriptor{
+			{Name: "search", Description: "search docs", InputSchema: map[string]any{"type": "object"}},
+		},
+		callResult: mcp.CallResult{
+			Content: "explicit mcp error",
+			IsError: true,
+		},
+	}); err != nil {
+		t.Fatalf("register mcp server: %v", err)
+	}
+	if err := mcpRegistry.RefreshServerTools(context.Background(), "docs"); err != nil {
+		t.Fatalf("refresh mcp tools: %v", err)
+	}
+	registry.SetMCPRegistry(mcpRegistry)
+
+	result, err := registry.Execute(context.Background(), ToolCallInput{
+		ID:   "mcp-call-iserror-content",
+		Name: "mcp.docs.search",
+	})
+	if err == nil {
+		t.Fatalf("expected mcp isError to return error")
+	}
+	if !result.IsError {
+		t.Fatalf("expected IsError true")
+	}
+	if result.Content != "explicit mcp error" {
+		t.Fatalf("expected explicit error content preserved, got %q", result.Content)
+	}
+}
+
 func TestRegistrySupportsMCPToolAndHelpers(t *testing.T) {
 	t.Parallel()
 

@@ -55,6 +55,11 @@ type ServerClient interface {
 	HealthCheck(ctx context.Context) error
 }
 
+// closeableServerClient 描述支持主动关闭资源的 MCP client 扩展能力。
+type closeableServerClient interface {
+	Close() error
+}
+
 type serverEntry struct {
 	snapshot ServerSnapshot
 	client   ServerClient
@@ -116,11 +121,14 @@ func (r *Registry) UnregisterServer(serverID string) bool {
 	}
 
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, exists := r.servers[normalizedID]; !exists {
+	entry, exists := r.servers[normalizedID]
+	if !exists {
+		r.mu.Unlock()
 		return false
 	}
 	delete(r.servers, normalizedID)
+	r.mu.Unlock()
+	closeServerClient(entry.client)
 	return true
 }
 
@@ -336,4 +344,16 @@ func cloneAny(value any) any {
 	default:
 		return value
 	}
+}
+
+// closeServerClient 在 server 注销时尽力释放 client 持有的底层资源。
+func closeServerClient(client ServerClient) {
+	if client == nil {
+		return
+	}
+	closeableClient, ok := client.(closeableServerClient)
+	if !ok {
+		return
+	}
+	_ = closeableClient.Close()
 }
