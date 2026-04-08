@@ -1057,3 +1057,143 @@ func restoreEnv(t *testing.T, key string) {
 		_ = os.Setenv(key, value)
 	})
 }
+
+func TestAutoCompactConfigDefaults(t *testing.T) {
+	t.Parallel()
+
+	cfg := Default()
+
+	if cfg.Context.AutoCompact.InputTokenThreshold != DefaultAutoCompactInputTokenThreshold {
+		t.Fatalf("expected input_token_threshold=%d, got %d",
+			DefaultAutoCompactInputTokenThreshold, cfg.Context.AutoCompact.InputTokenThreshold)
+	}
+
+	if cfg.Context.AutoCompact.Enabled != false {
+		t.Fatalf("expected enabled=false, got %v", cfg.Context.AutoCompact.Enabled)
+	}
+}
+
+func TestAutoCompactConfigApplyDefaults(t *testing.T) {
+	t.Parallel()
+
+	cfg := AutoCompactConfig{}
+	defaults := AutoCompactConfig{
+		InputTokenThreshold: 50000,
+	}
+
+	cfg.ApplyDefaults(defaults)
+
+	if cfg.InputTokenThreshold != 50000 {
+		t.Fatalf("expected threshold=50000, got %d", cfg.InputTokenThreshold)
+	}
+}
+
+func TestAutoCompactConfigApplyDefaultsPreservesExplicit(t *testing.T) {
+	t.Parallel()
+
+	cfg := AutoCompactConfig{
+		InputTokenThreshold: 200000,
+	}
+	defaults := AutoCompactConfig{
+		InputTokenThreshold: 50000,
+	}
+
+	cfg.ApplyDefaults(defaults)
+
+	if cfg.InputTokenThreshold != 200000 {
+		t.Fatalf("expected explicit threshold=200000 to be preserved, got %d", cfg.InputTokenThreshold)
+	}
+}
+
+func TestAutoCompactConfigValidateEnabledWithoutThreshold(t *testing.T) {
+	t.Parallel()
+
+	cfg := AutoCompactConfig{
+		Enabled:             true,
+		InputTokenThreshold: 0,
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatalf("expected validation error, got nil")
+	}
+	if !strings.Contains(err.Error(), "input_token_threshold") {
+		t.Fatalf("expected error about input_token_threshold, got %v", err)
+	}
+}
+
+func TestAutoCompactConfigValidateDisabledWithoutThreshold(t *testing.T) {
+	t.Parallel()
+
+	cfg := AutoCompactConfig{
+		Enabled:             false,
+		InputTokenThreshold: 0,
+	}
+
+	err := cfg.Validate()
+	if err != nil {
+		t.Fatalf("expected no error for disabled auto compact, got %v", err)
+	}
+}
+
+func TestAutoCompactConfigValidateEnabledWithThreshold(t *testing.T) {
+	t.Parallel()
+
+	cfg := AutoCompactConfig{
+		Enabled:             true,
+		InputTokenThreshold: 50000,
+	}
+
+	err := cfg.Validate()
+	if err != nil {
+		t.Fatalf("expected validation to pass, got %v", err)
+	}
+}
+
+func TestAutoCompactConfigClone(t *testing.T) {
+	t.Parallel()
+
+	cfg := AutoCompactConfig{
+		Enabled:             true,
+		InputTokenThreshold: 75000,
+	}
+
+	cloned := cfg.Clone()
+
+	if cfg.Enabled != cloned.Enabled {
+		t.Fatalf("expected enabled=%v to be cloned, got %v", cfg.Enabled, cloned.Enabled)
+	}
+	if cfg.InputTokenThreshold != cloned.InputTokenThreshold {
+		t.Fatalf("expected threshold=%d to be cloned, got %d",
+			cfg.InputTokenThreshold, cloned.InputTokenThreshold)
+	}
+
+	cloned.InputTokenThreshold = 100000
+	if cfg.InputTokenThreshold == cloned.InputTokenThreshold {
+		t.Fatalf("clone should be independent from source")
+	}
+}
+
+func TestAutoCompactConfigContextConfigValidate(t *testing.T) {
+	t.Parallel()
+
+	ctx := ContextConfig{
+		AutoCompact: AutoCompactConfig{
+			Enabled:             true,
+			InputTokenThreshold: 0,
+		},
+		Compact: CompactConfig{
+			ManualStrategy:           CompactManualStrategyKeepRecent,
+			ManualKeepRecentMessages: 10,
+			MaxSummaryChars:          1200,
+		},
+	}
+
+	err := ctx.Validate()
+	if err == nil {
+		t.Fatalf("expected validation error, got nil")
+	}
+	if !strings.Contains(err.Error(), "auto_compact") {
+		t.Fatalf("expected error to contain 'auto_compact', got %v", err)
+	}
+}

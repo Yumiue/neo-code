@@ -3037,3 +3037,183 @@ func TestCallProviderWithRetryReturnsCombinedForwardError(t *testing.T) {
 		t.Fatalf("expected combined forward/provider error, got %v", err)
 	}
 }
+
+func TestRestoreSessionTokens(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{
+		events: make(chan RuntimeEvent, 128),
+	}
+	session := agentsession.Session{
+		TokenInputTotal:  500,
+		TokenOutputTotal: 200,
+	}
+
+	service.restoreSessionTokens(session)
+
+	if service.sessionInputTokens != 500 {
+		t.Fatalf("expected sessionInputTokens == 500, got %d", service.sessionInputTokens)
+	}
+	if service.sessionOutputTokens != 200 {
+		t.Fatalf("expected sessionOutputTokens == 200, got %d", service.sessionOutputTokens)
+	}
+}
+
+func TestRestoreSessionTokensNewSession(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{
+		events: make(chan RuntimeEvent, 128),
+	}
+	session := agentsession.Session{
+		TokenInputTotal:  0,
+		TokenOutputTotal: 0,
+	}
+
+	service.restoreSessionTokens(session)
+
+	if service.sessionInputTokens != 0 {
+		t.Fatalf("expected sessionInputTokens == 0, got %d", service.sessionInputTokens)
+	}
+	if service.sessionOutputTokens != 0 {
+		t.Fatalf("expected sessionOutputTokens == 0, got %d", service.sessionOutputTokens)
+	}
+}
+
+func TestAutoCompactThresholdEnabled(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{
+		events: make(chan RuntimeEvent, 128),
+	}
+	cfg := config.Config{
+		Context: config.ContextConfig{
+			AutoCompact: config.AutoCompactConfig{
+				Enabled:            true,
+				InputTokenThreshold: 50000,
+			},
+		},
+	}
+
+	threshold := service.autoCompactThreshold(cfg)
+	if threshold != 50000 {
+		t.Fatalf("expected threshold == 50000, got %d", threshold)
+	}
+}
+
+func TestAutoCompactThresholdDisabled(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{
+		events: make(chan RuntimeEvent, 128),
+	}
+	cfg := config.Config{
+		Context: config.ContextConfig{
+			AutoCompact: config.AutoCompactConfig{
+				Enabled:            false,
+				InputTokenThreshold: 50000,
+			},
+		},
+	}
+
+	threshold := service.autoCompactThreshold(cfg)
+	if threshold != 0 {
+		t.Fatalf("expected threshold == 0, got %d", threshold)
+	}
+}
+
+func TestAutoCompactThresholdZeroValue(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{
+		events: make(chan RuntimeEvent, 128),
+	}
+	cfg := config.Config{
+		Context: config.ContextConfig{
+			AutoCompact: config.AutoCompactConfig{
+				Enabled:            true,
+				InputTokenThreshold: 0,
+			},
+		},
+	}
+
+	threshold := service.autoCompactThreshold(cfg)
+	if threshold != 0 {
+		t.Fatalf("expected threshold == 0, got %d", threshold)
+	}
+}
+
+func TestTokenUsageRecordedOnMessageDone(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{
+		events:           make(chan RuntimeEvent, 128),
+		sessionInputTokens:  0,
+		sessionOutputTokens: 0,
+	}
+
+	events := collectRuntimeEvents(service.Events())
+
+	// Create a MessageDone stream event with token usage
+	messageDoneEvent := providertypes.NewMessageDoneStreamEvent("stop", &providertypes.Usage{
+		InputTokens:  100,
+		OutputTokens: 50,
+	})
+
+	// Handle the event with an onMessageDone callback that mimics forwardProviderEvents
+	err := handleProviderStreamEvent(
+		messageDoneEvent,
+		nil,
+		nil,
+		nil,
+		func(payload providertypes.MessageDonePayload) {
+			if payload.Usage != nil {
+				service.sessionInputTokens += payload.Usage.InputTokens
+				service.sessionOutputTokens += payload.Usage.OutputTokens
+				service.emit(context.Background(), EventTokenUsage, "test-run-id", "test-session-id", TokenUsagePayload{
+					InputTokens:        payload.Usage.InputTokens,
+					OutputTokens:       payload.Usage.OutputTokens,
+					SessionInputTokens:  service.sessionInputTokens,
+					SessionOutputTokens: service.sessionOutputTokens,
+				})
+			}
+		},
+	)
+	if err != nil {
+		t.Fatalf("handleProviderStreamEvent error = %v", err)
+	}
+
+	// Verify the service counters are updated
+	if service.sessionInputTokens != 100 {
+		t.Fatalf("expected sessionInputTokens == 100, got %d", service.sessionInputTokens)
+	}
+	if service.sessionOutputTokens != 50 {
+		t.Fatalf("expected sessionOutputTokens == 50, got %d", service.sessionOutputTokens)
+	}
+
+	// Verify EventTokenUsage was emitted with correct payload
+	events = collectRuntimeEvents(service.Events())
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Type != EventTokenUsage {
+		t.Fatalf("expected EventTokenUsage, got %s", events[0].Type)
+	}
+
+	tokenUsagePayload, ok := events[0].Payload.(TokenUsagePayload)
+	if !ok {
+		t.Fatalf("expected TokenUsagePayload, got %T", events[0].Payload)
+	}
+	if tokenUsagePayload.InputTokens != 100 {
+		t.Fatalf("expected InputTokens == 100, got %d", tokenUsagePayload.InputTokens)
+	}
+	if tokenUsagePayload.OutputTokens != 50 {
+		t.Fatalf("expected OutputTokens == 50, got %d", tokenUsagePayload.OutputTokens)
+	}
+	if tokenUsagePayload.SessionInputTokens != 100 {
+		t.Fatalf("expected SessionInputTokens == 100, got %d", tokenUsagePayload.SessionInputTokens)
+	}
+	if tokenUsagePayload.SessionOutputTokens != 50 {
+		t.Fatalf("expected SessionOutputTokens == 50, got %d", tokenUsagePayload.SessionOutputTokens)
+	}
+}
