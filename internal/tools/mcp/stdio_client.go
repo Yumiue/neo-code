@@ -799,41 +799,21 @@ func decodeCallResult(raw json.RawMessage) CallResult {
 		}
 	}
 
-	content := ""
-	switch typed := payload["content"].(type) {
-	case string:
-		content = strings.TrimSpace(typed)
-	case []any:
-		lines := make([]string, 0, len(typed))
-		for _, item := range typed {
-			switch value := item.(type) {
-			case map[string]any:
-				text, _ := value["text"].(string)
-				if strings.TrimSpace(text) != "" {
-					lines = append(lines, strings.TrimSpace(text))
-				}
-			case string:
-				if strings.TrimSpace(value) != "" {
-					lines = append(lines, strings.TrimSpace(value))
-				}
-			}
-		}
-		content = strings.Join(lines, "\n")
-	default:
-		if typed != nil {
-			content = strings.TrimSpace(fmt.Sprintf("%v", typed))
-		}
-	}
-	if content == "" {
-		content = "ok"
-	}
-
 	isError := false
 	if value, ok := payload["isError"].(bool); ok {
 		isError = value
 	}
 	if value, ok := payload["is_error"].(bool); ok {
 		isError = isError || value
+	}
+
+	content := decodeCallContent(payload["content"])
+	if content == "" {
+		if isError {
+			content = "mcp tool returned empty error content"
+		} else {
+			content = "ok"
+		}
 	}
 
 	metadata := map[string]any{}
@@ -849,5 +829,49 @@ func decodeCallResult(raw json.RawMessage) CallResult {
 		Content:  content,
 		IsError:  isError,
 		Metadata: metadata,
+	}
+}
+
+// decodeCallContent 将 MCP tools/call 的 content 字段归一为可回灌文本，避免结构化内容丢失。
+func decodeCallContent(content any) string {
+	switch typed := content.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case []any:
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			formatted := decodeCallContentItem(item)
+			if formatted != "" {
+				parts = append(parts, formatted)
+			}
+		}
+		return strings.Join(parts, "\n")
+	default:
+		return decodeCallContentItem(typed)
+	}
+}
+
+// decodeCallContentItem 对单个 MCP content item 做兜底格式化，保留非文本对象信息。
+func decodeCallContentItem(item any) string {
+	switch typed := item.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(typed)
+	case map[string]any:
+		if text, ok := typed["text"].(string); ok && strings.TrimSpace(text) != "" {
+			return strings.TrimSpace(text)
+		}
+		raw, err := json.Marshal(typed)
+		if err != nil {
+			return strings.TrimSpace(fmt.Sprintf("%v", typed))
+		}
+		return strings.TrimSpace(string(raw))
+	default:
+		raw, err := json.Marshal(typed)
+		if err != nil {
+			return strings.TrimSpace(fmt.Sprintf("%v", typed))
+		}
+		return strings.TrimSpace(string(raw))
 	}
 }

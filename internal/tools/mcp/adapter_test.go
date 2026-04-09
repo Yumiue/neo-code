@@ -227,3 +227,61 @@ func TestAdapterEnsureObjectSchemaDefaults(t *testing.T) {
 		t.Fatalf("expected properties object, got %+v", schema["properties"])
 	}
 }
+
+func TestAdapterEnsureObjectSchemaNormalizesInvalidType(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	adapter, err := NewAdapter(registry, "docs", ToolDescriptor{
+		Name: "search",
+		InputSchema: map[string]any{
+			"type": "array",
+			"items": map[string]any{
+				"type": "string",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewAdapter() error = %v", err)
+	}
+	schema := adapter.Schema()
+	if schema["type"] != "object" {
+		t.Fatalf("expected normalized object type, got %v", schema["type"])
+	}
+	if _, ok := schema["properties"].(map[string]any); !ok {
+		t.Fatalf("expected normalized properties object, got %+v", schema["properties"])
+	}
+}
+
+func TestAdapterEnsureObjectSchemaKeepsPropertiesWhenTypeMissing(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	adapter, err := NewAdapter(registry, "docs", ToolDescriptor{
+		Name: "search",
+		InputSchema: map[string]any{
+			"properties": map[string]any{
+				"q": map[string]any{"type": "string"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewAdapter() error = %v", err)
+	}
+
+	schema := adapter.Schema()
+	if schema["type"] != "object" {
+		t.Fatalf("expected type object, got %v", schema["type"])
+	}
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected properties object, got %+v", schema["properties"])
+	}
+	querySchema, ok := properties["q"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected q schema map, got %+v", properties["q"])
+	}
+	if querySchema["type"] != "string" {
+		t.Fatalf("expected q type string, got %v", querySchema["type"])
+	}
+}

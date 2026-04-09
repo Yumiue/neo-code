@@ -19,6 +19,16 @@ type stubServerClient struct {
 	lastArguments []byte
 }
 
+type closableStubServerClient struct {
+	stubServerClient
+	closed bool
+}
+
+func (s *closableStubServerClient) Close() error {
+	s.closed = true
+	return nil
+}
+
 func (s *stubServerClient) ListTools(ctx context.Context) ([]ToolDescriptor, error) {
 	if s.listErr != nil {
 		return nil, s.listErr
@@ -226,6 +236,35 @@ func TestRegistryRegisterAndUnregisterBoundaries(t *testing.T) {
 	}
 	if registry.UnregisterServer("docs") {
 		t.Fatalf("expected unregister miss to be false")
+	}
+}
+
+func TestRegistryUnregisterServerClosesClient(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	client := &closableStubServerClient{}
+	if err := registry.RegisterServer("docs", "stdio", "v1", client); err != nil {
+		t.Fatalf("register server: %v", err)
+	}
+	if !registry.UnregisterServer("docs") {
+		t.Fatalf("expected unregister success")
+	}
+	if !client.closed {
+		t.Fatalf("expected client to be closed on unregister")
+	}
+}
+
+func TestCloseServerClientBoundaries(t *testing.T) {
+	t.Parallel()
+
+	closeServerClient(nil)
+	closeServerClient(&stubServerClient{})
+
+	client := &closableStubServerClient{}
+	closeServerClient(client)
+	if !client.closed {
+		t.Fatalf("expected closeable client to be closed")
 	}
 }
 

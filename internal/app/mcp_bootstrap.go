@@ -23,6 +23,7 @@ func buildMCPRegistry(cfg config.Config) (*mcp.Registry, error) {
 
 	registry := mcp.NewRegistry()
 	enabledCount := 0
+	registeredServerIDs := make([]string, 0, len(cfg.Tools.MCP.Servers))
 	for index := range cfg.Tools.MCP.Servers {
 		server := cfg.Tools.MCP.Servers[index]
 		if !server.Enabled {
@@ -33,9 +34,12 @@ func buildMCPRegistry(cfg config.Config) (*mcp.Registry, error) {
 		switch strings.ToLower(strings.TrimSpace(server.Source)) {
 		case "", "stdio":
 			if err := registerMCPStdioServer(registry, cfg, server); err != nil {
+				rollbackMCPServers(registry, append(registeredServerIDs, strings.TrimSpace(server.ID)))
 				return nil, fmt.Errorf("app: register mcp server %q: %w", strings.TrimSpace(server.ID), err)
 			}
+			registeredServerIDs = append(registeredServerIDs, strings.TrimSpace(server.ID))
 		default:
+			rollbackMCPServers(registry, registeredServerIDs)
 			return nil, fmt.Errorf("app: unsupported mcp source %q", server.Source)
 		}
 	}
@@ -44,6 +48,16 @@ func buildMCPRegistry(cfg config.Config) (*mcp.Registry, error) {
 		return nil, nil
 	}
 	return registry, nil
+}
+
+// rollbackMCPServers 在批量注册失败时回滚已注册 server，避免残留子进程或脏状态。
+func rollbackMCPServers(registry *mcp.Registry, serverIDs []string) {
+	if registry == nil || len(serverIDs) == 0 {
+		return
+	}
+	for index := len(serverIDs) - 1; index >= 0; index-- {
+		_ = registry.UnregisterServer(serverIDs[index])
+	}
 }
 
 // defaultRegisterMCPStdioServer 创建 stdio client 并完成 server 注册与 tools 快照初始化。
@@ -79,6 +93,7 @@ func defaultRegisterMCPStdioServer(registry *mcp.Registry, cfg config.Config, se
 	refreshCtx, cancel := context.WithTimeout(context.Background(), initialMCPRefreshTimeout(cfg))
 	defer cancel()
 	if err := registry.RefreshServerTools(refreshCtx, serverID); err != nil {
+		_ = registry.UnregisterServer(serverID)
 		return err
 	}
 	return nil
