@@ -22,15 +22,13 @@ type Loader struct {
 }
 
 type persistedConfig struct {
-	SelectedProvider     string                 `yaml:"selected_provider"`
-	CurrentModel         string                 `yaml:"current_model"`
-	LegacyDefaultWorkdir *string                `yaml:"default_workdir,omitempty"`
-	LegacyWorkdir        *string                `yaml:"workdir,omitempty"`
-	Shell                string                 `yaml:"shell"`
-	MaxLoops             int                    `yaml:"max_loops,omitempty"`
-	ToolTimeoutSec       int                    `yaml:"tool_timeout_sec,omitempty"`
-	Context              persistedContextConfig `yaml:"context,omitempty"`
-	Tools                ToolsConfig            `yaml:"tools,omitempty"`
+	SelectedProvider string                 `yaml:"selected_provider"`
+	CurrentModel     string                 `yaml:"current_model"`
+	Shell            string                 `yaml:"shell"`
+	MaxLoops         int                    `yaml:"max_loops,omitempty"`
+	ToolTimeoutSec   int                    `yaml:"tool_timeout_sec,omitempty"`
+	Context          persistedContextConfig `yaml:"context,omitempty"`
+	Tools            ToolsConfig            `yaml:"tools,omitempty"`
 }
 
 type persistedContextConfig struct {
@@ -182,16 +180,11 @@ func parseConfigWithContextDefaults(data []byte, contextDefaults ContextConfig) 
 
 func parseCurrentConfig(data []byte, contextDefaults ContextConfig) (*Config, error) {
 	var file persistedConfig
-	if err := yaml.Unmarshal(data, &file); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&file); err != nil {
 		return nil, err
 	}
-	if file.LegacyDefaultWorkdir != nil {
-		return nil, fmt.Errorf("legacy config key %q is no longer supported", "default_workdir")
-	}
-	if file.LegacyWorkdir != nil {
-		return nil, fmt.Errorf("legacy config key %q is no longer supported", "workdir")
-	}
-
 	cfg := &Config{
 		SelectedProvider: strings.TrimSpace(file.SelectedProvider),
 		CurrentModel:     strings.TrimSpace(file.CurrentModel),

@@ -13,10 +13,11 @@ type Builder func(ctx context.Context, cfg RuntimeConfig) (Provider, error)
 type DiscoveryFunc func(ctx context.Context, cfg RuntimeConfig) ([]providertypes.ModelDescriptor, error)
 
 type DriverDefinition struct {
-	Name         string
-	Build        Builder
-	Discover     DiscoveryFunc
-	Capabilities DriverTransportCapabilities
+	Name                    string
+	Build                   Builder
+	Discover                DiscoveryFunc
+	ValidateCatalogIdentity func(identity ProviderIdentity) error
+	Capabilities            DriverTransportCapabilities
 }
 
 type Registry struct {
@@ -80,6 +81,22 @@ func (r *Registry) DriverTransportCapabilities(driverType string) (DriverTranspo
 		return DriverTransportCapabilities{}, err
 	}
 	return driver.Capabilities, nil
+}
+
+// ValidateCatalogIdentity 在读取 catalog 快照或执行默认模型回退前执行无需密钥的静态校验，避免无效配置被误判为可用。
+func (r *Registry) ValidateCatalogIdentity(identity ProviderIdentity) error {
+	if r == nil {
+		return ErrDriverNotFound
+	}
+
+	driver, err := r.driver(identity.Driver)
+	if err != nil {
+		return err
+	}
+	if driver.ValidateCatalogIdentity == nil {
+		return nil
+	}
+	return driver.ValidateCatalogIdentity(identity)
 }
 
 func (r *Registry) driver(driverType string) (DriverDefinition, error) {

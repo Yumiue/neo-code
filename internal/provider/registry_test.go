@@ -200,6 +200,34 @@ func TestRegistryDriverTransportCapabilities(t *testing.T) {
 	}
 }
 
+func TestRegistryValidateCatalogIdentity(t *testing.T) {
+	t.Parallel()
+
+	t.Run("openaicompat rejects unsupported api_style", func(t *testing.T) {
+		t.Parallel()
+
+		registry := newTestRegistry(t)
+		err := registry.ValidateCatalogIdentity(provider.ProviderIdentity{
+			Driver:   "OPENAICOMPAT",
+			BaseURL:  config.OpenAIDefaultBaseURL,
+			APIStyle: "responses",
+		})
+		if !provider.IsDiscoveryConfigError(err) {
+			t.Fatalf("expected discovery config error, got %v", err)
+		}
+	})
+
+	t.Run("missing driver returns typed error", func(t *testing.T) {
+		t.Parallel()
+
+		registry := provider.NewRegistry()
+		err := registry.ValidateCatalogIdentity(provider.ProviderIdentity{Driver: "missing"})
+		if !errors.Is(err, provider.ErrDriverNotFound) {
+			t.Fatalf("expected ErrDriverNotFound, got %v", err)
+		}
+	})
+}
+
 func TestRegistryRegisterErrors(t *testing.T) {
 	t.Parallel()
 

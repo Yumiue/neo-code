@@ -33,7 +33,7 @@ func TestNewService(t *testing.T) {
 func TestListProviderModelsFallsBackToDefaultModelWithoutDiscovery(t *testing.T) {
 	t.Parallel()
 
-	service := NewService("", provider.NewRegistry(), newMemoryStore())
+	service := NewService("", newRegistry(t, openaicompat.DriverName, nil), newMemoryStore())
 	models, err := service.ListProviderModels(context.Background(), openAIProviderSource())
 	if err != nil {
 		t.Fatalf("ListProviderModels() error = %v", err)
@@ -44,9 +44,9 @@ func TestListProviderModelsFallsBackToDefaultModelWithoutDiscovery(t *testing.T)
 }
 
 func TestListProviderModelsCustomProviderDoesNotFallbackWithoutDiscovery(t *testing.T) {
-	t.Parallel()
+	t.Setenv(testAPIKeyEnv, "test-key")
 
-	service := NewService("", provider.NewRegistry(), newMemoryStore())
+	service := NewService("", newRegistry(t, openaicompat.DriverName, nil), newMemoryStore())
 	models, err := service.ListProviderModels(context.Background(), customGatewayProviderSource())
 	if err != nil {
 		t.Fatalf("ListProviderModels() error = %v", err)
