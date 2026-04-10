@@ -20,7 +20,7 @@ import (
 
 type stubProviderService struct {
 	providers []config.ProviderCatalogItem
-	models    []config.ModelDescriptor
+	models    []providertypes.ModelDescriptor
 }
 
 func (s stubProviderService) ListProviders(ctx context.Context) ([]config.ProviderCatalogItem, error) {
@@ -35,11 +35,11 @@ func (s stubProviderService) SelectProvider(ctx context.Context, providerID stri
 	return config.ProviderSelection{ProviderID: providerID, ModelID: modelID}, nil
 }
 
-func (s stubProviderService) ListModels(ctx context.Context) ([]config.ModelDescriptor, error) {
+func (s stubProviderService) ListModels(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
 	return s.models, nil
 }
 
-func (s stubProviderService) ListModelsSnapshot(ctx context.Context) ([]config.ModelDescriptor, error) {
+func (s stubProviderService) ListModelsSnapshot(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
 	return s.models, nil
 }
 
@@ -112,20 +112,19 @@ func newTestApp(t *testing.T) (App, *stubRuntime) {
 	}
 
 	var providers []config.ProviderCatalogItem
-	var models []config.ModelDescriptor
+	var models []providertypes.ModelDescriptor
 	if len(cfg.Providers) > 0 {
 		provider := cfg.Providers[0]
 		providers = []config.ProviderCatalogItem{
 			{
-				ID:          provider.Name,
-				Name:        provider.Name,
-				Description: "test provider",
-				Models: []config.ModelDescriptor{
+				ID:   provider.Name,
+				Name: provider.Name,
+				Models: []providertypes.ModelDescriptor{
 					{ID: provider.Model, Name: provider.Model},
 				},
 			},
 		}
-		models = []config.ModelDescriptor{{ID: provider.Model, Name: provider.Model}}
+		models = []providertypes.ModelDescriptor{{ID: provider.Model, Name: provider.Model}}
 	}
 
 	runtime := newStubRuntime()
@@ -801,20 +800,19 @@ func TestNewWithBootstrapSuccess(t *testing.T) {
 	}
 
 	var providers []config.ProviderCatalogItem
-	var models []config.ModelDescriptor
+	var models []providertypes.ModelDescriptor
 	if len(cfg.Providers) > 0 {
 		provider := cfg.Providers[0]
 		providers = []config.ProviderCatalogItem{
 			{
-				ID:          provider.Name,
-				Name:        provider.Name,
-				Description: "test provider",
-				Models: []config.ModelDescriptor{
+				ID:   provider.Name,
+				Name: provider.Name,
+				Models: []providertypes.ModelDescriptor{
 					{ID: provider.Model, Name: provider.Model},
 				},
 			},
 		}
-		models = []config.ModelDescriptor{{ID: provider.Model, Name: provider.Model}}
+		models = []providertypes.ModelDescriptor{{ID: provider.Model, Name: provider.Model}}
 	}
 
 	runtime := newStubRuntime()
@@ -875,20 +873,19 @@ func TestNewUsesBootstrap(t *testing.T) {
 	}
 
 	var providers []config.ProviderCatalogItem
-	var models []config.ModelDescriptor
+	var models []providertypes.ModelDescriptor
 	if len(cfg.Providers) > 0 {
 		provider := cfg.Providers[0]
 		providers = []config.ProviderCatalogItem{
 			{
-				ID:          provider.Name,
-				Name:        provider.Name,
-				Description: "test provider",
-				Models: []config.ModelDescriptor{
+				ID:   provider.Name,
+				Name: provider.Name,
+				Models: []providertypes.ModelDescriptor{
 					{ID: provider.Model, Name: provider.Model},
 				},
 			},
 		}
-		models = []config.ModelDescriptor{{ID: provider.Model, Name: provider.Model}}
+		models = []providertypes.ModelDescriptor{{ID: provider.Model, Name: provider.Model}}
 	}
 
 	app, err := New(cfg, manager, newStubRuntime(), stubProviderService{providers: providers, models: models})

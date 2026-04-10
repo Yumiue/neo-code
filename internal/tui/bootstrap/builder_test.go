@@ -240,11 +240,11 @@ func (s noopProviderService) SelectProvider(ctx context.Context, providerID stri
 	return config.ProviderSelection{}, nil
 }
 
-func (s noopProviderService) ListModels(ctx context.Context) ([]config.ModelDescriptor, error) {
+func (s noopProviderService) ListModels(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
 	return nil, nil
 }
 
-func (s noopProviderService) ListModelsSnapshot(ctx context.Context) ([]config.ModelDescriptor, error) {
+func (s noopProviderService) ListModelsSnapshot(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
 	return nil, nil
 }
 

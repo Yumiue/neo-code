@@ -3567,7 +3567,7 @@ func TestServiceRunAutoCompactNoopDoesNotDisableReactiveRetry(t *testing.T) {
 
 	callCount := 0
 	scripted := &scriptedProvider{
-		chatFn: func(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error {
+		chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 			callCount++
 			if callCount == 1 {
 				return &provider.ProviderError{

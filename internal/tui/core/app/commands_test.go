@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 
 	"neo-code/internal/config"
+	providertypes "neo-code/internal/provider/types"
 	tuistatus "neo-code/internal/tui/core/status"
 )
 
@@ -162,11 +163,11 @@ func (s errorProviderService) SelectProvider(ctx context.Context, providerID str
 	return config.ProviderSelection{}, s.err
 }
 
-func (s errorProviderService) ListModels(ctx context.Context) ([]config.ModelDescriptor, error) {
+func (s errorProviderService) ListModels(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
 	return nil, s.err
 }
 
-func (s errorProviderService) ListModelsSnapshot(ctx context.Context) ([]config.ModelDescriptor, error) {
+func (s errorProviderService) ListModelsSnapshot(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
 	return nil, s.err
 }
 
