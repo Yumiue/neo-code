@@ -1063,7 +1063,7 @@ func runtimeEventPermissionRequestHandler(a *App, event agentruntime.RuntimeEven
 		fmt.Sprintf("%s -> %s", fallbackText(payload.ToolName, "tool"), fallbackText(payload.Target, "(empty target)")),
 		false,
 	)
-	a.applyComponentLayout(false)
+	a.refreshPermissionPromptLayout()
 	return false
 }
 
@@ -1084,8 +1084,16 @@ func runtimeEventPermissionResolvedHandler(a *App, event agentruntime.RuntimeEve
 		fmt.Sprintf("%s (%s)", fallbackText(payload.Decision, "unknown"), fallbackText(payload.RememberScope, "once")),
 		false,
 	)
-	a.applyComponentLayout(false)
+	a.refreshPermissionPromptLayout()
 	return false
+}
+
+// refreshPermissionPromptLayout 在布局已初始化时刷新权限面板相关排版。
+func (a *App) refreshPermissionPromptLayout() {
+	if a.width <= 0 || a.height <= 0 {
+		return
+	}
+	a.applyComponentLayout(false)
 }
 
 // runtimeEventCompactDoneHandler 处理 compact 完成事件。

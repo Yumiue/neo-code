@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/textarea"
+
 	agentruntime "neo-code/internal/runtime"
 )
 
@@ -13,6 +15,16 @@ func TestNormalizePermissionPromptSelectionWrap(t *testing.T) {
 	}
 	if got := normalizePermissionPromptSelection(len(permissionPromptOptions)); got != 0 {
 		t.Fatalf("expected overflow index to wrap to 0, got %d", got)
+	}
+}
+
+func TestNormalizePermissionPromptSelectionEmptyOptions(t *testing.T) {
+	original := permissionPromptOptions
+	permissionPromptOptions = nil
+	defer func() { permissionPromptOptions = original }()
+
+	if got := normalizePermissionPromptSelection(99); got != 0 {
+		t.Fatalf("expected empty options to return 0, got %d", got)
 	}
 }
 
@@ -67,6 +79,7 @@ func TestFormatPermissionPromptLines(t *testing.T) {
 
 func TestRenderPermissionPrompt(t *testing.T) {
 	app := App{
+		appComponents: appComponents{input: textarea.New()},
 		appRuntimeState: appRuntimeState{
 			pendingPermission: &permissionPromptState{
 				Request: agentruntime.PermissionRequestPayload{
@@ -81,6 +94,13 @@ func TestRenderPermissionPrompt(t *testing.T) {
 	if !strings.Contains(rendered, "权限审批") {
 		t.Fatalf("expected rendered permission prompt, got %q", rendered)
 	}
+
+	app.pendingPermission = nil
+	app.input.SetValue("plain input")
+	rendered = app.renderPermissionPrompt()
+	if !strings.Contains(rendered, "plain input") {
+		t.Fatalf("expected fallback to input view, got %q", rendered)
+	}
 }
 
 func TestParsePermissionPayloadHelpers(t *testing.T) {
@@ -91,6 +111,13 @@ func TestParsePermissionPayloadHelpers(t *testing.T) {
 	if _, ok := parsePermissionRequestPayload((*agentruntime.PermissionRequestPayload)(nil)); ok {
 		t.Fatalf("expected nil request pointer to fail parsing")
 	}
+	reqPtr := &agentruntime.PermissionRequestPayload{RequestID: "perm-1-ptr"}
+	if got, ok := parsePermissionRequestPayload(reqPtr); !ok || got.RequestID != "perm-1-ptr" {
+		t.Fatalf("unexpected pointer parsePermissionRequestPayload result: %+v ok=%v", got, ok)
+	}
+	if _, ok := parsePermissionRequestPayload("bad"); ok {
+		t.Fatalf("expected unsupported request payload type to fail parsing")
+	}
 
 	resolved := agentruntime.PermissionResolvedPayload{RequestID: "perm-2"}
 	if got, ok := parsePermissionResolvedPayload(resolved); !ok || got.RequestID != "perm-2" {
@@ -98,5 +125,40 @@ func TestParsePermissionPayloadHelpers(t *testing.T) {
 	}
 	if _, ok := parsePermissionResolvedPayload((*agentruntime.PermissionResolvedPayload)(nil)); ok {
 		t.Fatalf("expected nil resolved pointer to fail parsing")
+	}
+	resolvedPtr := &agentruntime.PermissionResolvedPayload{RequestID: "perm-2-ptr"}
+	if got, ok := parsePermissionResolvedPayload(resolvedPtr); !ok || got.RequestID != "perm-2-ptr" {
+		t.Fatalf("unexpected pointer parsePermissionResolvedPayload result: %+v ok=%v", got, ok)
+	}
+	if _, ok := parsePermissionResolvedPayload(123); ok {
+		t.Fatalf("expected unsupported resolved payload type to fail parsing")
+	}
+}
+
+func TestRenderPromptWithPendingPermission(t *testing.T) {
+	input := textarea.New()
+	input.SetValue("normal message")
+
+	app := App{
+		appComponents: appComponents{
+			input: input,
+		},
+		styles: newStyles(),
+		appRuntimeState: appRuntimeState{
+			pendingPermission: &permissionPromptState{
+				Request:  agentruntime.PermissionRequestPayload{ToolName: "bash", Target: "git status"},
+				Selected: 0,
+			},
+		},
+	}
+	rendered := app.renderPrompt(80)
+	if !strings.Contains(rendered, "权限审批") {
+		t.Fatalf("expected permission prompt rendering branch, got %q", rendered)
+	}
+
+	app.pendingPermission = nil
+	rendered = app.renderPrompt(80)
+	if !strings.Contains(rendered, "normal message") {
+		t.Fatalf("expected normal input rendering branch, got %q", rendered)
 	}
 }
