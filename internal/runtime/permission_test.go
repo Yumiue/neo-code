@@ -387,3 +387,60 @@ func TestExecuteToolCallWithPermissionReturnsContextCanceledFromEmitChunk(t *tes
 		t.Fatalf("expected context.Canceled, got %v", execErr)
 	}
 }
+
+func TestExecuteToolCallWithPermissionDoesNotRecheckContextAfterSuccessfulEmit(t *testing.T) {
+	t.Parallel()
+
+	var cancel context.CancelFunc
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{
+		name: "filesystem_read_file",
+		executeFn: func(_ context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
+			if input.EmitChunk == nil {
+				t.Fatalf("expected EmitChunk callback")
+			}
+			go cancel()
+			if err := input.EmitChunk([]byte("stream-chunk")); err != nil {
+				t.Fatalf("expected successful emit, got %v", err)
+			}
+			return tools.ToolResult{Name: input.Name, Content: "ok"}, nil
+		},
+	})
+
+	engine, err := security.NewStaticGateway(security.DecisionAllow, nil)
+	if err != nil {
+		t.Fatalf("new static gateway: %v", err)
+	}
+	toolManager, err := tools.NewManager(registry, engine, nil)
+	if err != nil {
+		t.Fatalf("new tool manager: %v", err)
+	}
+
+	service := NewWithFactory(
+		newRuntimeConfigManager(t),
+		toolManager,
+		newMemoryStore(),
+		&scriptedProviderFactory{provider: &scriptedProvider{}},
+		nil,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	service.events = make(chan RuntimeEvent)
+
+	result, execErr := service.executeToolCallWithPermission(ctx, permissionExecutionInput{
+		RunID:     "run-successful-emit",
+		SessionID: "session-successful-emit",
+		Call: providertypes.ToolCall{
+			ID:        "call-successful-emit",
+			Name:      "filesystem_read_file",
+			Arguments: `{"path":"README.md"}`,
+		},
+		ToolTimeout: time.Second,
+	})
+	if execErr != nil {
+		t.Fatalf("expected nil error after successful emit, got %v", execErr)
+	}
+	if result.Content != "ok" {
+		t.Fatalf("expected successful tool result, got %+v", result)
+	}
+}
