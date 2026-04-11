@@ -31,6 +31,7 @@ type persistedConfig struct {
 	ToolTimeoutSec       int                    `yaml:"tool_timeout_sec,omitempty"`
 	Context              persistedContextConfig `yaml:"context,omitempty"`
 	Tools                ToolsConfig            `yaml:"tools,omitempty"`
+	Memo                 persistedMemoConfig    `yaml:"memo,omitempty"`
 }
 
 type persistedContextConfig struct {
@@ -48,6 +49,12 @@ type persistedCompactConfig struct {
 type persistedAutoCompactConfig struct {
 	Enabled             bool `yaml:"enabled"`
 	InputTokenThreshold int  `yaml:"input_token_threshold,omitempty"`
+}
+
+type persistedMemoConfig struct {
+	Enabled       bool `yaml:"enabled,omitempty"`
+	AutoExtract   bool `yaml:"auto_extract,omitempty"`
+	MaxIndexLines int  `yaml:"max_index_lines,omitempty"`
 }
 
 func NewLoader(baseDir string, defaults *Config) *Loader {
@@ -200,6 +207,7 @@ func parseCurrentConfig(data []byte, contextDefaults ContextConfig) (*Config, er
 		ToolTimeoutSec:   file.ToolTimeoutSec,
 		Context:          fromPersistedContextConfig(file.Context, contextDefaults),
 		Tools:            file.Tools,
+		Memo:             fromPersistedMemoConfig(file.Memo),
 	}
 
 	return cfg, nil
@@ -214,6 +222,7 @@ func marshalPersistedConfig(snapshot Config) ([]byte, error) {
 		ToolTimeoutSec:   snapshot.ToolTimeoutSec,
 		Context:          newPersistedContextConfig(snapshot.Context),
 		Tools:            snapshot.Tools,
+		Memo:             newPersistedMemoConfig(snapshot.Memo),
 	}
 
 	data, err := yaml.Marshal(&file)
@@ -267,4 +276,22 @@ func persistedConfigDiffers(data []byte, cfg Config) (bool, error) {
 		return false, err
 	}
 	return !bytes.Equal(bytes.TrimSpace(data), bytes.TrimSpace(canonical)), nil
+}
+
+// newPersistedMemoConfig 将运行时 memo 配置收敛为 YAML 持久化结构。
+func newPersistedMemoConfig(cfg MemoConfig) persistedMemoConfig {
+	return persistedMemoConfig{
+		Enabled:       cfg.Enabled,
+		AutoExtract:   cfg.AutoExtract,
+		MaxIndexLines: cfg.MaxIndexLines,
+	}
+}
+
+// fromPersistedMemoConfig 将持久化配置恢复为运行时 memo 配置。
+func fromPersistedMemoConfig(file persistedMemoConfig) MemoConfig {
+	return MemoConfig{
+		Enabled:       file.Enabled,
+		AutoExtract:   file.AutoExtract,
+		MaxIndexLines: file.MaxIndexLines,
+	}
 }

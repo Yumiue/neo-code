@@ -121,7 +121,7 @@ func TestDefaultBuilderBuildUsesSpanTrimPolicyWhenTrimPolicyIsUnset(t *testing.T
 
 	builder := &DefaultBuilder{
 		promptSources: []promptSectionSource{
-			stubPromptSectionSource{sections: []promptSection{{title: "Stub", content: "body"}}},
+			stubPromptSectionSource{sections: []promptSection{{Title: "Stub", Content: "body"}}},
 		},
 	}
 
@@ -157,7 +157,7 @@ func TestDefaultBuilderBuildAppliesMicroCompactAfterTrim(t *testing.T) {
 
 	builder := &DefaultBuilder{
 		promptSources: []promptSectionSource{
-			stubPromptSectionSource{sections: []promptSection{{title: "Stub", content: "body"}}},
+			stubPromptSectionSource{sections: []promptSection{{Title: "Stub", Content: "body"}}},
 		},
 	}
 
@@ -211,7 +211,7 @@ func TestDefaultBuilderBuildSkipsMicroCompactWhenDisabled(t *testing.T) {
 
 	builder := &DefaultBuilder{
 		promptSources: []promptSectionSource{
-			stubPromptSectionSource{sections: []promptSection{{title: "Stub", content: "body"}}},
+			stubPromptSectionSource{sections: []promptSection{{Title: "Stub", Content: "body"}}},
 		},
 	}
 
@@ -264,7 +264,7 @@ func TestDefaultBuilderBuildHonorsToolMicroCompactPolicies(t *testing.T) {
 
 	builder := &DefaultBuilder{
 		promptSources: []promptSectionSource{
-			stubPromptSectionSource{sections: []promptSection{{title: "Stub", content: "body"}}},
+			stubPromptSectionSource{sections: []promptSection{{Title: "Stub", Content: "body"}}},
 		},
 		microCompactPolicies: stubMicroCompactPolicySource{
 			"custom_tool": tools.MicroCompactPolicyPreserveHistory,
