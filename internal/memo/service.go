@@ -37,7 +37,8 @@ func (s *Service) Add(ctx context.Context, entry Entry) error {
 	if !IsValidType(entry.Type) {
 		return fmt.Errorf("memo: invalid type %q", entry.Type)
 	}
-	if strings.TrimSpace(entry.Title) == "" {
+	entry.Title = NormalizeTitle(entry.Title)
+	if entry.Title == "" {
 		return fmt.Errorf("memo: title is empty")
 	}
 
@@ -61,39 +62,47 @@ func (s *Service) Add(ctx context.Context, entry Entry) error {
 	if err != nil {
 		return fmt.Errorf("memo: load index: %w", err)
 	}
+	working := cloneIndex(index)
 
 	// 检查是否已存在相同 ID（更新场景）
 	replaced := false
-	for i, existing := range index.Entries {
+	for i, existing := range working.Entries {
 		if existing.ID == entry.ID {
-			index.Entries[i] = entry
+			working.Entries[i] = entry
 			replaced = true
 			break
 		}
 	}
 	if !replaced {
-		index.Entries = append(index.Entries, entry)
+		working.Entries = append(working.Entries, entry)
 	}
-	index.UpdatedAt = now
+	working.UpdatedAt = now
 
 	// 截断索引到最大行数
-	if s.config.MaxIndexLines > 0 && len(index.Entries) > s.config.MaxIndexLines {
-		excess := len(index.Entries) - s.config.MaxIndexLines
-		// 删除最旧的条目对应的 topic 文件
+	var topicsToDelete []string
+	if s.config.MaxIndexLines > 0 && len(working.Entries) > s.config.MaxIndexLines {
+		excess := len(working.Entries) - s.config.MaxIndexLines
+		// 记录最旧条目对应的 topic 文件，待索引写入成功后再删除。
 		for i := 0; i < excess; i++ {
-			if index.Entries[i].TopicFile != "" {
-				_ = s.store.DeleteTopic(ctx, index.Entries[i].TopicFile)
+			topicFile := strings.TrimSpace(working.Entries[i].TopicFile)
+			if topicFile != "" && topicFile != entry.TopicFile {
+				topicsToDelete = append(topicsToDelete, topicFile)
 			}
 		}
-		index.Entries = index.Entries[excess:]
-	}
-
-	if err := s.store.SaveIndex(ctx, index); err != nil {
-		return fmt.Errorf("memo: save index: %w", err)
+		working.Entries = working.Entries[excess:]
 	}
 
 	if err := s.store.SaveTopic(ctx, entry.TopicFile, RenderTopic(&entry)); err != nil {
 		return fmt.Errorf("memo: save topic: %w", err)
+	}
+	if err := s.store.SaveIndex(ctx, working); err != nil {
+		if !replaced {
+			_ = s.store.DeleteTopic(ctx, entry.TopicFile)
+		}
+		return fmt.Errorf("memo: save index: %w", err)
+	}
+	for _, topicFile := range topicsToDelete {
+		_ = s.store.DeleteTopic(ctx, topicFile)
 	}
 
 	s.invalidateCache()
@@ -120,6 +129,7 @@ func (s *Service) Remove(ctx context.Context, keyword string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	working := cloneIndex(index)
 
 	keyword = strings.ToLower(strings.TrimSpace(keyword))
 	if keyword == "" {
@@ -128,10 +138,11 @@ func (s *Service) Remove(ctx context.Context, keyword string) (int, error) {
 
 	var remaining []Entry
 	removed := 0
-	for _, entry := range index.Entries {
+	topicsToDelete := make([]string, 0, len(working.Entries))
+	for _, entry := range working.Entries {
 		if matchesKeyword(entry, keyword) {
-			if entry.TopicFile != "" {
-				_ = s.store.DeleteTopic(ctx, entry.TopicFile)
+			if topicFile := strings.TrimSpace(entry.TopicFile); topicFile != "" {
+				topicsToDelete = append(topicsToDelete, topicFile)
 			}
 			removed++
 		} else {
@@ -143,10 +154,13 @@ func (s *Service) Remove(ctx context.Context, keyword string) (int, error) {
 		return 0, nil
 	}
 
-	index.Entries = remaining
-	index.UpdatedAt = time.Now()
-	if err := s.store.SaveIndex(ctx, index); err != nil {
+	working.Entries = remaining
+	working.UpdatedAt = time.Now()
+	if err := s.store.SaveIndex(ctx, working); err != nil {
 		return 0, fmt.Errorf("memo: save index: %w", err)
+	}
+	for _, topicFile := range topicsToDelete {
+		_ = s.store.DeleteTopic(ctx, topicFile)
 	}
 
 	s.invalidateCache()
@@ -247,3 +261,18 @@ func newEntryID(t Type) string {
 	randHex := hex.EncodeToString(buf)
 	return fmt.Sprintf("%s_%s_%s", t, ts, randHex)
 }
+
+// cloneIndex 复制索引结构，避免在持久化失败时污染内存中的原始数据引用。
+func cloneIndex(index *Index) *Index {
+	if index == nil {
+		return &Index{}
+	}
+	cloned := &Index{
+		Entries:   make([]Entry, len(index.Entries)),
+		UpdatedAt: index.UpdatedAt,
+	}
+	copy(cloned.Entries, index.Entries)
+	return cloned
+}
+
+// sanitizeTitle 将记忆标题归一化为安全的单行文本，避免破坏索引格式和提示词结构。

@@ -620,12 +620,6 @@ func (c *MemoConfig) ApplyDefaults(defaults MemoConfig) {
 	if c == nil {
 		return
 	}
-	if !c.Enabled {
-		c.Enabled = defaults.Enabled
-	}
-	if !c.AutoExtract {
-		c.AutoExtract = defaults.AutoExtract
-	}
 	if c.MaxIndexLines <= 0 {
 		c.MaxIndexLines = defaults.MaxIndexLines
 	}

@@ -12,8 +12,15 @@ import (
 
 // stubStore 实现 Store 接口用于测试。
 type stubStore struct {
-	index *Index
-	err   error
+	index            *Index
+	err              error
+	saveIndexErr     error
+	saveTopicErr     error
+	deleteTopicErr   error
+	deletedTopics    []string
+	saveIndexCalls   int
+	saveTopicCalls   int
+	deleteTopicCalls int
 }
 
 func (s *stubStore) LoadIndex(_ context.Context) (*Index, error) {
@@ -27,14 +34,31 @@ func (s *stubStore) LoadIndex(_ context.Context) (*Index, error) {
 }
 
 func (s *stubStore) SaveIndex(_ context.Context, index *Index) error {
+	s.saveIndexCalls++
+	if s.saveIndexErr != nil {
+		return s.saveIndexErr
+	}
 	s.index = index
 	return nil
 }
 func (s *stubStore) LoadTopic(_ context.Context, _ string) (string, error) {
 	return "", nil
 }
-func (s *stubStore) SaveTopic(_ context.Context, _, _ string) error { return nil }
-func (s *stubStore) DeleteTopic(_ context.Context, _ string) error  { return nil }
+func (s *stubStore) SaveTopic(_ context.Context, _, _ string) error {
+	s.saveTopicCalls++
+	if s.saveTopicErr != nil {
+		return s.saveTopicErr
+	}
+	return nil
+}
+func (s *stubStore) DeleteTopic(_ context.Context, filename string) error {
+	s.deleteTopicCalls++
+	s.deletedTopics = append(s.deletedTopics, filename)
+	if s.deleteTopicErr != nil {
+		return s.deleteTopicErr
+	}
+	return nil
+}
 func (s *stubStore) ListTopics(_ context.Context) ([]string, error) { return nil, nil }
 
 func TestContextSourceEmpty(t *testing.T) {

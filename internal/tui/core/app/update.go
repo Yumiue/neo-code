@@ -1653,7 +1653,7 @@ func (a *App) handleImmediateSlashCommand(input string) (bool, tea.Cmd) {
 	case slashCommandRemember:
 		return true, a.handleRememberCommand(rest)
 	case slashCommandForget:
-		return true, a.handleForcreateCommand(rest)
+		return true, a.handleForgetCommand(rest)
 	default:
 		return false, nil
 	}
@@ -1845,9 +1845,10 @@ func (a *App) handleRememberCommand(text string) tea.Cmd {
 		a.rebuildTranscript()
 		return nil
 	}
+	title := memo.NormalizeTitle(text)
 	entry := memo.Entry{
 		Type:    memo.TypeUser,
-		Title:   text,
+		Title:   title,
 		Content: text,
 		Source:  memo.SourceUserManual,
 	}
@@ -1856,13 +1857,13 @@ func (a *App) handleRememberCommand(text string) tea.Cmd {
 		a.rebuildTranscript()
 		return nil
 	}
-	a.appendInlineMessage(roleSystem, fmt.Sprintf("[System] Memo saved: %s", text))
+	a.appendInlineMessage(roleSystem, fmt.Sprintf("[System] Memo saved: %s", title))
 	a.rebuildTranscript()
 	return nil
 }
 
-// handleForcreateCommand 处理 /forget <keyword> 命令，删除匹配的记忆条目。
-func (a *App) handleForcreateCommand(keyword string) tea.Cmd {
+// handleForgetCommand 处理 /forget <keyword> 命令，删除匹配的记忆条目。
+func (a *App) handleForgetCommand(keyword string) tea.Cmd {
 	keyword = strings.TrimSpace(keyword)
 	if a.memoSvc == nil {
 		a.appendInlineMessage(roleError, "[System] Memo service is not enabled.")

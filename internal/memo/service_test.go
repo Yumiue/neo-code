@@ -59,6 +59,28 @@ func TestServiceAddEmptyTitle(t *testing.T) {
 	}
 }
 
+func TestServiceAddNormalizesTitle(t *testing.T) {
+	store := &stubStore{}
+	svc := NewService(store, nil, config.MemoConfig{}, nil)
+
+	err := svc.Add(context.Background(), Entry{
+		Type:   TypeUser,
+		Title:  "  # heading\n(with suffix)  ",
+		Source: SourceUserManual,
+	})
+	if err != nil {
+		t.Fatalf("Add error: %v", err)
+	}
+
+	entries, _ := svc.List(context.Background())
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+	if entries[0].Title != "# heading {with suffix}" {
+		t.Fatalf("normalized title = %q", entries[0].Title)
+	}
+}
+
 func TestServiceRemove(t *testing.T) {
 	store := &stubStore{
 		index: &Index{
@@ -230,6 +252,59 @@ func TestServiceAddUpdate(t *testing.T) {
 	}
 	if entries[0].Title != "新标题" {
 		t.Errorf("Title = %q, want %q", entries[0].Title, "新标题")
+	}
+}
+
+func TestServiceAddSaveTopicFailureDoesNotPersistIndex(t *testing.T) {
+	store := &stubStore{
+		index: &Index{
+			Entries: []Entry{
+				{ID: "existing", Type: TypeUser, Title: "existing", TopicFile: "existing.md"},
+			},
+		},
+		saveTopicErr: errors.New("save topic failed"),
+	}
+	svc := NewService(store, nil, config.MemoConfig{}, nil)
+
+	err := svc.Add(context.Background(), Entry{
+		ID:        "new-id",
+		Type:      TypeUser,
+		Title:     "new entry",
+		Source:    SourceUserManual,
+		TopicFile: "new.md",
+	})
+	if err == nil || !strings.Contains(err.Error(), "save topic") {
+		t.Fatalf("expected save topic error, got %v", err)
+	}
+	if len(store.index.Entries) != 1 {
+		t.Fatalf("index should stay unchanged on topic failure, entries=%d", len(store.index.Entries))
+	}
+	if store.saveIndexCalls != 0 {
+		t.Fatalf("SaveIndex should not run when SaveTopic fails, calls=%d", store.saveIndexCalls)
+	}
+}
+
+func TestServiceRemoveSaveIndexFailureDoesNotDeleteTopics(t *testing.T) {
+	store := &stubStore{
+		index: &Index{
+			Entries: []Entry{
+				{ID: "1", Type: TypeUser, Title: "match", TopicFile: "a.md"},
+				{ID: "2", Type: TypeUser, Title: "other", TopicFile: "b.md"},
+			},
+		},
+		saveIndexErr: errors.New("save index failed"),
+	}
+	svc := NewService(store, nil, config.MemoConfig{}, nil)
+
+	_, err := svc.Remove(context.Background(), "match")
+	if err == nil || !strings.Contains(err.Error(), "save index") {
+		t.Fatalf("expected save index error, got %v", err)
+	}
+	if store.deleteTopicCalls != 0 {
+		t.Fatalf("DeleteTopic should not run when SaveIndex fails, calls=%d", store.deleteTopicCalls)
+	}
+	if len(store.index.Entries) != 2 {
+		t.Fatalf("index should stay unchanged on save failure, entries=%d", len(store.index.Entries))
 	}
 }
 

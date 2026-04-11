@@ -94,8 +94,12 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 	if cfg.Memo.Enabled {
 		memoStore := memo.NewFileStore(loader.BaseDir(), cfg.Workdir)
 		memoSource := memo.NewContextSource(memoStore)
+		var sourceInvl func()
+		if invalidator, ok := memoSource.(interface{ InvalidateCache() }); ok {
+			sourceInvl = invalidator.InvalidateCache
+		}
 		contextBuilder = agentcontext.NewBuilderWithMemo(toolRegistry, memoSource)
-		memoSvc = memo.NewService(memoStore, nil, cfg.Memo, nil)
+		memoSvc = memo.NewService(memoStore, nil, cfg.Memo, sourceInvl)
 	}
 
 	runtimeSvc := agentruntime.NewWithFactory(

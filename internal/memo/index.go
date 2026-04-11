@@ -133,6 +133,13 @@ func typeDisplayName(t Type) string {
 	}
 }
 
+// NormalizeTitle 将记忆标题标准化为安全单行文本，避免破坏索引格式与解析约定。
+func NormalizeTitle(title string) string {
+	normalized := strings.Join(strings.Fields(title), " ")
+	normalized = strings.NewReplacer("(", "{", ")", "}").Replace(normalized)
+	return strings.TrimSpace(normalized)
+}
+
 // RenderTopic 将 Entry 渲染为 topic 文件格式（含 frontmatter）。
 func RenderTopic(entry *Entry) string {
 	var builder strings.Builder
