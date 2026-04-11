@@ -630,3 +630,38 @@ func TestBuildShouldAutoCompactAboveThreshold(t *testing.T) {
 		t.Fatalf("expected ShouldAutoCompact true when tokens above threshold")
 	}
 }
+
+func TestApplyReadTimeContextProjectionFormatsToolMessagesWithoutMutatingSessionState(t *testing.T) {
+	t.Parallel()
+
+	original := []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "edit this"},
+		{
+			Role:       providertypes.RoleTool,
+			ToolCallID: "call-1",
+			Content:    "ok",
+			ToolMetadata: map[string]string{
+				"tool_name":     "filesystem_edit",
+				"path":          "main.go",
+				"search_length": "12",
+			},
+		},
+	}
+
+	got := applyReadTimeContextProjection(original, CompactOptions{}, nil)
+	if len(got) != len(original) {
+		t.Fatalf("expected projected messages to keep length, got %d", len(got))
+	}
+	if !strings.Contains(got[1].Content, "tool result") || !strings.Contains(got[1].Content, "tool: filesystem_edit") {
+		t.Fatalf("expected tool message to be projected for model, got %q", got[1].Content)
+	}
+	if got[1].ToolMetadata != nil {
+		t.Fatalf("expected projected provider message to clear tool metadata, got %+v", got[1].ToolMetadata)
+	}
+	if original[1].Content != "ok" {
+		t.Fatalf("expected original session message to keep raw content, got %q", original[1].Content)
+	}
+	if original[1].ToolMetadata["path"] != "main.go" {
+		t.Fatalf("expected original tool metadata to remain intact, got %+v", original[1].ToolMetadata)
+	}
+}

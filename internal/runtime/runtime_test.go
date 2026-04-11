@@ -380,7 +380,14 @@ func TestServiceRun(t *testing.T) {
 				name:    "filesystem_edit",
 				content: "tool output",
 			},
-			contextBuilder:      &stubContextBuilder{},
+			contextBuilder: &stubContextBuilder{
+				buildFn: func(ctx context.Context, input agentcontext.BuildInput) (agentcontext.BuildResult, error) {
+					return agentcontext.BuildResult{
+						SystemPrompt: "stub system prompt",
+						Messages:     projectToolMessagesForProviderTest(input.Messages),
+					}, nil
+				},
+			},
 			expectProviderCalls: 2,
 			expectToolCalls:     1,
 			expectMessageRoles:  []string{"user", "assistant", "tool", "assistant"},
@@ -414,6 +421,14 @@ func TestServiceRun(t *testing.T) {
 				}
 				if !foundToolResult {
 					t.Fatalf("expected tool result message in second provider request: %+v", second.Messages)
+				}
+
+				session := onlySession(t, store)
+				if session.Messages[2].Role != providertypes.RoleTool || session.Messages[2].Content != "tool output" {
+					t.Fatalf("expected persisted tool message to keep raw content, got %+v", session.Messages[2])
+				}
+				if session.Messages[2].ToolMetadata["tool_name"] != "filesystem_edit" {
+					t.Fatalf("expected persisted tool metadata to keep tool name, got %+v", session.Messages[2].ToolMetadata)
 				}
 			},
 		},
@@ -1030,10 +1045,9 @@ func TestServiceRunUsesToolManager(t *testing.T) {
 	foundToolMessage := false
 	for _, message := range session.Messages {
 		if message.Role == providertypes.RoleTool &&
-			strings.Contains(message.Content, "tool result") &&
-			strings.Contains(message.Content, "tool: filesystem_edit") &&
-			strings.Contains(message.Content, "meta.path: main.go") &&
-			strings.Contains(message.Content, "content:\ntool manager output") {
+			message.Content == "tool manager output" &&
+			message.ToolMetadata["tool_name"] == "filesystem_edit" &&
+			message.ToolMetadata["path"] == "main.go" {
 			foundToolMessage = true
 			break
 		}
@@ -2706,6 +2720,21 @@ func cloneBuildInput(input agentcontext.BuildInput) agentcontext.BuildInput {
 	cloned := input
 	cloned.Messages = append([]providertypes.Message(nil), input.Messages...)
 	return cloned
+}
+
+// projectToolMessagesForProviderTest 模拟 context 层在 provider 请求前对 tool 消息做的只读投影。
+func projectToolMessagesForProviderTest(messages []providertypes.Message) []providertypes.Message {
+	projected := append([]providertypes.Message(nil), messages...)
+	for i, message := range projected {
+		if message.Role != providertypes.RoleTool || len(message.ToolMetadata) == 0 {
+			continue
+		}
+		next := message
+		next.Content = tools.FormatToolMessageForModel(message)
+		next.ToolMetadata = nil
+		projected[i] = next
+	}
+	return projected
 }
 
 func containsError(err error, target string) bool {

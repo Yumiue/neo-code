@@ -1,17 +1,45 @@
 package tools
 
 import (
-	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
+
+	providertypes "neo-code/internal/provider/types"
 )
 
 const (
 	// DefaultOutputLimitBytes is the default max size of tool output content.
 	DefaultOutputLimitBytes = 64 * 1024
 	truncatedSuffix         = "\n...[truncated]"
+
+	maxProjectedToolMetadataKeys     = 6
+	maxProjectedToolMetadataValueLen = 160
 )
+
+var projectedToolMetadataAllowlist = map[string]struct{}{
+	"bytes":              {},
+	"count":              {},
+	"emitted_bytes":      {},
+	"filtered_count":     {},
+	"http_status":        {},
+	"matched_count":      {},
+	"matched_files":      {},
+	"matched_lines":      {},
+	"mcp_server_id":      {},
+	"mcp_tool_name":      {},
+	"path":               {},
+	"relative_path":      {},
+	"replacement_length": {},
+	"returned_count":     {},
+	"root":               {},
+	"search_length":      {},
+	"status_code":        {},
+	"tool_name":          {},
+	"truncated":          {},
+	"workdir":            {},
+}
 
 // ApplyOutputLimit truncates tool output content and adds a truncated metadata flag.
 func ApplyOutputLimit(result ToolResult, limit int) ToolResult {
@@ -32,29 +60,70 @@ func ApplyOutputLimit(result ToolResult, limit int) ToolResult {
 	return result
 }
 
-// FormatToolResultForModel 将工具执行结果渲染为稳定的结构化文本，便于模型准确消费回灌信息。
-func FormatToolResultForModel(result ToolResult) string {
+// SanitizeToolMetadata 过滤并裁剪写入会话的工具 metadata，避免把内部或大字段永久带入对话状态。
+func SanitizeToolMetadata(toolName string, metadata map[string]any) map[string]string {
+	sanitized := make(map[string]string)
+	if name := strings.TrimSpace(toolName); name != "" {
+		sanitized["tool_name"] = name
+	}
+
+	if len(metadata) == 0 {
+		if len(sanitized) == 0 {
+			return nil
+		}
+		return sanitized
+	}
+
+	keys := make([]string, 0, len(metadata))
+	for key := range metadata {
+		key = strings.TrimSpace(key)
+		if _, ok := projectedToolMetadataAllowlist[key]; !ok || key == "tool_name" {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		if len(sanitized) >= maxProjectedToolMetadataKeys {
+			break
+		}
+		value, ok := sanitizeToolMetadataValue(metadata[key])
+		if !ok {
+			continue
+		}
+		sanitized[key] = value
+	}
+
+	if len(sanitized) == 0 {
+		return nil
+	}
+	return sanitized
+}
+
+// FormatToolMessageForModel 将持久化的 tool 消息投影为仅供模型消费的结构化文本。
+func FormatToolMessageForModel(message providertypes.Message) string {
 	lines := []string{"tool result"}
 
-	if toolName := strings.TrimSpace(result.Name); toolName != "" {
+	if toolName := strings.TrimSpace(message.ToolMetadata["tool_name"]); toolName != "" {
 		lines = append(lines, "tool: "+toolName)
 	}
 
 	status := "ok"
-	if result.IsError {
+	if message.IsError {
 		status = "error"
 	}
 	lines = append(lines, "status: "+status)
 
-	if toolCallID := strings.TrimSpace(result.ToolCallID); toolCallID != "" {
+	if toolCallID := strings.TrimSpace(message.ToolCallID); toolCallID != "" {
 		lines = append(lines, "tool_call_id: "+toolCallID)
 	}
 
-	lines = append(lines, fmt.Sprintf("truncated: %t", toolResultTruncated(result.Metadata)))
-	lines = append(lines, formatToolResultMetadataLines(result.Metadata)...)
+	lines = append(lines, fmt.Sprintf("truncated: %t", toolMessageTruncated(message.ToolMetadata)))
+	lines = append(lines, formatToolMetadataLines(message.ToolMetadata)...)
 
-	if strings.TrimSpace(result.Content) != "" {
-		lines = append(lines, "", "content:", result.Content)
+	if strings.TrimSpace(message.Content) != "" {
+		lines = append(lines, "", "content:", message.Content)
 	}
 
 	return strings.Join(lines, "\n")
@@ -108,17 +177,17 @@ func NewErrorResult(toolName string, reason string, details string, metadata map
 	}
 }
 
-// toolResultTruncated 从 metadata 中提取统一的截断标记，缺省时返回 false。
-func toolResultTruncated(metadata map[string]any) bool {
+// toolMessageTruncated 从持久化的轻量 metadata 中提取截断标记，缺省时返回 false。
+func toolMessageTruncated(metadata map[string]string) bool {
 	if metadata == nil {
 		return false
 	}
-	truncated, _ := metadata["truncated"].(bool)
+	truncated, _ := strconv.ParseBool(strings.TrimSpace(metadata["truncated"]))
 	return truncated
 }
 
-// formatToolResultMetadataLines 以稳定顺序输出供模型消费的 metadata 行，并跳过已提升为顶层字段的键。
-func formatToolResultMetadataLines(metadata map[string]any) []string {
+// formatToolMetadataLines 以稳定顺序输出供模型消费的 metadata 行，并跳过已提升为顶层字段的键。
+func formatToolMetadataLines(metadata map[string]string) []string {
 	if len(metadata) == 0 {
 		return nil
 	}
@@ -126,7 +195,7 @@ func formatToolResultMetadataLines(metadata map[string]any) []string {
 	keys := make([]string, 0, len(metadata))
 	for key := range metadata {
 		key = strings.TrimSpace(key)
-		if key == "" || key == "truncated" {
+		if key == "" || key == "tool_name" || key == "truncated" {
 			continue
 		}
 		keys = append(keys, key)
@@ -135,25 +204,42 @@ func formatToolResultMetadataLines(metadata map[string]any) []string {
 
 	lines := make([]string, 0, len(keys))
 	for _, key := range keys {
-		lines = append(lines, "meta."+key+": "+formatToolResultValue(metadata[key]))
+		lines = append(lines, "meta."+key+": "+sanitizeToolMetadataString(metadata[key]))
 	}
 	return lines
 }
 
-// formatToolResultValue 将 metadata 值收敛为单行文本，避免破坏工具结果包络格式。
-func formatToolResultValue(value any) string {
+// sanitizeToolMetadataValue 将原始 metadata 值收敛为短小的单行文本，不接受复杂结构。
+func sanitizeToolMetadataValue(value any) (string, bool) {
 	switch v := value.(type) {
 	case nil:
-		return "null"
+		return "", false
 	case string:
-		return strings.NewReplacer("\r\n", "\\n", "\n", "\\n", "\r", "\\n").Replace(v)
-	case fmt.Stringer:
-		return strings.NewReplacer("\r\n", "\\n", "\n", "\\n", "\r", "\\n").Replace(v.String())
+		text := sanitizeToolMetadataString(v)
+		return text, text != ""
+	case bool:
+		return strconv.FormatBool(v), true
+	case int:
+		return strconv.Itoa(v), true
+	case int8, int16, int32, int64:
+		return fmt.Sprint(v), true
+	case uint, uint8, uint16, uint32, uint64:
+		return fmt.Sprint(v), true
+	case float32, float64:
+		return fmt.Sprint(v), true
+	default:
+		return "", false
 	}
+}
 
-	payload, err := json.Marshal(value)
-	if err == nil {
-		return string(payload)
+// sanitizeToolMetadataString 将 metadata 字符串裁剪为单行短文本，避免提示词膨胀。
+func sanitizeToolMetadataString(value string) string {
+	text := strings.NewReplacer("\r\n", "\\n", "\n", "\\n", "\r", "\\n").Replace(strings.TrimSpace(value))
+	if text == "" {
+		return ""
 	}
-	return fmt.Sprint(value)
+	if len(text) > maxProjectedToolMetadataValueLen {
+		return text[:maxProjectedToolMetadataValueLen] + "..."
+	}
+	return text
 }

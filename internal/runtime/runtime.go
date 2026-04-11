@@ -365,10 +365,11 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			}
 
 			toolMessage := providertypes.Message{
-				Role:       providertypes.RoleTool,
-				Content:    tools.FormatToolResultForModel(result),
-				ToolCallID: call.ID,
-				IsError:    result.IsError,
+				Role:         providertypes.RoleTool,
+				Content:      result.Content,
+				ToolCallID:   call.ID,
+				IsError:      result.IsError,
+				ToolMetadata: tools.SanitizeToolMetadata(result.Name, result.Metadata),
 			}
 			session.Messages = append(session.Messages, toolMessage)
 			session.UpdatedAt = time.Now()
