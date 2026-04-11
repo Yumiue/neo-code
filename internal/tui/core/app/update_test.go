@@ -934,10 +934,9 @@ func TestRuntimeEventRunContextHandler(t *testing.T) {
 	}
 }
 
-func TestRefreshMessagesUsesConfiguredWorkdir(t *testing.T) {
+func TestRefreshMessagesUsesSessionWorkdirWhenPresent(t *testing.T) {
 	app, runtime := newTestApp(t)
 	app.state.ActiveSessionID = "session-1"
-	configWorkdir := app.configManager.Get().Workdir
 	sessionWorkdir := t.TempDir()
 	runtime.loadSessionFn = func(ctx context.Context, id string) (agentsession.Session, error) {
 		session := agentsession.NewWithWorkdir("persisted", sessionWorkdir)
@@ -949,11 +948,29 @@ func TestRefreshMessagesUsesConfiguredWorkdir(t *testing.T) {
 	if err := app.refreshMessages(); err != nil {
 		t.Fatalf("refreshMessages() error = %v", err)
 	}
-	if app.state.CurrentWorkdir != configWorkdir {
-		t.Fatalf("expected configured workdir %q, got %q", configWorkdir, app.state.CurrentWorkdir)
+	if app.state.CurrentWorkdir != sessionWorkdir {
+		t.Fatalf("expected session workdir %q, got %q", sessionWorkdir, app.state.CurrentWorkdir)
 	}
 	if app.state.ActiveSessionTitle != "persisted" {
 		t.Fatalf("expected session title to refresh, got %q", app.state.ActiveSessionTitle)
+	}
+}
+
+func TestRefreshMessagesFallsBackToConfiguredWorkdir(t *testing.T) {
+	app, runtime := newTestApp(t)
+	app.state.ActiveSessionID = "session-1"
+	configWorkdir := app.configManager.Get().Workdir
+	runtime.loadSessionFn = func(ctx context.Context, id string) (agentsession.Session, error) {
+		session := agentsession.NewWithWorkdir("persisted", "")
+		session.ID = id
+		return session, nil
+	}
+
+	if err := app.refreshMessages(); err != nil {
+		t.Fatalf("refreshMessages() error = %v", err)
+	}
+	if app.state.CurrentWorkdir != configWorkdir {
+		t.Fatalf("expected configured workdir %q, got %q", configWorkdir, app.state.CurrentWorkdir)
 	}
 }
 

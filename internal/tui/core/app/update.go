@@ -17,6 +17,7 @@ import (
 	"neo-code/internal/config"
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
+	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
 	tuistatus "neo-code/internal/tui/core/status"
 	tuiutils "neo-code/internal/tui/core/utils"
@@ -672,7 +673,7 @@ func (a *App) refreshMessages() error {
 	a.activeMessages = session.Messages
 	a.clearActivities()
 	a.state.ActiveSessionTitle = session.Title
-	a.setCurrentWorkdir(a.configManager.Get().Workdir)
+	a.setCurrentWorkdir(agentsession.EffectiveWorkdir(session.Workdir, a.configManager.Get().Workdir))
 	a.refreshRuntimeSourceSnapshot()
 	return nil
 }
