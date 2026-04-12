@@ -30,6 +30,7 @@ var (
 	ErrModelNotFound     = errors.New("model not found")
 	ErrNoModelsAvailable = errors.New("provider has no available models")
 	ErrDriverUnsupported = errors.New("provider driver not supported by current runtime")
+	errSelectionDrifted  = errors.New("selection drifted during update")
 )
 
 // DriverSupporter 用于检查给定 driver 是否受当前运行时支持。
@@ -149,4 +150,33 @@ func ensureSupportedProvider(supporters DriverSupporter, cfg config.ProviderConf
 		cfg.Driver,
 		ErrDriverUnsupported,
 	)
+}
+
+// sameProviderIdentity 比较两个 provider 配置是否仍然指向同一个底层连接身份。
+func sameProviderIdentity(left config.ProviderConfig, right config.ProviderConfig) (bool, error) {
+	leftIdentity, err := left.Identity()
+	if err != nil {
+		return false, err
+	}
+	rightIdentity, err := right.Identity()
+	if err != nil {
+		return false, err
+	}
+	return leftIdentity == rightIdentity, nil
+}
+
+// sameSelectionSnapshot 判断最新配置是否仍与旧快照指向同一 provider 且保持相同的当前模型。
+func sameSelectionSnapshot(latest config.Config, snapshot config.Config, expected config.ProviderConfig) (bool, error) {
+	latestSelected, err := selectedProviderConfig(latest)
+	if err != nil {
+		return false, nil
+	}
+	sameIdentity, err := sameProviderIdentity(latestSelected, expected)
+	if err != nil {
+		return false, err
+	}
+	if !sameIdentity {
+		return false, nil
+	}
+	return strings.TrimSpace(latest.CurrentModel) == strings.TrimSpace(snapshot.CurrentModel), nil
 }

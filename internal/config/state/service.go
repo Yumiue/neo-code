@@ -214,6 +214,24 @@ func (s *Service) SetCurrentModel(ctx context.Context, modelID string) (Selectio
 
 // EnsureSelection 确保当前 provider 和 model 仍然有效，必要时自动修正。
 func (s *Service) EnsureSelection(ctx context.Context) (Selection, error) {
+	const maxEnsureSelectionAttempts = 2
+
+	for attempt := 0; attempt < maxEnsureSelectionAttempts; attempt++ {
+		selection, err := s.ensureSelectionOnce(ctx)
+		if err == nil {
+			return selection, nil
+		}
+		if errors.Is(err, errSelectionDrifted) && attempt+1 < maxEnsureSelectionAttempts {
+			continue
+		}
+		return Selection{}, err
+	}
+
+	return Selection{}, errSelectionDrifted
+}
+
+// ensureSelectionOnce 基于一次稳定快照校正当前 provider/model 选择，并在写入前校验 provider 未漂移。
+func (s *Service) ensureSelectionOnce(ctx context.Context) (Selection, error) {
 	if err := s.validate(); err != nil {
 		return Selection{}, err
 	}
@@ -251,7 +269,15 @@ func (s *Service) EnsureSelection(ctx context.Context) (Selection, error) {
 				}
 			}
 			if len(models) == 0 {
-				return selectionFromConfig(cfgSnapshot), nil
+				latestSnapshot := s.manager.Get()
+				sameSelection, sameErr := sameSelectionSnapshot(latestSnapshot, cfgSnapshot, selected)
+				if sameErr != nil {
+					return Selection{}, sameErr
+				}
+				if !sameSelection {
+					return Selection{}, errSelectionDrifted
+				}
+				return selectionFromConfig(latestSnapshot), nil
 			}
 		} else {
 			models = providertypes.DescriptorsFromIDs([]string{strings.TrimSpace(selected.Model)})
@@ -262,7 +288,15 @@ func (s *Service) EnsureSelection(ctx context.Context) (Selection, error) {
 	}
 	_, modelChanged := resolveCurrentModel(cfgSnapshot.CurrentModel, models, selected.Model)
 	if !modelChanged && strings.TrimSpace(cfgSnapshot.SelectedProvider) != "" {
-		return selectionFromConfig(cfgSnapshot), nil
+		latestSnapshot := s.manager.Get()
+		sameSelection, sameErr := sameSelectionSnapshot(latestSnapshot, cfgSnapshot, selected)
+		if sameErr != nil {
+			return Selection{}, sameErr
+		}
+		if !sameSelection {
+			return Selection{}, errSelectionDrifted
+		}
+		return selectionFromConfig(latestSnapshot), nil
 	}
 
 	var selection Selection
@@ -271,7 +305,16 @@ func (s *Service) EnsureSelection(ctx context.Context) (Selection, error) {
 		if err != nil {
 			currentSelected = selected
 			cfg.SelectedProvider = selected.Name
+		} else {
+			sameIdentity, identityErr := sameProviderIdentity(currentSelected, selected)
+			if identityErr != nil {
+				return identityErr
+			}
+			if !sameIdentity {
+				return errSelectionDrifted
+			}
 		}
+
 		cfg.CurrentModel, _ = resolveCurrentModel(cfg.CurrentModel, models, currentSelected.Model)
 		selection = selectionFromConfig(*cfg)
 		return nil

@@ -598,6 +598,72 @@ func TestSelectionServiceEnsureSelectionReturnsBootstrappedSelectionWhenCustomDi
 	}
 }
 
+func TestSelectionServiceEnsureSelectionRetriesWhenProviderDriftsDuringUpdate(t *testing.T) {
+	t.Parallel()
+
+	defaults := testDefaultConfig()
+	defaults.SelectedProvider = OpenAIName
+	defaults.CurrentModel = "invalid-openai-model"
+
+	manager := newSelectionTestManager(t, defaults)
+	service := NewService(manager, newDriverSupporterStub(), &driftingSnapshotCatalog{
+		t:       t,
+		manager: manager,
+	})
+
+	selection, err := service.EnsureSelection(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureSelection() error = %v", err)
+	}
+	if selection.ProviderID != QiniuName || selection.ModelID != QiniuDefaultModel {
+		t.Fatalf("expected retried selection to use drifted provider snapshot, got %+v", selection)
+	}
+
+	reloaded, err := manager.Reload(context.Background())
+	if err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+	if reloaded.SelectedProvider != QiniuName {
+		t.Fatalf("expected selected provider to persist as %q, got %q", QiniuName, reloaded.SelectedProvider)
+	}
+	if reloaded.CurrentModel != QiniuDefaultModel {
+		t.Fatalf("expected current model to be repaired to %q, got %q", QiniuDefaultModel, reloaded.CurrentModel)
+	}
+}
+
+func TestSelectionServiceEnsureSelectionRetriesWhenProviderDriftsBeforeEarlyReturn(t *testing.T) {
+	t.Parallel()
+
+	defaults := testDefaultConfig()
+	defaults.SelectedProvider = OpenAIName
+	defaults.CurrentModel = OpenAIDefaultModel
+
+	manager := newSelectionTestManager(t, defaults)
+	service := NewService(manager, newDriverSupporterStub(), &driftingSnapshotCatalog{
+		t:       t,
+		manager: manager,
+	})
+
+	selection, err := service.EnsureSelection(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureSelection() error = %v", err)
+	}
+	if selection.ProviderID != QiniuName || selection.ModelID != QiniuDefaultModel {
+		t.Fatalf("expected drifted provider selection after retry, got %+v", selection)
+	}
+
+	reloaded, err := manager.Reload(context.Background())
+	if err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+	if reloaded.SelectedProvider != QiniuName {
+		t.Fatalf("expected selected provider to persist as %q, got %q", QiniuName, reloaded.SelectedProvider)
+	}
+	if reloaded.CurrentModel != QiniuDefaultModel {
+		t.Fatalf("expected current model to be repaired to %q, got %q", QiniuDefaultModel, reloaded.CurrentModel)
+	}
+}
+
 func TestSelectionServiceSelectCustomProviderDoesNotPersistWhenDiscoveryFails(t *testing.T) {
 	t.Parallel()
 
@@ -917,6 +983,55 @@ func (s errorCatalogStub) ListProviderModelsSnapshot(_ context.Context, _ provid
 
 func (s errorCatalogStub) ListProviderModelsCached(_ context.Context, _ provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
 	return nil, s.err
+}
+
+type driftingSnapshotCatalog struct {
+	t        *testing.T
+	manager  *configpkg.Manager
+	switched bool
+}
+
+func (c *driftingSnapshotCatalog) ListProviderModels(_ context.Context, input provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
+	return c.modelsFor(input), nil
+}
+
+func (c *driftingSnapshotCatalog) ListProviderModelsSnapshot(ctx context.Context, input provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
+	if !c.switched && strings.EqualFold(input.Identity.Key(), mustCatalogIdentity(c.t, configpkg.OpenAIProvider()).Key()) {
+		c.switched = true
+		if err := c.manager.Update(ctx, func(cfg *configpkg.Config) error {
+			cfg.SelectedProvider = QiniuName
+			cfg.CurrentModel = "stale-openai-model"
+			return nil
+		}); err != nil {
+			c.t.Fatalf("seed provider drift: %v", err)
+		}
+	}
+	return c.modelsFor(input), nil
+}
+
+func (c *driftingSnapshotCatalog) ListProviderModelsCached(_ context.Context, input provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
+	return c.modelsFor(input), nil
+}
+
+func (c *driftingSnapshotCatalog) modelsFor(input provider.CatalogInput) []providertypes.ModelDescriptor {
+	switch input.Identity.Key() {
+	case mustCatalogIdentity(c.t, configpkg.OpenAIProvider()).Key():
+		return []providertypes.ModelDescriptor{{ID: OpenAIDefaultModel, Name: OpenAIDefaultModel}}
+	case mustCatalogIdentity(c.t, configpkg.QiniuProvider()).Key():
+		return []providertypes.ModelDescriptor{{ID: QiniuDefaultModel, Name: QiniuDefaultModel}}
+	default:
+		return nil
+	}
+}
+
+func mustCatalogIdentity(t *testing.T, cfg configpkg.ProviderConfig) provider.ProviderIdentity {
+	t.Helper()
+
+	identity, err := cfg.Identity()
+	if err != nil {
+		t.Fatalf("Identity() error = %v", err)
+	}
+	return identity
 }
 
 // defaultModelsForInput 为给定 catalog 输入返回默认模型及其变体，便于选择逻辑测试复用。
