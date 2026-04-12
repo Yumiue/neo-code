@@ -480,6 +480,13 @@ func CanonicalMCPServerIdentity(raw string) string {
 }
 
 // canonicalMCPServerIdentity 将 server 标识归一为 mcp.<server> 形式。
+//
+// 命名约定 (naming contract)：
+//   - 以 "mcp." 开头的输入被视为完整的 tool identity（mcp.<server>.<tool>）；
+//     函数将从中提取 server 部分并返回 mcp.<server>。
+//   - 不带 "mcp." 前缀的输入被视为纯 server 名称，函数直接补全为 mcp.<server>。
+//   - 调用方传入纯 server 名称时 **不应** 携带 "mcp." 前缀；
+//     如需从 tool identity 提取 server，传入完整 mcp.<server>.<tool> 即可。
 func canonicalMCPServerIdentity(raw string) string {
 	trimmed := strings.ToLower(strings.TrimSpace(raw))
 	if trimmed == "" || trimmed == "mcp" || trimmed == "mcp." {
@@ -505,10 +512,22 @@ func canonicalMCPServerIdentity(raw string) string {
 }
 
 // canonicalMCPToolIdentity 将 server/tool 标识归一为 mcp.<server>.<tool>。
+//
+// tool 名称不得包含 "."；含 "." 的 toolName 会返回空串并被视为非法输入。
+// 这可防止 server/tool 边界解析歧义，例如：
+//
+//	server="github", toolName="enterprise.create_issue"
+//	→ 若允许，拼接后 identity 为 mcp.github.enterprise.create_issue
+//	→ canonicalMCPServerIdentity 将错误地提取 server 为 mcp.github.enterprise
+//	  而非正确的 mcp.github，导致权限绕过。
 func canonicalMCPToolIdentity(serverID string, toolName string) string {
 	serverIdentity := canonicalMCPServerIdentity(serverID)
 	tool := strings.ToLower(strings.TrimSpace(toolName))
 	if serverIdentity == "" || tool == "" {
+		return ""
+	}
+	// Reject tool names containing "." to prevent ambiguous server/tool boundary parsing.
+	if strings.Contains(tool, ".") {
 		return ""
 	}
 	if strings.HasPrefix(tool, serverIdentity+".") {
