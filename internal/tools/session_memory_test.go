@@ -157,10 +157,10 @@ func TestSessionPermissionCategoryAndActionKey(t *testing.T) {
 			action: security.Action{
 				Type: security.ActionTypeMCP,
 				Payload: security.ActionPayload{
-					Target: "Server-A",
+					Target: "mcp.server-a.tool-a",
 				},
 			},
-			expected: "mcp:server-a",
+			expected: "mcp.server-a",
 		},
 		{
 			name: "mcp without target",
@@ -279,5 +279,51 @@ func TestSessionPermissionMemoryResolveRequiresTargetScopeMatch(t *testing.T) {
 	}
 	if _, _, ok := memory.resolve(sessionID, otherFile); ok {
 		t.Fatalf("expected different path file action to miss memory")
+	}
+}
+
+func TestSessionPermissionMemoryResolveRequiresMCPToolScopeMatch(t *testing.T) {
+	t.Parallel()
+
+	memory := newSessionPermissionMemory()
+	sessionID := "session-mcp-tool-scope"
+
+	createIssue := security.Action{
+		Type: security.ActionTypeMCP,
+		Payload: security.ActionPayload{
+			ToolName:   "mcp.github.create_issue",
+			Resource:   "mcp.github.create_issue",
+			TargetType: security.TargetTypeMCP,
+			Target:     "mcp.github.create_issue",
+		},
+	}
+	if err := memory.remember(sessionID, createIssue, SessionPermissionScopeAlways); err != nil {
+		t.Fatalf("remember create_issue action: %v", err)
+	}
+
+	sameTool := security.Action{
+		Type: security.ActionTypeMCP,
+		Payload: security.ActionPayload{
+			ToolName:   "mcp.github.create_issue",
+			Resource:   "mcp.github.create_issue",
+			TargetType: security.TargetTypeMCP,
+			Target:     "mcp.github.create_issue",
+		},
+	}
+	if _, _, ok := memory.resolve(sessionID, sameTool); !ok {
+		t.Fatalf("expected same MCP tool identity to hit memory")
+	}
+
+	otherToolSameServer := security.Action{
+		Type: security.ActionTypeMCP,
+		Payload: security.ActionPayload{
+			ToolName:   "mcp.github.list_issues",
+			Resource:   "mcp.github.list_issues",
+			TargetType: security.TargetTypeMCP,
+			Target:     "mcp.github.list_issues",
+		},
+	}
+	if _, _, ok := memory.resolve(sessionID, otherToolSameServer); ok {
+		t.Fatalf("expected other MCP tool on same server to miss memory")
 	}
 }

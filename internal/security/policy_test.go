@@ -139,6 +139,21 @@ func TestPolicyEngineRecommendedRules(t *testing.T) {
 			wantDecision: DecisionAsk,
 			wantRuleID:   "ask-webfetch-non-whitelist",
 		},
+		{
+			name: "mcp defaults to ask",
+			action: Action{
+				Type: ActionTypeMCP,
+				Payload: ActionPayload{
+					ToolName:   "mcp.docs.search",
+					Resource:   "mcp.docs.search",
+					Operation:  "invoke",
+					TargetType: TargetTypeMCP,
+					Target:     "mcp.docs.search",
+				},
+			},
+			wantDecision: DecisionAsk,
+			wantRuleID:   "ask-all-mcp",
+		},
 	}
 
 	for _, tt := range tests {
@@ -185,5 +200,116 @@ func TestNewPolicyEngineValidation(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("expected invalid rule decision error")
+	}
+}
+
+func TestPolicyEngineMCPRuleTemplates(t *testing.T) {
+	t.Parallel()
+
+	engine, err := NewPolicyEngine(DecisionAllow, []PolicyRule{
+		newMCPToolPolicyRule("allow-github-create-issue", DecisionAllow, "github", "create_issue", "tool allowed"),
+		newMCPServerPolicyRule("deny-github-server", DecisionDeny, "github", "server blocked"),
+		newMCPToolPolicyRule("ask-docs-search", DecisionAsk, "docs", "search", "search requires approval"),
+	})
+	if err != nil {
+		t.Fatalf("new policy engine: %v", err)
+	}
+
+	tests := []struct {
+		name         string
+		action       Action
+		wantDecision Decision
+		wantRuleID   string
+		wantReason   string
+	}{
+		{
+			name: "server-level deny overrides tool-level allow",
+			action: Action{
+				Type: ActionTypeMCP,
+				Payload: ActionPayload{
+					ToolName:   "mcp.github.create_issue",
+					Resource:   "mcp.github.create_issue",
+					Operation:  "invoke",
+					TargetType: TargetTypeMCP,
+					Target:     "mcp.github.create_issue",
+				},
+			},
+			wantDecision: DecisionDeny,
+			wantRuleID:   "deny-github-server",
+			wantReason:   "server blocked",
+		},
+		{
+			name: "server-level deny covers all tools on same server",
+			action: Action{
+				Type: ActionTypeMCP,
+				Payload: ActionPayload{
+					ToolName:   "mcp.github.list_issues",
+					Resource:   "mcp.github.list_issues",
+					Operation:  "invoke",
+					TargetType: TargetTypeMCP,
+					Target:     "mcp.github.list_issues",
+				},
+			},
+			wantDecision: DecisionDeny,
+			wantRuleID:   "deny-github-server",
+			wantReason:   "server blocked",
+		},
+		{
+			name: "tool-level ask hits exact tool identity",
+			action: Action{
+				Type: ActionTypeMCP,
+				Payload: ActionPayload{
+					ToolName:   "mcp.docs.search",
+					Resource:   "mcp.docs.search",
+					Operation:  "invoke",
+					TargetType: TargetTypeMCP,
+					Target:     "mcp.docs.search",
+				},
+			},
+			wantDecision: DecisionAsk,
+			wantRuleID:   "ask-docs-search",
+			wantReason:   "search requires approval",
+		},
+		{
+			name: "other MCP tool falls back to default allow",
+			action: Action{
+				Type: ActionTypeMCP,
+				Payload: ActionPayload{
+					ToolName:   "mcp.docs.read",
+					Resource:   "mcp.docs.read",
+					Operation:  "invoke",
+					TargetType: TargetTypeMCP,
+					Target:     "mcp.docs.read",
+				},
+			},
+			wantDecision: DecisionAllow,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, checkErr := engine.Check(context.Background(), tt.action)
+			if checkErr != nil {
+				t.Fatalf("Check() error = %v", checkErr)
+			}
+			if result.Decision != tt.wantDecision {
+				t.Fatalf("expected decision %q, got %q", tt.wantDecision, result.Decision)
+			}
+			if tt.wantRuleID == "" {
+				if result.Rule != nil {
+					t.Fatalf("expected no matched rule, got %+v", result.Rule)
+				}
+				return
+			}
+			if result.Rule == nil || result.Rule.ID != tt.wantRuleID {
+				t.Fatalf("expected rule id %q, got %+v", tt.wantRuleID, result.Rule)
+			}
+			if result.Reason != tt.wantReason {
+				t.Fatalf("expected reason %q, got %q", tt.wantReason, result.Reason)
+			}
+		})
 	}
 }

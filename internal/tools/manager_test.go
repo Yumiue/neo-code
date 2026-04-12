@@ -10,6 +10,7 @@ import (
 
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/security"
+	"neo-code/internal/tools/mcp"
 )
 
 type managerStubTool struct {
@@ -947,7 +948,7 @@ func TestBuildPermissionAction(t *testing.T) {
 			},
 			wantType:     security.ActionTypeMCP,
 			wantResource: "mcp.github.create_issue",
-			wantTarget:   "github",
+			wantTarget:   "mcp.github.create_issue",
 		},
 		{
 			name: "unsupported tool returns error",
@@ -1032,7 +1033,7 @@ func TestPermissionMapperHelpers(t *testing.T) {
 		{
 			name:       "mcp server target with server and tool",
 			serverTool: "mcp.github.create_issue",
-			serverWant: "github",
+			serverWant: "mcp.github",
 		},
 		{
 			name:       "mcp server target without server",
@@ -1057,6 +1058,143 @@ func TestPermissionMapperHelpers(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDefaultManagerExecuteMCPRememberDoesNotBroadenAcrossTools(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	mcpRegistry := mcp.NewRegistry()
+	if err := mcpRegistry.RegisterServer("github", "stdio", "v1", &stubMCPClient{
+		tools: []mcp.ToolDescriptor{
+			{Name: "create_issue", Description: "create"},
+			{Name: "list_issues", Description: "list"},
+		},
+		callResult: mcp.CallResult{Content: "ok"},
+	}); err != nil {
+		t.Fatalf("register mcp server: %v", err)
+	}
+	if err := mcpRegistry.RefreshServerTools(context.Background(), "github"); err != nil {
+		t.Fatalf("refresh mcp tools: %v", err)
+	}
+	registry.SetMCPRegistry(mcpRegistry)
+
+	engine, err := security.NewStaticGateway(security.DecisionAllow, []security.Rule{
+		{
+			ID:       "ask-github-create-issue",
+			Type:     security.ActionTypeMCP,
+			Resource: "mcp.github.create_issue",
+			Decision: security.DecisionAsk,
+			Reason:   "create issue requires approval",
+		},
+		{
+			ID:       "ask-github-list-issues",
+			Type:     security.ActionTypeMCP,
+			Resource: "mcp.github.list_issues",
+			Decision: security.DecisionAsk,
+			Reason:   "list issues requires approval",
+		},
+	})
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+
+	manager, err := NewManager(registry, engine, nil)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+
+	sessionID := "session-mcp-target-scope"
+	createInput := ToolCallInput{
+		ID:        "call-create",
+		Name:      "mcp.github.create_issue",
+		Arguments: []byte(`{"title":"hello"}`),
+		SessionID: sessionID,
+	}
+	listInput := ToolCallInput{
+		ID:        "call-list",
+		Name:      "mcp.github.list_issues",
+		Arguments: []byte(`{"state":"open"}`),
+		SessionID: sessionID,
+	}
+
+	_, err = manager.Execute(context.Background(), createInput)
+	var permissionErr *PermissionDecisionError
+	if !errors.As(err, &permissionErr) || permissionErr.Decision() != "ask" {
+		t.Fatalf("expected initial MCP ask, got %v", err)
+	}
+	if rememberErr := manager.RememberSessionDecision(sessionID, permissionErr.Action(), SessionPermissionScopeAlways); rememberErr != nil {
+		t.Fatalf("remember mcp create_issue: %v", rememberErr)
+	}
+
+	if _, err := manager.Execute(context.Background(), createInput); err != nil {
+		t.Fatalf("expected remembered create_issue allow, got %v", err)
+	}
+
+	_, err = manager.Execute(context.Background(), listInput)
+	if !errors.As(err, &permissionErr) || permissionErr.Decision() != "ask" {
+		t.Fatalf("expected list_issues to require independent approval, got %v", err)
+	}
+}
+
+func TestDefaultManagerExecuteMCPServerDenyUsesTraceableRule(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	mcpRegistry := mcp.NewRegistry()
+	if err := mcpRegistry.RegisterServer("github", "stdio", "v1", &stubMCPClient{
+		tools: []mcp.ToolDescriptor{
+			{Name: "create_issue", Description: "create"},
+		},
+		callResult: mcp.CallResult{Content: "ok"},
+	}); err != nil {
+		t.Fatalf("register mcp server: %v", err)
+	}
+	if err := mcpRegistry.RefreshServerTools(context.Background(), "github"); err != nil {
+		t.Fatalf("refresh mcp tools: %v", err)
+	}
+	registry.SetMCPRegistry(mcpRegistry)
+
+	engine, err := security.NewStaticGateway(security.DecisionAllow, []security.Rule{
+		{
+			ID:           "deny-github-server",
+			Type:         security.ActionTypeMCP,
+			TargetPrefix: "mcp.github",
+			Decision:     security.DecisionDeny,
+			Reason:       "github MCP server denied",
+		},
+	})
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+
+	manager, err := NewManager(registry, engine, nil)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+
+	_, execErr := manager.Execute(context.Background(), ToolCallInput{
+		ID:        "call-mcp-deny",
+		Name:      "mcp.github.create_issue",
+		Arguments: []byte(`{"title":"hello"}`),
+		SessionID: "session-mcp-deny",
+	})
+	var permissionErr *PermissionDecisionError
+	if !errors.As(execErr, &permissionErr) {
+		t.Fatalf("expected permission error, got %v", execErr)
+	}
+	if permissionErr.Decision() != "deny" {
+		t.Fatalf("expected deny, got %q", permissionErr.Decision())
+	}
+	if permissionErr.RuleID() != "deny-github-server" {
+		t.Fatalf("expected rule id deny-github-server, got %q", permissionErr.RuleID())
+	}
+	if permissionErr.Reason() != "github MCP server denied" {
+		t.Fatalf("expected deny reason propagated, got %q", permissionErr.Reason())
+	}
+	if permissionErr.Action().Payload.Target != "mcp.github.create_issue" {
+		t.Fatalf("expected full mcp target identity, got %q", permissionErr.Action().Payload.Target)
 	}
 }
 
