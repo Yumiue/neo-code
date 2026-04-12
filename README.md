@@ -28,7 +28,7 @@ curl -fsSL https://raw.githubusercontent.com/1024XEngineer/neo-code/main/scripts
 
 
 ```PowerShell
-irm https://raw.githubusercontent.com/pionxe/neo-code/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/1024XEngineer/neo-code/main/scripts/install.ps1 | iex
 ```
 
 
@@ -44,7 +44,7 @@ irm https://raw.githubusercontent.com/pionxe/neo-code/main/scripts/install.ps1 |
 
 ```bash
 # 克隆仓库
-git clone https://github.com/yourusername/neocode.git
+git clone https://github.com/1024XEngineer/neo-code.git
 cd neocode
 
 # 设置 API Key
