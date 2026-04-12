@@ -266,7 +266,12 @@ func (r *Registry) resolveMCPAdapter(ctx context.Context, fullName string) (*mcp
 		return nil, errors.New("tool: not found")
 	}
 
-	for _, snapshot := range r.mcpRegistry.Snapshot() {
+	snapshots := r.mcpRegistry.Snapshot()
+	if r.isMCPToolPolicyDenied(ctx, snapshots, fullName) {
+		return nil, errors.New("tool: not found")
+	}
+
+	for _, snapshot := range snapshots {
 		if !strings.EqualFold(snapshot.ServerID, serverID) {
 			continue
 		}
@@ -297,11 +302,39 @@ func (r *Registry) filterMCPSnapshots(
 	}
 	filteredSnapshots, decisions, err := filter.Filter(ctx, snapshots, input)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, nil, err
+		}
 		failClosed := buildMCPFilterErrorAudit(snapshots)
 		r.mcpExposureAudit = failClosed
 		return nil, failClosed, nil
 	}
 	return filteredSnapshots, decisions, nil
+}
+
+// isMCPToolPolicyDenied 判断指定 MCP 工具是否命中 policy_deny，命中则禁止执行。
+func (r *Registry) isMCPToolPolicyDenied(ctx context.Context, snapshots []mcp.ServerSnapshot, fullName string) bool {
+	if err := ctx.Err(); err != nil {
+		return false
+	}
+	if r == nil || len(snapshots) == 0 {
+		return false
+	}
+	filter := r.mcpExposureFilter
+	if filter == nil {
+		filter = mcp.NewExposureFilter(mcp.ExposureFilterConfig{})
+	}
+	_, decisions, err := filter.Filter(ctx, snapshots, mcp.ExposureFilterInput{})
+	if err != nil {
+		return false
+	}
+	normalized := strings.ToLower(strings.TrimSpace(fullName))
+	for _, decision := range decisions {
+		if strings.EqualFold(decision.ToolFullName, normalized) && decision.Reason == mcp.ExposureFilterReasonPolicyDeny {
+			return true
+		}
+	}
+	return false
 }
 
 // buildMCPFilterErrorAudit 为过滤器异常生成 fail-closed 审计记录。

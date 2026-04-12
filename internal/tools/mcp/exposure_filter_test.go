@@ -126,6 +126,37 @@ func TestDefaultExposureFilterFiltersByAgentRule(t *testing.T) {
 	}
 }
 
+func TestDefaultExposureFilterSkipsAgentFilterWhenAgentIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	filter := NewExposureFilter(ExposureFilterConfig{
+		Agents: []AgentExposureRule{
+			{Agent: "planner", Allowlist: []string{"docs.read"}},
+		},
+	})
+	snapshots := []ServerSnapshot{
+		{
+			ServerID: "docs",
+			Status:   ServerStatusReady,
+			Tools: []ToolDescriptor{
+				{Name: "read"},
+				{Name: "write"},
+			},
+		},
+	}
+
+	filtered, decisions, err := filter.Filter(context.Background(), snapshots, ExposureFilterInput{})
+	if err != nil {
+		t.Fatalf("Filter() error = %v", err)
+	}
+	if len(filtered) != 1 || len(filtered[0].Tools) != 2 {
+		t.Fatalf("expected empty-agent input to keep tools visible, got %+v", filtered)
+	}
+	if !hasDecisionReason(decisions, "mcp.docs.read", "") || !hasDecisionReason(decisions, "mcp.docs.write", "") {
+		t.Fatalf("expected both tools allowed, got %+v", decisions)
+	}
+}
+
 func TestDefaultExposureFilterHonorsContextCancellation(t *testing.T) {
 	t.Parallel()
 

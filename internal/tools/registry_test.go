@@ -370,6 +370,39 @@ func TestRegistryExecuteDispatchesToMCPAdapter(t *testing.T) {
 	}
 }
 
+func TestRegistryExecuteRejectsPolicyDeniedMCPTool(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	mcpRegistry := mcp.NewRegistry()
+	if err := mcpRegistry.RegisterServer("docs", "stdio", "v1", &stubMCPClient{
+		tools: []mcp.ToolDescriptor{
+			{Name: "search", Description: "search docs", InputSchema: map[string]any{"type": "object"}},
+		},
+		callResult: mcp.CallResult{Content: "should not run"},
+	}); err != nil {
+		t.Fatalf("register mcp server: %v", err)
+	}
+	if err := mcpRegistry.RefreshServerTools(context.Background(), "docs"); err != nil {
+		t.Fatalf("refresh mcp tools: %v", err)
+	}
+	registry.SetMCPRegistry(mcpRegistry)
+	registry.SetMCPExposureFilter(mcp.NewExposureFilter(mcp.ExposureFilterConfig{
+		Denylist: []string{"docs.search"},
+	}))
+
+	result, err := registry.Execute(context.Background(), ToolCallInput{
+		ID:   "mcp-call-policy-deny",
+		Name: "mcp.docs.search",
+	})
+	if err == nil || !strings.Contains(err.Error(), "tool: not found") {
+		t.Fatalf("expected tool not found for denied tool, got %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("expected IsError true")
+	}
+}
+
 func TestRegistryExecuteMCPResolveErrorPropagates(t *testing.T) {
 	t.Parallel()
 
@@ -631,6 +664,33 @@ func TestRegistryListAvailableSpecsFailClosedOnExposureFilterError(t *testing.T)
 	audit := registry.MCPExposureAuditSnapshot()
 	if len(audit) != 1 || audit[0].Reason != mcp.ExposureFilterReasonFilterError {
 		t.Fatalf("expected filter_error audit, got %+v", audit)
+	}
+}
+
+func TestRegistryListAvailableSpecsReturnsContextErrorFromExposureFilter(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	registry.Register(stubTool{name: "builtin", description: "built-in", schema: map[string]any{"type": "object"}})
+
+	mcpRegistry := mcp.NewRegistry()
+	if err := mcpRegistry.RegisterServer("docs", "stdio", "v1", &stubMCPClient{
+		tools: []mcp.ToolDescriptor{
+			{Name: "search", Description: "search docs", InputSchema: map[string]any{"type": "object"}},
+		},
+	}); err != nil {
+		t.Fatalf("register mcp server: %v", err)
+	}
+	if err := mcpRegistry.RefreshServerTools(context.Background(), "docs"); err != nil {
+		t.Fatalf("refresh mcp tools: %v", err)
+	}
+
+	registry.SetMCPRegistry(mcpRegistry)
+	registry.SetMCPExposureFilter(&stubExposureFilter{err: context.Canceled})
+
+	_, err := registry.ListAvailableSpecs(context.Background(), SpecListInput{})
+	if err == nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context canceled, got %v", err)
 	}
 }
 

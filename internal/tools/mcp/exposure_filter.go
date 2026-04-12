@@ -119,7 +119,7 @@ func (f *DefaultExposureFilter) Filter(
 				decisions = append(decisions, decision)
 				continue
 			}
-			if len(cfg.Agents) > 0 {
+			if len(cfg.Agents) > 0 && normalizedAgent != "" {
 				if agentRule == nil {
 					decision.Reason = ExposureFilterReasonAgentMismatch
 					decisions = append(decisions, decision)
