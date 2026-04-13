@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +15,16 @@ import (
 	"sync"
 
 	"neo-code/internal/gateway/transport"
+)
+
+const (
+	// MaxFrameSize 定义单条 JSON 帧允许的最大字节数，避免异常输入导致内存放大。
+	MaxFrameSize int64 = 1 << 20 // 1 MiB
+)
+
+var (
+	errFrameTooLarge = errors.New("frame exceeds max size")
+	errFrameEmpty    = errors.New("empty frame")
 )
 
 // ServerOptions 描述网关服务启动所需的可选配置。
@@ -49,6 +61,7 @@ func NewServer(options ServerOptions) (*Server, error) {
 	if logger == nil {
 		logger = log.New(os.Stderr, "gateway: ", log.LstdFlags)
 	}
+
 	listenFn := options.listenFn
 	if listenFn == nil {
 		listenFn = transport.Listen
@@ -187,7 +200,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn, runtimePor
 		_ = conn.Close()
 	}()
 
-	decoder := json.NewDecoder(conn)
+	reader := bufio.NewReader(conn)
 	encoder := json.NewEncoder(conn)
 
 	for {
@@ -197,9 +210,20 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn, runtimePor
 		default:
 		}
 
-		var frame MessageFrame
-		if err := decoder.Decode(&frame); err != nil {
+		frame, err := decodeFrame(reader)
+		if err != nil {
 			if errors.Is(err, io.EOF) {
+				return
+			}
+			if errors.Is(err, errFrameEmpty) {
+				continue
+			}
+			if errors.Is(err, errFrameTooLarge) {
+				s.logger.Printf("decode frame failed: %v", err)
+				_ = encoder.Encode(errorFrame(MessageFrame{}, NewFrameError(
+					ErrorCodeInvalidFrame,
+					fmt.Sprintf("frame exceeds max size %d bytes", MaxFrameSize),
+				)))
 				return
 			}
 
@@ -214,6 +238,62 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn, runtimePor
 			return
 		}
 	}
+}
+
+// decodeFrame 从连接读取一条 JSON 帧并执行长度与格式校验。
+func decodeFrame(reader *bufio.Reader) (MessageFrame, error) {
+	payload, err := readFramePayload(reader, MaxFrameSize)
+	if err != nil {
+		return MessageFrame{}, err
+	}
+
+	limitedReader := &io.LimitedReader{R: bytes.NewReader(payload), N: MaxFrameSize}
+	decoder := json.NewDecoder(limitedReader)
+
+	var frame MessageFrame
+	if err := decoder.Decode(&frame); err != nil {
+		return MessageFrame{}, err
+	}
+
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return MessageFrame{}, fmt.Errorf("frame contains trailing json values")
+	}
+
+	return frame, nil
+}
+
+// readFramePayload 按换行边界读取单条帧，并限制单帧最大字节数。
+func readFramePayload(reader *bufio.Reader, maxSize int64) ([]byte, error) {
+	var payload []byte
+
+	for {
+		chunk, err := reader.ReadSlice('\n')
+		if int64(len(payload)+len(chunk)) > maxSize {
+			return nil, errFrameTooLarge
+		}
+		payload = append(payload, chunk...)
+
+		if err == nil {
+			break
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		if errors.Is(err, io.EOF) {
+			if len(payload) == 0 {
+				return nil, io.EOF
+			}
+			break
+		}
+		return nil, err
+	}
+
+	payload = bytes.TrimSpace(payload)
+	if len(payload) == 0 {
+		return nil, errFrameEmpty
+	}
+	return payload, nil
 }
 
 // dispatchFrame 根据请求动作生成响应帧。
