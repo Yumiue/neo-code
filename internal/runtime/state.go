@@ -17,6 +17,7 @@ type runState struct {
 	tokenOutputTotal    int
 	compactApplied      bool
 	reactiveCompactUsed bool
+	rememberedThisRun   bool
 }
 
 // newRunState 基于持久化会话创建一次运行的内存状态镜像。

@@ -22,7 +22,7 @@ type stubMemoExtractor struct {
 	doneCh   chan struct{}
 }
 
-func (s *stubMemoExtractor) ExtractAndStore(_ context.Context, messages []providertypes.Message) {
+func (s *stubMemoExtractor) Schedule(_ string, messages []providertypes.Message) {
 	s.mu.Lock()
 	s.calls++
 	s.lastMsgs = append([]providertypes.Message(nil), messages...)

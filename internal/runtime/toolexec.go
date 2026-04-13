@@ -51,6 +51,9 @@ func (s *Service) executeAssistantToolCalls(
 		}
 
 		s.emit(ctx, EventToolResult, state.runID, state.session.ID, result)
+		if isSuccessfulRememberToolCall(call.Name, result, execErr) {
+			state.rememberedThisRun = true
+		}
 		if execErr != nil {
 			if err := ctx.Err(); err != nil {
 				return err

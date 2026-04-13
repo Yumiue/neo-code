@@ -51,8 +51,8 @@ type ProviderFactory interface {
 // MemoExtractor 定义 runtime 层调用记忆提取的最小能力。
 // 通过接口注入避免 runtime 直接依赖 memo 子系统实现细节。
 type MemoExtractor interface {
-	// ExtractAndStore 从对话消息中提取并落盘记忆，失败由实现方自行处理。
-	ExtractAndStore(ctx context.Context, messages []providertypes.Message)
+	// Schedule 从消息中安排一次后台记忆提取，失败由实现方自行处理。
+	Schedule(sessionID string, messages []providertypes.Message)
 }
 
 // Service 是 runtime 的默认实现，负责组织一次完整的 agent 运行闭环。

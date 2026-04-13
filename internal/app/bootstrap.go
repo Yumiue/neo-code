@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	configstate "neo-code/internal/config/state"
 	agentcontext "neo-code/internal/context"
 	"neo-code/internal/memo"
+	"neo-code/internal/provider"
 	"neo-code/internal/provider/builtin"
 	providercatalog "neo-code/internal/provider/catalog"
 	providertypes "neo-code/internal/provider/types"
@@ -118,10 +121,11 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 
 	// 注入记忆提取钩子：当 AutoExtract 启用且 memoSvc 可用时，ReAct 循环完成后异步提取记忆。
 	if memoSvc != nil && cfg.Memo.AutoExtract {
-		runtimeSvc.SetMemoExtractor(&memoExtractorAdapter{
-			extractor: memo.NewRuleExtractor(),
-			svc:       memoSvc,
-		})
+		runtimeSvc.SetMemoExtractor(newMemoExtractorAdapter(
+			providerRegistry,
+			manager,
+			memo.NewAutoExtractor(nil, memoSvc),
+		))
 	}
 
 	return RuntimeBundle{
@@ -223,13 +227,136 @@ func buildToolManager(registry *tools.Registry) (tools.Manager, error) {
 	return tools.NewManager(registry, engine, security.NewWorkspaceSandbox())
 }
 
-// memoExtractorAdapter 适配 memo.RuleExtractor + memo.Service 到 runtime.MemoExtractor 接口。
-type memoExtractorAdapter struct {
-	extractor *memo.RuleExtractor
-	svc       *memo.Service
+type memoExtractorScheduler interface {
+	ScheduleWithExtractor(sessionID string, messages []providertypes.Message, extractor memo.Extractor)
 }
 
-// ExtractAndStore 实现 runtime.MemoExtractor 接口，从消息中提取记忆并保存。
-func (a *memoExtractorAdapter) ExtractAndStore(ctx context.Context, messages []providertypes.Message) {
-	memo.ExtractAndStore(ctx, a.extractor, a.svc, messages)
+// memoExtractorAdapter 在调度时绑定 provider 配置快照，避免后台任务读取全局可变配置。
+type memoExtractorAdapter struct {
+	factory       agentruntime.ProviderFactory
+	configManager *config.Manager
+	scheduler     memoExtractorScheduler
+}
+
+// newMemoExtractorAdapter 创建绑定当前 provider 选择的记忆提取调度适配器。
+func newMemoExtractorAdapter(
+	factory agentruntime.ProviderFactory,
+	cm *config.Manager,
+	scheduler memoExtractorScheduler,
+) *memoExtractorAdapter {
+	return &memoExtractorAdapter{
+		factory:       factory,
+		configManager: cm,
+		scheduler:     scheduler,
+	}
+}
+
+// Schedule 在当前运行结束时绑定 provider/model 快照，再交给后台调度器延后执行。
+func (a *memoExtractorAdapter) Schedule(sessionID string, messages []providertypes.Message) {
+	if a == nil || a.scheduler == nil {
+		return
+	}
+
+	cfg := a.configManager.Get()
+	resolved, err := config.ResolveSelectedProvider(cfg)
+	if err != nil {
+		log.Printf("memo: resolve selected provider failed: %v", err)
+		return
+	}
+
+	extractor := memo.NewLLMExtractor(newProviderTextGenerator(
+		a.factory,
+		resolved.ToRuntimeConfig(),
+		cfg.CurrentModel,
+	))
+	a.scheduler.ScheduleWithExtractor(sessionID, messages, extractor)
+}
+
+// providerTextGenerator 复用当前 provider 配置快照，向 memo 提供纯文本生成能力。
+type providerTextGenerator struct {
+	factory    agentruntime.ProviderFactory
+	runtimeCfg provider.RuntimeConfig
+	model      string
+}
+
+// newProviderTextGenerator 创建绑定固定 provider/model 快照的文本生成适配器。
+func newProviderTextGenerator(
+	factory agentruntime.ProviderFactory,
+	runtimeCfg provider.RuntimeConfig,
+	model string,
+) *providerTextGenerator {
+	return &providerTextGenerator{
+		factory:    factory,
+		runtimeCfg: runtimeCfg,
+		model:      model,
+	}
+}
+
+// Generate 使用预先绑定的 provider/model 快照发起无工具的独立生成请求。
+func (g *providerTextGenerator) Generate(
+	ctx context.Context,
+	prompt string,
+	messages []providertypes.Message,
+) (string, error) {
+	modelProvider, err := g.factory.Build(ctx, g.runtimeCfg)
+	if err != nil {
+		return "", err
+	}
+
+	events := make(chan providertypes.StreamEvent, 32)
+	done := make(chan error, 1)
+	var builder strings.Builder
+
+	go func() {
+		messageDone := false
+		var streamErr error
+		for event := range events {
+			switch event.Type {
+			case providertypes.StreamEventTextDelta:
+				payload, err := event.TextDeltaValue()
+				if err != nil {
+					if streamErr == nil {
+						streamErr = err
+					}
+					continue
+				}
+				builder.WriteString(payload.Text)
+			case providertypes.StreamEventMessageDone:
+				if _, err := event.MessageDoneValue(); err != nil {
+					if streamErr == nil {
+						streamErr = err
+					}
+					continue
+				}
+				messageDone = true
+			default:
+				if streamErr == nil {
+					streamErr = fmt.Errorf("memo: unexpected provider stream event %q", event.Type)
+				}
+			}
+		}
+		if streamErr == nil && !messageDone {
+			streamErr = fmt.Errorf("memo: provider stream ended without message_done event")
+		}
+		done <- streamErr
+	}()
+
+	err = modelProvider.Generate(ctx, providertypes.GenerateRequest{
+		Model:        g.model,
+		SystemPrompt: prompt,
+		Messages:     append([]providertypes.Message(nil), messages...),
+	}, events)
+	close(events)
+
+	streamErr := <-done
+	if streamErr != nil {
+		if err != nil {
+			return "", fmt.Errorf("memo: provider generate failed: %v: %w", streamErr, err)
+		}
+		return "", streamErr
+	}
+	if err != nil {
+		return "", err
+	}
+	return builder.String(), nil
 }

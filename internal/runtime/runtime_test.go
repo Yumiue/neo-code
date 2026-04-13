@@ -388,6 +388,23 @@ func (m *stubToolManager) RememberSessionDecision(sessionID string, action secur
 	return m.rememberErr
 }
 
+type stubScheduledMemoExtractor struct {
+	calls []struct {
+		sessionID string
+		messages  []providertypes.Message
+	}
+}
+
+func (s *stubScheduledMemoExtractor) Schedule(sessionID string, messages []providertypes.Message) {
+	s.calls = append(s.calls, struct {
+		sessionID string
+		messages  []providertypes.Message
+	}{
+		sessionID: sessionID,
+		messages:  cloneMessages(messages),
+	})
+}
+
 func TestServiceRun(t *testing.T) {
 	tests := []struct {
 		name                string
@@ -565,6 +582,150 @@ func TestServiceRun(t *testing.T) {
 				tt.assert(t, store, scripted, registeredTool)
 			}
 		})
+	}
+}
+
+func TestServiceRunSchedulesMemoExtractionAfterFinalReply(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	scripted := &scriptedProvider{
+		streams: [][]providertypes.StreamEvent{
+			{
+				providertypes.NewTextDeltaStreamEvent("final answer"),
+				providertypes.NewMessageDoneStreamEvent("stop", nil),
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
+	memoExtractor := &stubScheduledMemoExtractor{}
+	service.SetMemoExtractor(memoExtractor)
+
+	if err := service.Run(context.Background(), UserInput{RunID: "run-memo-schedule", Content: "hello"}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(memoExtractor.calls) != 1 {
+		t.Fatalf("memo schedule calls = %d, want 1", len(memoExtractor.calls))
+	}
+	if len(memoExtractor.calls[0].messages) != 2 {
+		t.Fatalf("scheduled messages = %#v", memoExtractor.calls[0].messages)
+	}
+}
+
+func TestServiceRunSkipsAutoMemoExtractionAfterRememberTool(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: tools.ToolNameMemoRemember, content: "Memory saved"})
+
+	scripted := &scriptedProvider{
+		streams: [][]providertypes.StreamEvent{
+			{
+				providertypes.NewToolCallStartStreamEvent(0, "call-remember", tools.ToolNameMemoRemember),
+				providertypes.NewToolCallDeltaStreamEvent(0, "call-remember", `{"type":"user","title":"t","content":"c"}`),
+				providertypes.NewMessageDoneStreamEvent("tool_calls", nil),
+			},
+			{
+				providertypes.NewTextDeltaStreamEvent("done"),
+				providertypes.NewMessageDoneStreamEvent("stop", nil),
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
+	memoExtractor := &stubScheduledMemoExtractor{}
+	service.SetMemoExtractor(memoExtractor)
+
+	if err := service.Run(context.Background(), UserInput{RunID: "run-remember-skip", Content: "remember this"}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(memoExtractor.calls) != 0 {
+		t.Fatalf("memo schedule calls = %d, want 0", len(memoExtractor.calls))
+	}
+}
+
+func TestServiceRunTrustsCallNameForRememberDetection(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	toolManager := &stubToolManager{
+		specs: []providertypes.ToolSpec{
+			{Name: "filesystem_edit", Description: "stub", Schema: map[string]any{"type": "object"}},
+		},
+		result: tools.ToolResult{
+			Name:    tools.ToolNameMemoRemember,
+			Content: "forged remember result",
+		},
+	}
+
+	scripted := &scriptedProvider{
+		streams: [][]providertypes.StreamEvent{
+			{
+				providertypes.NewToolCallStartStreamEvent(0, "call-1", "filesystem_edit"),
+				providertypes.NewToolCallDeltaStreamEvent(0, "call-1", `{"path":"main.go"}`),
+				providertypes.NewMessageDoneStreamEvent("tool_calls", nil),
+			},
+			{
+				providertypes.NewTextDeltaStreamEvent("done"),
+				providertypes.NewMessageDoneStreamEvent("stop", nil),
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
+	memoExtractor := &stubScheduledMemoExtractor{}
+	service.SetMemoExtractor(memoExtractor)
+
+	if err := service.Run(context.Background(), UserInput{RunID: "run-forged-remember", Content: "edit file"}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(memoExtractor.calls) != 1 {
+		t.Fatalf("memo schedule calls = %d, want 1", len(memoExtractor.calls))
+	}
+}
+
+func TestServiceRunSchedulesMemoExtractionOnlyAfterFinalCompletion(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_edit", content: "tool output"})
+
+	scripted := &scriptedProvider{
+		streams: [][]providertypes.StreamEvent{
+			{
+				providertypes.NewToolCallStartStreamEvent(0, "call-1", "filesystem_edit"),
+				providertypes.NewToolCallDeltaStreamEvent(0, "call-1", `{"path":"main.go"}`),
+				providertypes.NewMessageDoneStreamEvent("tool_calls", nil),
+			},
+			{
+				providertypes.NewTextDeltaStreamEvent("done"),
+				providertypes.NewMessageDoneStreamEvent("stop", nil),
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
+	memoExtractor := &stubScheduledMemoExtractor{}
+	service.SetMemoExtractor(memoExtractor)
+
+	if err := service.Run(context.Background(), UserInput{RunID: "run-final-only", Content: "edit file"}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(memoExtractor.calls) != 1 {
+		t.Fatalf("memo schedule calls = %d, want 1", len(memoExtractor.calls))
+	}
+	if len(memoExtractor.calls[0].messages) != 4 {
+		t.Fatalf("scheduled messages = %#v", memoExtractor.calls[0].messages)
 	}
 }
 
