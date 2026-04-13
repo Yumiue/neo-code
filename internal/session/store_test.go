@@ -17,12 +17,7 @@ import (
 func TestJSONStoreSaveLoadAndListSummaries(t *testing.T) {
 	t.Parallel()
 
-	baseDir := t.TempDir()
-	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
-	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
-		t.Fatalf("mkdir workspace root: %v", err)
-	}
-	store := NewJSONStore(baseDir, workspaceRoot)
+	store, baseDir, workspaceRoot := newTempWorkspaceStore(t)
 
 	older := &Session{
 		SchemaVersion: CurrentSchemaVersion,
@@ -47,12 +42,8 @@ func TestJSONStoreSaveLoadAndListSummaries(t *testing.T) {
 		},
 	}
 
-	if err := store.Save(context.Background(), older); err != nil {
-		t.Fatalf("Save older session: %v", err)
-	}
-	if err := store.Save(context.Background(), newer); err != nil {
-		t.Fatalf("Save newer session: %v", err)
-	}
+	mustSaveSession(t, store, older)
+	mustSaveSession(t, store, newer)
 
 	loaded, err := store.Load(context.Background(), older.ID)
 	if err != nil {
@@ -679,6 +670,38 @@ func TestDecodeStoredSummaryUsesLightweightMetadataPath(t *testing.T) {
 	}
 }
 
+func TestDecodeStoredSummaryRejectsNullTaskState(t *testing.T) {
+	t.Parallel()
+
+	_, err := decodeStoredSummary([]byte(`{
+  "schema_version": 1,
+  "id": "summary-null-task-state",
+  "title": "Summary Null Task State",
+  "created_at": "2026-04-13T08:00:00Z",
+  "updated_at": "2026-04-13T09:00:00Z",
+  "task_state": null
+}`))
+	if err == nil || !strings.Contains(err.Error(), "invalid field task_state") {
+		t.Fatalf("expected null task_state rejection, got %v", err)
+	}
+}
+
+func TestDecodeStoredSummaryRejectsNonObjectTaskState(t *testing.T) {
+	t.Parallel()
+
+	_, err := decodeStoredSummary([]byte(`{
+  "schema_version": 1,
+  "id": "summary-invalid-task-state",
+  "title": "Summary Invalid Task State",
+  "created_at": "2026-04-13T08:00:00Z",
+  "updated_at": "2026-04-13T09:00:00Z",
+  "task_state": []
+}`))
+	if err == nil || !strings.Contains(err.Error(), "invalid field task_state") {
+		t.Fatalf("expected non-object task_state rejection, got %v", err)
+	}
+}
+
 func TestJSONStoreSaveClampsOversizedTaskState(t *testing.T) {
 	t.Parallel()
 
@@ -782,6 +805,25 @@ func buildIndexedSuffix(index int) string {
 	hi := chars[(index/len(chars))%len(chars)]
 	lo := chars[index%len(chars)]
 	return string([]rune{hi, lo, 'x', 'x'})
+}
+
+func newTempWorkspaceStore(t testing.TB) (*JSONStore, string, string) {
+	t.Helper()
+
+	baseDir := t.TempDir()
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		t.Fatalf("mkdir workspace root: %v", err)
+	}
+
+	return NewJSONStore(baseDir, workspaceRoot), baseDir, workspaceRoot
+}
+
+func mustSaveSession(t testing.TB, store *JSONStore, session *Session) {
+	t.Helper()
+	if err := store.Save(context.Background(), session); err != nil {
+		t.Fatalf("save session %s: %v", session.ID, err)
+	}
 }
 
 func mustWriteSessionFile(t *testing.T, path string, content string) {

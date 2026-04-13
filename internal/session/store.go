@@ -86,8 +86,8 @@ func (s *JSONStore) Save(ctx context.Context, session *Session) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if err := os.MkdirAll(s.baseDir, 0o755); err != nil {
-		return fmt.Errorf("session: create sessions dir: %w", err)
+	if err := s.ensureSessionsDir(); err != nil {
+		return err
 	}
 
 	payload, err := json.MarshalIndent(session, "", "  ")
@@ -141,8 +141,8 @@ func (s *JSONStore) ListSummaries(ctx context.Context) ([]Summary, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if err := os.MkdirAll(s.baseDir, 0o755); err != nil {
-		return nil, fmt.Errorf("session: create sessions dir: %w", err)
+	if err := s.ensureSessionsDir(); err != nil {
+		return nil, err
 	}
 
 	entries, err := os.ReadDir(s.baseDir)
@@ -187,6 +187,14 @@ func (s *JSONStore) ListSummaries(ctx context.Context) ([]Summary, error) {
 // filePath 生成会话 ID 对应的 JSON 文件路径。
 func (s *JSONStore) filePath(id string) string {
 	return filepath.Join(s.baseDir, id+".json")
+}
+
+// ensureSessionsDir 确保会话目录存在，避免重复的 mkdir 原子逻辑。
+func (s *JSONStore) ensureSessionsDir() error {
+	if err := os.MkdirAll(s.baseDir, 0o755); err != nil {
+		return fmt.Errorf("session: create sessions dir: %w", err)
+	}
+	return nil
 }
 
 // New 创建一个默认标题策略的新会话对象。
@@ -307,6 +315,10 @@ func decodeStoredSummary(data []byte) (Summary, error) {
 	}
 	if len(stored.TaskState) == 0 {
 		return Summary{}, errors.New("missing required field task_state")
+	}
+	var taskState *TaskState
+	if err := json.Unmarshal(stored.TaskState, &taskState); err != nil || taskState == nil {
+		return Summary{}, errors.New("invalid field task_state")
 	}
 	if err := validateSessionSchema(Session{SchemaVersion: *stored.SchemaVersion}); err != nil {
 		return Summary{}, err

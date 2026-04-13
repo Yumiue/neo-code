@@ -23,19 +23,12 @@ func validCompactSummaryJSON() string {
 func TestCompactSummaryGeneratorBuildsProviderRequestWithoutTools(t *testing.T) {
 	t.Parallel()
 
-	manager := newRuntimeConfigManager(t)
-	resolvedProvider, err := resolvedProviderForTests(manager.Get(), config.OpenAIName)
-	if err != nil {
-		t.Fatalf("resolve provider: %v", err)
-	}
-
 	scripted := &scriptedProvider{
 		streams: [][]providertypes.StreamEvent{
 			{providertypes.NewTextDeltaStreamEvent(validCompactSummaryJSON())},
 		},
 	}
-	factory := &scriptedProviderFactory{provider: scripted}
-	generator := newCompactSummaryGenerator(factory, resolvedProvider.ToRuntimeConfig(), "session-model")
+	generator, factory, manager := newCompactGeneratorTestSetup(t, scripted)
 
 	summary, err := generator.Generate(context.Background(), contextcompact.SummaryInput{
 		Mode: contextcompact.ModeManual,
@@ -116,12 +109,6 @@ func TestCompactSummaryGeneratorBuildsProviderRequestWithoutTools(t *testing.T) 
 func TestCompactSummaryGeneratorRejectsToolCalls(t *testing.T) {
 	t.Parallel()
 
-	manager := newRuntimeConfigManager(t)
-	resolvedProvider, err := resolvedProviderForTests(manager.Get(), config.OpenAIName)
-	if err != nil {
-		t.Fatalf("resolve provider: %v", err)
-	}
-
 	scripted := &scriptedProvider{
 		streams: [][]providertypes.StreamEvent{
 			{
@@ -130,28 +117,20 @@ func TestCompactSummaryGeneratorRejectsToolCalls(t *testing.T) {
 			},
 		},
 	}
-	generator := newCompactSummaryGenerator(&scriptedProviderFactory{provider: scripted}, resolvedProvider.ToRuntimeConfig(), "session-model")
+	generator, _, manager := newCompactGeneratorTestSetup(t, scripted)
 
-	_, err = generator.Generate(context.Background(), contextcompact.SummaryInput{
+	_, err := generator.Generate(context.Background(), contextcompact.SummaryInput{
 		Mode: contextcompact.ModeManual,
 		ArchivedMessages: []providertypes.Message{
 			{Role: providertypes.RoleUser, Content: "legacy request"},
 		},
 		Config: manager.Get().Context.Compact,
 	})
-	if err == nil || !strings.Contains(err.Error(), "must not contain tool calls") {
-		t.Fatalf("expected tool call rejection, got %v", err)
-	}
+	requireErrorContains(t, err, "must not contain tool calls")
 }
 
 func TestCompactSummaryGeneratorRejectsMalformedStreamEvent(t *testing.T) {
 	t.Parallel()
-
-	manager := newRuntimeConfigManager(t)
-	resolvedProvider, err := resolvedProviderForTests(manager.Get(), config.OpenAIName)
-	if err != nil {
-		t.Fatalf("resolve provider: %v", err)
-	}
 
 	scripted := &scriptedProvider{
 		streams: [][]providertypes.StreamEvent{
@@ -160,25 +139,17 @@ func TestCompactSummaryGeneratorRejectsMalformedStreamEvent(t *testing.T) {
 			},
 		},
 	}
-	generator := newCompactSummaryGenerator(&scriptedProviderFactory{provider: scripted}, resolvedProvider.ToRuntimeConfig(), "session-model")
+	generator, _, manager := newCompactGeneratorTestSetup(t, scripted)
 
-	_, err = generator.Generate(context.Background(), contextcompact.SummaryInput{
+	_, err := generator.Generate(context.Background(), contextcompact.SummaryInput{
 		Mode:   contextcompact.ModeManual,
 		Config: manager.Get().Context.Compact,
 	})
-	if err == nil || !strings.Contains(err.Error(), "text_delta event payload is nil") {
-		t.Fatalf("expected malformed stream event rejection, got %v", err)
-	}
+	requireErrorContains(t, err, "text_delta event payload is nil")
 }
 
 func TestCompactSummaryGeneratorRejectsCompletionWithoutMessageDone(t *testing.T) {
 	t.Parallel()
-
-	manager := newRuntimeConfigManager(t)
-	resolvedProvider, err := resolvedProviderForTests(manager.Get(), config.OpenAIName)
-	if err != nil {
-		t.Fatalf("resolve provider: %v", err)
-	}
 
 	scripted := &scriptedProvider{
 		chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
@@ -190,28 +161,20 @@ func TestCompactSummaryGeneratorRejectsCompletionWithoutMessageDone(t *testing.T
 			return nil
 		},
 	}
-	generator := newCompactSummaryGenerator(&scriptedProviderFactory{provider: scripted}, resolvedProvider.ToRuntimeConfig(), "session-model")
+	generator, _, manager := newCompactGeneratorTestSetup(t, scripted)
 
-	_, err = generator.Generate(context.Background(), contextcompact.SummaryInput{
+	_, err := generator.Generate(context.Background(), contextcompact.SummaryInput{
 		Mode:   contextcompact.ModeManual,
 		Config: manager.Get().Context.Compact,
 	})
 	if !errors.Is(err, provider.ErrStreamInterrupted) {
 		t.Fatalf("expected ErrStreamInterrupted, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "without message_done") {
-		t.Fatalf("expected missing message_done error, got %v", err)
-	}
+	requireErrorContains(t, err, "without message_done")
 }
 
 func TestCompactSummaryGeneratorMalformedStreamEventDoesNotDeadlock(t *testing.T) {
 	t.Parallel()
-
-	manager := newRuntimeConfigManager(t)
-	resolvedProvider, err := resolvedProviderForTests(manager.Get(), config.OpenAIName)
-	if err != nil {
-		t.Fatalf("resolve provider: %v", err)
-	}
 
 	stream := []providertypes.StreamEvent{{Type: providertypes.StreamEventTextDelta}}
 	for i := 0; i < 40; i++ {
@@ -220,7 +183,7 @@ func TestCompactSummaryGeneratorMalformedStreamEventDoesNotDeadlock(t *testing.T
 	scripted := &scriptedProvider{
 		streams: [][]providertypes.StreamEvent{stream},
 	}
-	generator := newCompactSummaryGenerator(&scriptedProviderFactory{provider: scripted}, resolvedProvider.ToRuntimeConfig(), "session-model")
+	generator, _, manager := newCompactGeneratorTestSetup(t, scripted)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -233,9 +196,7 @@ func TestCompactSummaryGeneratorMalformedStreamEventDoesNotDeadlock(t *testing.T
 
 	select {
 	case genErr := <-errCh:
-		if genErr == nil || !strings.Contains(genErr.Error(), "text_delta event payload is nil") {
-			t.Fatalf("expected malformed stream event rejection, got %v", genErr)
-		}
+		requireErrorContains(t, genErr, "text_delta event payload is nil")
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected compact generation to fail instead of deadlocking on malformed stream event")
 	}
@@ -273,5 +234,44 @@ func TestParseCompactSummaryOutputSkipsNonCompactJSONPreface(t *testing.T) {
 	}
 	if output.TaskState.Goal != "g" {
 		t.Fatalf("expected parsed goal, got %+v", output.TaskState)
+	}
+}
+
+func TestParseCompactSummaryOutputSkipsBraceNoiseAndFindsFirstValidObject(t *testing.T) {
+	t.Parallel()
+
+	noise := strings.Repeat("{not-json}", 80)
+	content := strings.Join([]string{
+		noise,
+		`{"task_state":{"goal":"g","progress":[],"open_items":[],"next_step":"","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[]},"display_summary":"[compact_summary]\nok"}`,
+	}, "\n")
+
+	output, err := parseCompactSummaryOutput(content)
+	if err != nil {
+		t.Fatalf("expected parser to recover valid compact payload after brace noise, got %v", err)
+	}
+	if output.TaskState.Goal != "g" {
+		t.Fatalf("expected parsed goal, got %+v", output.TaskState)
+	}
+}
+
+func newCompactGeneratorTestSetup(t *testing.T, scripted *scriptedProvider) (contextcompact.SummaryGenerator, *scriptedProviderFactory, *config.Manager) {
+	t.Helper()
+
+	manager := newRuntimeConfigManager(t)
+	resolvedProvider, err := resolvedProviderForTests(manager.Get(), config.OpenAIName)
+	if err != nil {
+		t.Fatalf("resolve provider: %v", err)
+	}
+
+	factory := &scriptedProviderFactory{provider: scripted}
+	generator := newCompactSummaryGenerator(factory, resolvedProvider.ToRuntimeConfig(), "session-model")
+	return generator, factory, manager
+}
+
+func requireErrorContains(t *testing.T, err error, substring string) {
+	t.Helper()
+	if err == nil || !strings.Contains(err.Error(), substring) {
+		t.Fatalf("expected error containing %q, got %v", substring, err)
 	}
 }

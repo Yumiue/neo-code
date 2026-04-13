@@ -151,35 +151,13 @@ func cloneStringSlice(items []string) []string {
 
 // extractJSONObject 从模型响应中提取首个满足 compact 协议的 JSON 对象，容忍前后噪音。
 func extractJSONObject(text string) (string, error) {
-	start := strings.IndexByte(text, '{')
-	if start < 0 {
-		return "", errors.New("runtime: compact summary response does not contain a JSON object")
-	}
-
-	for {
-		candidate, err := extractJSONObjectCandidate(text, start)
-		if err == nil {
-			if _, decodeErr := decodeCompactSummaryResponse(candidate); decodeErr == nil {
-				return candidate, nil
-			}
-		}
-
-		next := strings.IndexByte(text[start+1:], '{')
-		if next < 0 {
-			break
-		}
-		start += next + 1
-	}
-
-	return "", errors.New("runtime: compact summary response does not contain a valid compact JSON object")
-}
-
-// extractJSONObjectCandidate 从给定起点抽取平衡的 JSON 对象片段。
-func extractJSONObjectCandidate(text string, start int) (string, error) {
 	depth := 0
 	inString := false
 	escaped := false
-	for index := start; index < len(text); index++ {
+	start := -1
+	seenObjectStart := false
+
+	for index := 0; index < len(text); index++ {
 		ch := text[index]
 		if inString {
 			if escaped {
@@ -199,14 +177,30 @@ func extractJSONObjectCandidate(text string, start int) (string, error) {
 		case '"':
 			inString = true
 		case '{':
+			seenObjectStart = true
+			if depth == 0 {
+				start = index
+			}
 			depth++
 		case '}':
-			depth--
 			if depth == 0 {
-				return strings.TrimSpace(text[start : index+1]), nil
+				continue
+			}
+			depth--
+			if depth == 0 && start >= 0 {
+				candidate := strings.TrimSpace(text[start : index+1])
+				if _, err := decodeCompactSummaryResponse(candidate); err == nil {
+					return candidate, nil
+				}
 			}
 		}
 	}
 
-	return "", errors.New("runtime: compact summary response contains an incomplete JSON object")
+	if !seenObjectStart {
+		return "", errors.New("runtime: compact summary response does not contain a JSON object")
+	}
+	if depth > 0 {
+		return "", errors.New("runtime: compact summary response contains an incomplete JSON object")
+	}
+	return "", errors.New("runtime: compact summary response does not contain a valid compact JSON object")
 }
