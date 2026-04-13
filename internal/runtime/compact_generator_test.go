@@ -258,3 +258,20 @@ func TestParseCompactSummaryOutputRejectsUnknownTaskStateField(t *testing.T) {
 		t.Fatal("expected unknown task_state field to be rejected")
 	}
 }
+
+func TestParseCompactSummaryOutputSkipsNonCompactJSONPreface(t *testing.T) {
+	t.Parallel()
+
+	content := strings.Join([]string{
+		`preface with braces {"hint":"not compact"}`,
+		`{"task_state":{"goal":"g","progress":[],"open_items":[],"next_step":"","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[]},"display_summary":"[compact_summary]\nok"}`,
+	}, "\n")
+
+	output, err := parseCompactSummaryOutput(content)
+	if err != nil {
+		t.Fatalf("expected parser to recover valid compact payload, got %v", err)
+	}
+	if output.TaskState.Goal != "g" {
+		t.Fatalf("expected parsed goal, got %+v", output.TaskState)
+	}
+}
