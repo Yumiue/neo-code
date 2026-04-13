@@ -163,13 +163,6 @@ func (s *Server) snapshotConnections() map[net.Conn]struct{} {
 	return copied
 }
 
-// trackConnection 记录活跃连接，便于关闭时统一清理。
-func (s *Server) trackConnection(conn net.Conn) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.conns[conn] = struct{}{}
-}
-
 // registerConnection 在服务可用时登记连接，若网关已关闭则拒绝登记。
 func (s *Server) registerConnection(conn net.Conn) bool {
 	s.mu.Lock()
