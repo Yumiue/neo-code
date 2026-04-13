@@ -167,8 +167,6 @@ func TestBuildToolRegistryUsesWebFetchConfig(t *testing.T) {
 }
 
 func TestBuildMCPRegistryFromConfig(t *testing.T) {
-	t.Parallel()
-
 	stubClient := &stubMCPServerClient{
 		tools: []mcp.ToolDescriptor{
 			{Name: "search", Description: "search docs", InputSchema: map[string]any{"type": "object"}},
@@ -323,8 +321,6 @@ func TestDefaultRegisterMCPStdioServerRefreshFailure(t *testing.T) {
 }
 
 func TestBuildToolRegistryIncludesMCPFromConfig(t *testing.T) {
-	t.Parallel()
-
 	cfg := config.StaticDefaults().Clone()
 	cfg.Workdir = t.TempDir()
 	cfg.Tools.MCP.Servers = []config.MCPServerConfig{
@@ -373,8 +369,6 @@ func TestBuildToolRegistryIncludesMCPFromConfig(t *testing.T) {
 }
 
 func TestBuildToolRegistryAppliesMCPExposureConfig(t *testing.T) {
-	t.Parallel()
-
 	cfg := config.StaticDefaults().Clone()
 	cfg.Workdir = t.TempDir()
 	cfg.Tools.MCP.Servers = []config.MCPServerConfig{
@@ -551,8 +545,6 @@ func TestBuildMCPRegistryNoEnabledServerReturnsNil(t *testing.T) {
 }
 
 func TestBuildMCPRegistryRegisterError(t *testing.T) {
-	t.Parallel()
-
 	cfg := config.StaticDefaults().Clone()
 	cfg.Workdir = t.TempDir()
 	cfg.Tools.MCP.Servers = []config.MCPServerConfig{
@@ -572,8 +564,6 @@ func TestBuildMCPRegistryRegisterError(t *testing.T) {
 }
 
 func TestBuildMCPRegistryRollbackRegisteredServersOnFailure(t *testing.T) {
-	t.Parallel()
-
 	cfg := config.StaticDefaults().Clone()
 	cfg.Workdir = t.TempDir()
 	cfg.Tools.MCP.Servers = []config.MCPServerConfig{

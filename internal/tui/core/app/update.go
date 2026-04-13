@@ -722,7 +722,7 @@ func (a *App) syncConfigState(cfg config.Config) {
 	}
 }
 
-// refreshRuntimeSourceSnapshot 浠?runtime 鏌ヨ context/token/tool 蹇収锛岀敤浜庝細璇濆垏鎹㈡垨鎭㈠鏃跺洖濉?UI銆
+// refreshRuntimeSourceSnapshot 从 runtime 查询 context/token/tool 快照，用于会话切换或恢复时回填 UI。
 func (a *App) refreshRuntimeSourceSnapshot() {
 	sessionID := strings.TrimSpace(a.state.ActiveSessionID)
 	if sessionID != "" {
@@ -1791,7 +1791,7 @@ func runResolvePermission(
 	)
 }
 
-// runCompact 鍦ㄧ嫭绔嬪懡浠や腑瑙﹀彂 runtime compact锛屽苟鎶婄粨鏋滃洖浼犵粰 TUI銆
+// runCompact 在独立命令中触发 runtime compact，并把结果回传给 TUI。
 func runCompact(runtime agentruntime.Runtime, sessionID string) tea.Cmd {
 	return tuiservices.RunCompactCmd(
 		runtime,
@@ -1800,7 +1800,7 @@ func runCompact(runtime agentruntime.Runtime, sessionID string) tea.Cmd {
 	)
 }
 
-// isBusy 缁熶竴鍒ゆ柇褰撳墠鐣岄潰鏄惁瀛樺湪杩涜涓殑 agent 鎴?compact 鎿嶄綔銆
+// isBusy 统一判断当前界面是否存在进行中的 agent 或 compact 操作。
 func (a App) isBusy() bool {
 	return tuiutils.IsBusy(a.state.IsAgentRunning, a.state.IsCompacting)
 }
