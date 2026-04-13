@@ -345,6 +345,15 @@ func TestRegistryClose(t *testing.T) {
 	}
 }
 
+func TestRegistryCloseNilReceiver(t *testing.T) {
+	t.Parallel()
+
+	var nilRegistry *Registry
+	if err := nilRegistry.Close(); err != nil {
+		t.Fatalf("expected nil receiver close to return nil, got %v", err)
+	}
+}
+
 func TestCloseServerClientBoundaries(t *testing.T) {
 	t.Parallel()
 

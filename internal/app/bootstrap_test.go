@@ -20,6 +20,8 @@ import (
 	"neo-code/internal/config"
 	configstate "neo-code/internal/config/state"
 	"neo-code/internal/memo"
+	"neo-code/internal/provider"
+	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
 	"neo-code/internal/tools"
 	"neo-code/internal/tools/mcp"
@@ -1003,6 +1005,157 @@ func TestEnsureConsoleUTF8SkipsInputWhenOutputFails(t *testing.T) {
 	}
 }
 
+func TestRuntimeMemoExtractorFuncSchedule(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	extractor := runtimeMemoExtractorFunc(func(sessionID string, messages []providertypes.Message) {
+		called = true
+		if sessionID != "session-1" {
+			t.Fatalf("unexpected session id %q", sessionID)
+		}
+		if len(messages) != 1 || messages[0].Content != "hi" {
+			t.Fatalf("unexpected messages %+v", messages)
+		}
+	})
+
+	extractor.Schedule("session-1", []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "hi"},
+	})
+
+	if !called {
+		t.Fatalf("expected schedule callback to be called")
+	}
+}
+
+func TestTextGenAdapterGenerate(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	adapter := textGenAdapter(func(ctx context.Context, prompt string, msgs []providertypes.Message) (string, error) {
+		called = true
+		if prompt != "prompt" {
+			t.Fatalf("unexpected prompt %q", prompt)
+		}
+		if len(msgs) != 1 || msgs[0].Content != "msg" {
+			t.Fatalf("unexpected messages %+v", msgs)
+		}
+		return "ok", nil
+	})
+
+	result, err := adapter.Generate(context.Background(), "prompt", []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "msg"},
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if result != "ok" {
+		t.Fatalf("unexpected result %q", result)
+	}
+	if !called {
+		t.Fatalf("expected adapter callback to be called")
+	}
+}
+
+func TestNewMemoExtractorAdapterSkipsWhenSchedulerNil(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.StaticDefaults().Clone()
+	cfg.SelectedProvider = config.OpenAIName
+	manager := config.NewManager(config.NewLoader("", &cfg))
+	extractor := newMemoExtractorAdapter(nil, manager, nil)
+
+	extractor.Schedule("session-1", []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "remember this"},
+	})
+}
+
+func TestNewMemoExtractorAdapterSkipsWhenResolveProviderFails(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.StaticDefaults().Clone()
+	cfg.SelectedProvider = ""
+	manager := config.NewManager(config.NewLoader("", &cfg))
+	scheduler := &stubMemoExtractorScheduler{}
+	extractor := newMemoExtractorAdapter(nil, manager, scheduler)
+
+	extractor.Schedule("session-1", []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "remember this"},
+	})
+
+	if scheduler.called {
+		t.Fatalf("expected scheduler not to be called when provider resolution fails")
+	}
+}
+
+func TestNewMemoExtractorAdapterSchedulesExtractorAndGenerates(t *testing.T) {
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "token")
+	cfg := config.StaticDefaults().Clone()
+	cfg.SelectedProvider = config.OpenAIName
+	manager := config.NewManager(config.NewLoader("", &cfg))
+	providerStub := &stubMemoProvider{
+		generate: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+			if req.Model != cfg.CurrentModel {
+				t.Fatalf("unexpected model %q", req.Model)
+			}
+			if strings.TrimSpace(req.SystemPrompt) == "" {
+				t.Fatalf("expected non-empty system prompt")
+			}
+			events <- providertypes.NewTextDeltaStreamEvent(`[{"type":"user","title":"偏好","content":"记住使用 Go","keywords":["go"]}]`)
+			events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
+			return nil
+		},
+	}
+	factory := &stubMemoProviderFactory{provider: providerStub}
+	scheduler := &stubMemoExtractorScheduler{}
+	extractor := newMemoExtractorAdapter(factory, manager, scheduler)
+
+	inputMessages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "remember 我偏好 Go"},
+	}
+	extractor.Schedule("session-1", inputMessages)
+
+	if !scheduler.called || scheduler.extractor == nil {
+		t.Fatalf("expected scheduler to receive extractor")
+	}
+	if scheduler.sessionID != "session-1" {
+		t.Fatalf("unexpected session id %q", scheduler.sessionID)
+	}
+	entries, err := scheduler.extractor.Extract(context.Background(), inputMessages)
+	if err != nil {
+		t.Fatalf("extractor.Extract() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected one extracted entry, got %+v", entries)
+	}
+	if !factory.called {
+		t.Fatalf("expected provider factory Build to be called")
+	}
+}
+
+func TestNewMemoExtractorAdapterPropagatesFactoryBuildError(t *testing.T) {
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "token")
+	cfg := config.StaticDefaults().Clone()
+	cfg.SelectedProvider = config.OpenAIName
+	manager := config.NewManager(config.NewLoader("", &cfg))
+	factory := &stubMemoProviderFactory{buildErr: errors.New("build failed")}
+	scheduler := &stubMemoExtractorScheduler{}
+	extractor := newMemoExtractorAdapter(factory, manager, scheduler)
+
+	inputMessages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "remember coding style"},
+	}
+	extractor.Schedule("session-1", inputMessages)
+	if !scheduler.called || scheduler.extractor == nil {
+		t.Fatalf("expected scheduler to receive extractor")
+	}
+
+	_, err := scheduler.extractor.Extract(context.Background(), inputMessages)
+	if err == nil || !strings.Contains(err.Error(), "build failed") {
+		t.Fatalf("expected build failure, got %v", err)
+	}
+}
+
 type stubToolForBootstrap struct {
 	name    string
 	content string
@@ -1066,6 +1219,59 @@ func (s *closeableStubMCPServerClient) Close() error {
 	if s.closed != nil {
 		*s.closed = true
 	}
+	return nil
+}
+
+type stubMemoExtractorScheduler struct {
+	called    bool
+	sessionID string
+	messages  []providertypes.Message
+	extractor memo.Extractor
+}
+
+func (s *stubMemoExtractorScheduler) ScheduleWithExtractor(
+	sessionID string,
+	messages []providertypes.Message,
+	extractor memo.Extractor,
+) {
+	s.called = true
+	s.sessionID = sessionID
+	s.messages = append([]providertypes.Message(nil), messages...)
+	s.extractor = extractor
+}
+
+type stubMemoProviderFactory struct {
+	called   bool
+	cfg      provider.RuntimeConfig
+	provider provider.Provider
+	buildErr error
+}
+
+func (s *stubMemoProviderFactory) Build(ctx context.Context, cfg provider.RuntimeConfig) (provider.Provider, error) {
+	s.called = true
+	s.cfg = cfg
+	if s.buildErr != nil {
+		return nil, s.buildErr
+	}
+	if s.provider != nil {
+		return s.provider, nil
+	}
+	return &stubMemoProvider{}, nil
+}
+
+type stubMemoProvider struct {
+	generate func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error
+}
+
+func (s *stubMemoProvider) Generate(
+	ctx context.Context,
+	req providertypes.GenerateRequest,
+	events chan<- providertypes.StreamEvent,
+) error {
+	if s.generate != nil {
+		return s.generate(ctx, req, events)
+	}
+	events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
 	return nil
 }
 
