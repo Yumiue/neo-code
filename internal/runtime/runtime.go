@@ -21,7 +21,6 @@ const (
 	defaultProviderRetryMax = 2
 	providerRetryBaseWait   = 1 * time.Second
 	providerRetryMaxWait    = 5 * time.Second
-	defaultMaxLoops         = 8
 )
 
 // Runtime 定义 runtime 对外暴露的运行、压缩与审批接口。

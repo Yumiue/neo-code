@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"neo-code/internal/config"
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/approval"
@@ -140,20 +139,6 @@ func TestAppendToolMessageAndSaveSanitizesMetadata(t *testing.T) {
 	}
 	if _, exists := msg.ToolMetadata["sensitive"]; exists {
 		t.Fatalf("expected sensitive metadata key to be removed, got %+v", msg.ToolMetadata)
-	}
-}
-
-func TestResolveMaxLoopsBranches(t *testing.T) {
-	t.Parallel()
-
-	if got := resolveMaxLoops(config.Config{MaxLoops: 0}); got != defaultMaxLoops {
-		t.Fatalf("expected default max loops for zero, got %d", got)
-	}
-	if got := resolveMaxLoops(config.Config{MaxLoops: -3}); got != defaultMaxLoops {
-		t.Fatalf("expected default max loops for negative, got %d", got)
-	}
-	if got := resolveMaxLoops(config.Config{MaxLoops: 12}); got != 12 {
-		t.Fatalf("expected explicit max loops, got %d", got)
 	}
 }
 
