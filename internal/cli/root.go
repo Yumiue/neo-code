@@ -45,6 +45,10 @@ func NewRootCommand() *cobra.Command {
 
 	cmd.PersistentFlags().String("workdir", "", "工作目录（覆盖本次运行工作区）")
 	_ = settings.BindPFlag("workdir", cmd.PersistentFlags().Lookup("workdir"))
+	cmd.AddCommand(
+		newGatewayCommand(),
+		newURLDispatchCommand(),
+	)
 
 	return cmd
 }

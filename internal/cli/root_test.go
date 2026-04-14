@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -163,6 +164,103 @@ func TestDefaultRootProgramLauncherJoinsRunAndCleanupErrors(t *testing.T) {
 	}
 	if !errors.Is(err, cleanupErr) {
 		t.Fatalf("expected joined error to include cleanup error %v, got %v", cleanupErr, err)
+	}
+}
+
+func TestGatewaySubcommandPassesFlagsToRunner(t *testing.T) {
+	originalRunner := runGatewayCommand
+	t.Cleanup(func() { runGatewayCommand = originalRunner })
+
+	var captured gatewayCommandOptions
+	runGatewayCommand = func(ctx context.Context, options gatewayCommandOptions) error {
+		captured = options
+		return nil
+	}
+
+	command := NewRootCommand()
+	command.SetArgs([]string{"gateway", "--listen", "  /tmp/gateway.sock  ", "--log-level", " WARN "})
+	if err := command.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
+	}
+
+	if captured.ListenAddress != "/tmp/gateway.sock" {
+		t.Fatalf("listen address = %q, want %q", captured.ListenAddress, "/tmp/gateway.sock")
+	}
+	if captured.LogLevel != "warn" {
+		t.Fatalf("log level = %q, want %q", captured.LogLevel, "warn")
+	}
+}
+
+func TestGatewaySubcommandRejectsInvalidLogLevel(t *testing.T) {
+	command := NewRootCommand()
+	command.SetArgs([]string{"gateway", "--log-level", "trace"})
+	err := command.ExecuteContext(context.Background())
+	if err == nil {
+		t.Fatal("expected invalid log level error")
+	}
+	if !strings.Contains(err.Error(), "invalid --log-level") {
+		t.Fatalf("error = %v, want contains %q", err, "invalid --log-level")
+	}
+}
+
+func TestURLDispatchSubcommandUsesURLFlag(t *testing.T) {
+	originalRunner := runURLDispatchCommand
+	t.Cleanup(func() { runURLDispatchCommand = originalRunner })
+
+	var captured urlDispatchCommandOptions
+	runURLDispatchCommand = func(ctx context.Context, options urlDispatchCommandOptions) error {
+		captured = options
+		return nil
+	}
+
+	command := NewRootCommand()
+	command.SetArgs([]string{
+		"url-dispatch",
+		"--url", "  neocode://review?path=README.md  ",
+		"--listen", "  /tmp/gateway.sock  ",
+	})
+	if err := command.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
+	}
+
+	if captured.URL != "neocode://review?path=README.md" {
+		t.Fatalf("url = %q, want %q", captured.URL, "neocode://review?path=README.md")
+	}
+	if captured.ListenAddress != "/tmp/gateway.sock" {
+		t.Fatalf("listen address = %q, want %q", captured.ListenAddress, "/tmp/gateway.sock")
+	}
+}
+
+func TestURLDispatchSubcommandUsesPositionalURL(t *testing.T) {
+	originalRunner := runURLDispatchCommand
+	t.Cleanup(func() { runURLDispatchCommand = originalRunner })
+
+	var captured urlDispatchCommandOptions
+	runURLDispatchCommand = func(ctx context.Context, options urlDispatchCommandOptions) error {
+		captured = options
+		return nil
+	}
+
+	command := NewRootCommand()
+	command.SetArgs([]string{"url-dispatch", "neocode://review?path=README.md"})
+	if err := command.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
+	}
+
+	if captured.URL != "neocode://review?path=README.md" {
+		t.Fatalf("url = %q, want %q", captured.URL, "neocode://review?path=README.md")
+	}
+}
+
+func TestURLDispatchSubcommandRejectsMissingURL(t *testing.T) {
+	command := NewRootCommand()
+	command.SetArgs([]string{"url-dispatch"})
+	err := command.ExecuteContext(context.Background())
+	if err == nil {
+		t.Fatal("expected missing url error")
+	}
+	if !strings.Contains(err.Error(), "missing required --url or positional <url>") {
+		t.Fatalf("error = %v, want missing url message", err)
 	}
 }
 

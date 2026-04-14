@@ -49,11 +49,19 @@ cd neo-code
 go run ./cmd/neocode
 ```
 
-Gateway 独立进程（Step 1 骨架）：
+Gateway 子命令（Step 1 骨架）：
 
 ```bash
-go run ./cmd/neocode-gateway
+go run ./cmd/neocode gateway
 ```
+
+URL Scheme 派发骨架命令（EPIC-GW-02A）：
+
+```bash
+go run ./cmd/neocode url-dispatch --url "neocode://review?path=README.md"
+```
+
+> `url-dispatch` 当前仅提供参数与命令骨架，实际派发能力在 EPIC-GW-02 实现。
 
 设置 API Key 示例（按你使用的 provider 选择）：
 
