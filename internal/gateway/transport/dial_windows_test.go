@@ -16,9 +16,15 @@ func TestDialWindowsNamedPipe(t *testing.T) {
 	})
 
 	serverConn, clientConn := net.Pipe()
-	dialPipeFn = func(address string, _ *time.Duration) (net.Conn, error) {
+	dialPipeFn = func(address string, timeout *time.Duration) (net.Conn, error) {
 		if address != `\\.\pipe\neocode-gateway` {
 			t.Fatalf("address = %q, want %q", address, `\\.\pipe\neocode-gateway`)
+		}
+		if timeout == nil {
+			t.Fatal("timeout pointer should not be nil")
+		}
+		if *timeout != defaultNamedPipeDialTimeout {
+			t.Fatalf("timeout = %v, want %v", *timeout, defaultNamedPipeDialTimeout)
 		}
 		return clientConn, nil
 	}

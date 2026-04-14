@@ -115,6 +115,12 @@ func (d *Dispatcher) Dispatch(ctx context.Context, request DispatchRequest) (Dis
 	if err := decoder.Decode(&responseFrame); err != nil {
 		return DispatchResult{}, newDispatchError(ErrorCodeUnexpectedResponse, fmt.Sprintf("decode response frame: %v", err))
 	}
+	if responseFrame.Action != requestFrame.Action || responseFrame.RequestID != requestFrame.RequestID {
+		return DispatchResult{}, newDispatchError(
+			ErrorCodeUnexpectedResponse,
+			"frame correlation failed: action or request_id mismatch",
+		)
+	}
 
 	switch responseFrame.Type {
 	case gateway.FrameTypeAck:

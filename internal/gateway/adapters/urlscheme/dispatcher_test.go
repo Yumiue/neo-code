@@ -163,6 +163,49 @@ func TestDispatcherDispatchReturnsUnexpectedResponseError(t *testing.T) {
 	}
 }
 
+func TestDispatcherDispatchReturnsCorrelationMismatchError(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = serverConn.Close()
+		_ = clientConn.Close()
+	})
+
+	dispatcher := &Dispatcher{
+		resolveListenAddressFn: func(string) (string, error) { return "stub://gateway", nil },
+		dialFn:                 func(string) (net.Conn, error) { return clientConn, nil },
+		requestIDFn:            func() string { return "wake-9" },
+	}
+
+	go func() {
+		decoder := json.NewDecoder(serverConn)
+		encoder := json.NewEncoder(serverConn)
+		var requestFrame gateway.MessageFrame
+		_ = decoder.Decode(&requestFrame)
+		_ = encoder.Encode(gateway.MessageFrame{
+			Type:      gateway.FrameTypeAck,
+			Action:    requestFrame.Action,
+			RequestID: "wake-mismatch",
+		})
+	}()
+
+	_, err := dispatcher.Dispatch(context.Background(), DispatchRequest{
+		RawURL: "neocode://review?path=README.md",
+	})
+	if err == nil {
+		t.Fatal("expected correlation mismatch error")
+	}
+	var dispatchErr *DispatchError
+	if !errors.As(err, &dispatchErr) {
+		t.Fatalf("error type = %T, want *DispatchError", err)
+	}
+	if dispatchErr.Code != ErrorCodeUnexpectedResponse {
+		t.Fatalf("error code = %q, want %q", dispatchErr.Code, ErrorCodeUnexpectedResponse)
+	}
+	if !strings.Contains(dispatchErr.Message, "frame correlation failed") {
+		t.Fatalf("error message = %q, want correlation failure", dispatchErr.Message)
+	}
+}
+
 func TestDispatcherDispatchInputAndDialErrors(t *testing.T) {
 	dispatcher := &Dispatcher{
 		resolveListenAddressFn: func(string) (string, error) { return "stub://gateway", nil },
