@@ -369,15 +369,23 @@ func TestDispatcherResolveAddressUsesTransportResolver(t *testing.T) {
 }
 
 func TestApplyDispatchDeadlineAndToDispatchError(t *testing.T) {
+	stubConn := &stubDispatchConn{}
+	before := time.Now()
+	if err := applyDispatchDeadline(stubConn, nil); err != nil {
+		t.Fatalf("apply dispatch deadline with nil context: %v", err)
+	}
+	if stubConn.setDeadlineCalls != 1 {
+		t.Fatalf("set deadline calls = %d, want %d", stubConn.setDeadlineCalls, 1)
+	}
+	if stubConn.lastDeadline.Before(before) {
+		t.Fatalf("last deadline = %v, want >= %v", stubConn.lastDeadline, before)
+	}
+
 	connA, connB := net.Pipe()
 	t.Cleanup(func() {
 		_ = connA.Close()
 		_ = connB.Close()
 	})
-
-	if err := applyDispatchDeadline(connA, nil); err != nil {
-		t.Fatalf("apply dispatch deadline with nil context: %v", err)
-	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -593,11 +601,13 @@ func TestDispatcherDispatchAdditionalErrorBranches(t *testing.T) {
 }
 
 type stubDispatchConn struct {
-	readBuffer     *bytes.Buffer
-	writeErr       error
-	setDeadlineErr error
-	readCalls      int
-	writeCalls     int
+	readBuffer       *bytes.Buffer
+	writeErr         error
+	setDeadlineErr   error
+	readCalls        int
+	writeCalls       int
+	setDeadlineCalls int
+	lastDeadline     time.Time
 }
 
 func (c *stubDispatchConn) Read(p []byte) (int, error) {
@@ -628,7 +638,9 @@ func (c *stubDispatchConn) RemoteAddr() net.Addr {
 	return stubDispatchAddr("remote")
 }
 
-func (c *stubDispatchConn) SetDeadline(_ time.Time) error {
+func (c *stubDispatchConn) SetDeadline(deadline time.Time) error {
+	c.setDeadlineCalls++
+	c.lastDeadline = deadline
 	return c.setDeadlineErr
 }
 

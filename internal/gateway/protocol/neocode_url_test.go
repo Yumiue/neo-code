@@ -57,6 +57,17 @@ func TestParseNeoCodeURLSanitizesWorkdir(t *testing.T) {
 	}
 }
 
+func TestParseNeoCodeURLAllowsDotDotInPathSegmentName(t *testing.T) {
+	workdir := testAbsoluteWorkdirWithDotDotSegment()
+	intent, err := ParseNeoCodeURL("neocode://review?path=README.md&workdir=" + url.QueryEscape(workdir))
+	if err != nil {
+		t.Fatalf("parse neocode url: %v", err)
+	}
+	if intent.Workdir != filepath.Clean(workdir) {
+		t.Fatalf("workdir = %q, want %q", intent.Workdir, filepath.Clean(workdir))
+	}
+}
+
 func TestParseNeoCodeURLInvalidCases(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -118,6 +129,13 @@ func testAbsoluteWorkdir() string {
 		return `C:\workspace\neo-code`
 	}
 	return "/tmp/workspace/neo-code"
+}
+
+func testAbsoluteWorkdirWithDotDotSegment() string {
+	if runtime.GOOS == "windows" {
+		return `C:\data\v1..2\repo`
+	}
+	return "/tmp/a..b/project"
 }
 
 func TestIsSupportedWakeAction(t *testing.T) {

@@ -30,6 +30,7 @@ var (
 	dispatchURLThroughIPC = urlscheme.Dispatch
 	exitProcess           = os.Exit
 	writeDispatchError    = writeURLDispatchErrorOutput
+	writeDispatchSuccess  = writeURLDispatchSuccessOutput
 )
 
 type gatewayCommandOptions struct {
@@ -185,8 +186,13 @@ func defaultURLDispatchCommandRunner(ctx context.Context, options urlDispatchCom
 		return nil
 	}
 
-	if err := writeURLDispatchSuccessOutput(os.Stdout, result); err != nil {
-		return err
+	if err := writeDispatchSuccess(os.Stdout, result); err != nil {
+		writeErr := writeDispatchError(os.Stderr, err)
+		if writeErr != nil {
+			_ = writeURLDispatchFallbackErrorOutput(os.Stderr)
+		}
+		exitProcess(1)
+		return nil
 	}
 	return nil
 }

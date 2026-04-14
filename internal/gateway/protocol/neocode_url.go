@@ -153,15 +153,30 @@ func sanitizeWorkdir(workdir string) (string, error) {
 		return "", nil
 	}
 
-	if strings.Contains(workdir, "..") {
+	if containsParentTraversalSegment(workdir) {
 		return "", newParseError(ParseErrorCodeUnsafePath, "unsafe workdir path")
 	}
 
 	cleaned := filepath.Clean(workdir)
+	if containsParentTraversalSegment(cleaned) {
+		return "", newParseError(ParseErrorCodeUnsafePath, "unsafe workdir path")
+	}
 	if !filepath.IsAbs(cleaned) {
 		return "", newParseError(ParseErrorCodeUnsafePath, "workdir must be absolute path")
 	}
 	return cleaned, nil
+}
+
+// containsParentTraversalSegment 按路径段语义判断是否包含 ".." 段，避免子串匹配带来的误判。
+func containsParentTraversalSegment(path string) bool {
+	normalized := filepath.ToSlash(path)
+	segments := strings.Split(normalized, "/")
+	for _, segment := range segments {
+		if segment == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // newParseError 创建 URL 解析结构化错误。
