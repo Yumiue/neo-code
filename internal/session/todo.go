@@ -48,8 +48,8 @@ func (s TodoStatus) Valid() bool {
 
 // FindTodo 按 ID 查找 Todo 项并返回深拷贝结果。
 func (s Session) FindTodo(id string) (TodoItem, bool) {
-	id = strings.TrimSpace(id)
-	if id == "" {
+	id, err := ensureTodoID(id)
+	if err != nil {
 		return TodoItem{}, false
 	}
 
@@ -90,9 +90,10 @@ func (s *Session) UpdateTodoStatus(id string, status TodoStatus) error {
 		return errors.New("session: session is nil")
 	}
 
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return errors.New("session: todo id is empty")
+	var err error
+	id, err = ensureTodoID(id)
+	if err != nil {
+		return err
 	}
 	if !status.Valid() {
 		return fmt.Errorf("session: invalid todo status %q", status)
@@ -123,9 +124,10 @@ func (s *Session) DeleteTodo(id string) error {
 		return errors.New("session: session is nil")
 	}
 
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return errors.New("session: todo id is empty")
+	var err error
+	id, err = ensureTodoID(id)
+	if err != nil {
+		return err
 	}
 	if dependents := findTodoDependents(s.Todos, id); len(dependents) > 0 {
 		return fmt.Errorf("session: todo %q is still required by %s", id, strings.Join(dependents, ", "))
@@ -252,4 +254,13 @@ func normalizeTodoDependencies(dependencies []string) []string {
 		return nil
 	}
 	return result
+}
+
+// ensureTodoID 统一校验并返回规范化后的 Todo ID。
+func ensureTodoID(id string) (string, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "", errors.New("session: todo id is empty")
+	}
+	return id, nil
 }

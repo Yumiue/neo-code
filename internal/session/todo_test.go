@@ -106,6 +106,21 @@ func TestSessionUpdateTodoStatusRejectsUnknownTodoAndInvalidStatus(t *testing.T)
 	}
 }
 
+func TestSessionTodoHelpersRejectEmptyID(t *testing.T) {
+	t.Parallel()
+
+	session := New("Todo Empty ID")
+	if _, ok := session.FindTodo("  "); ok {
+		t.Fatalf("expected FindTodo to reject empty id")
+	}
+	if err := session.UpdateTodoStatus(" ", TodoStatusCompleted); err == nil || !strings.Contains(err.Error(), "todo id is empty") {
+		t.Fatalf("expected update empty id error, got %v", err)
+	}
+	if err := session.DeleteTodo("\n\t "); err == nil || !strings.Contains(err.Error(), "todo id is empty") {
+		t.Fatalf("expected delete empty id error, got %v", err)
+	}
+}
+
 func TestSessionAddTodoRejectsDuplicateID(t *testing.T) {
 	t.Parallel()
 
