@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"neo-code/internal/app"
+	"neo-code/internal/gateway"
 )
 
 func TestNewRootCommandPassesWorkdirFlagToLauncher(t *testing.T) {
@@ -203,6 +204,85 @@ func TestGatewaySubcommandRejectsInvalidLogLevel(t *testing.T) {
 	}
 }
 
+func TestDefaultGatewayCommandRunnerSuccess(t *testing.T) {
+	originalNewGatewayServer := newGatewayServer
+	t.Cleanup(func() { newGatewayServer = originalNewGatewayServer })
+
+	server := &stubGatewayServer{listenAddress: "stub://gateway"}
+	newGatewayServer = func(options gateway.ServerOptions) (gatewayServer, error) {
+		return server, nil
+	}
+
+	err := defaultGatewayCommandRunner(context.Background(), gatewayCommandOptions{
+		ListenAddress: "stub://gateway",
+		LogLevel:      "info",
+	})
+	if err != nil {
+		t.Fatalf("defaultGatewayCommandRunner() error = %v", err)
+	}
+	if !server.serveCalled {
+		t.Fatal("expected server Serve to be called")
+	}
+	if !server.closeCalled {
+		t.Fatal("expected server Close to be called")
+	}
+}
+
+func TestDefaultGatewayCommandRunnerReturnsConstructorError(t *testing.T) {
+	originalNewGatewayServer := newGatewayServer
+	t.Cleanup(func() { newGatewayServer = originalNewGatewayServer })
+
+	expected := errors.New("new gateway server failed")
+	newGatewayServer = func(options gateway.ServerOptions) (gatewayServer, error) {
+		return nil, expected
+	}
+
+	err := defaultGatewayCommandRunner(context.Background(), gatewayCommandOptions{
+		ListenAddress: "stub://gateway",
+		LogLevel:      "info",
+	})
+	if !errors.Is(err, expected) {
+		t.Fatalf("expected constructor error %v, got %v", expected, err)
+	}
+}
+
+func TestDefaultGatewayCommandRunnerReturnsServeError(t *testing.T) {
+	originalNewGatewayServer := newGatewayServer
+	t.Cleanup(func() { newGatewayServer = originalNewGatewayServer })
+
+	expected := errors.New("serve failed")
+	server := &stubGatewayServer{
+		listenAddress: "stub://gateway",
+		serveErr:      expected,
+	}
+	newGatewayServer = func(options gateway.ServerOptions) (gatewayServer, error) {
+		return server, nil
+	}
+
+	err := defaultGatewayCommandRunner(context.Background(), gatewayCommandOptions{
+		ListenAddress: "stub://gateway",
+		LogLevel:      "info",
+	})
+	if !errors.Is(err, expected) {
+		t.Fatalf("expected serve error %v, got %v", expected, err)
+	}
+	if !server.closeCalled {
+		t.Fatal("expected server Close to be called")
+	}
+}
+
+func TestDefaultNewGatewayServer(t *testing.T) {
+	server, err := defaultNewGatewayServer(gateway.ServerOptions{
+		ListenAddress: "stub://gateway",
+	})
+	if err != nil {
+		t.Fatalf("defaultNewGatewayServer() error = %v", err)
+	}
+	if server == nil {
+		t.Fatal("defaultNewGatewayServer() returned nil server")
+	}
+}
+
 func TestURLDispatchSubcommandUsesURLFlag(t *testing.T) {
 	originalRunner := runURLDispatchCommand
 	t.Cleanup(func() { runURLDispatchCommand = originalRunner })
@@ -252,6 +332,30 @@ func TestURLDispatchSubcommandUsesPositionalURL(t *testing.T) {
 	}
 }
 
+func TestURLDispatchSubcommandRejectsInvalidScheme(t *testing.T) {
+	command := NewRootCommand()
+	command.SetArgs([]string{"url-dispatch", "--url", "http://example.com"})
+	err := command.ExecuteContext(context.Background())
+	if err == nil {
+		t.Fatal("expected invalid scheme error")
+	}
+	if !strings.Contains(err.Error(), `invalid --url scheme "http"`) {
+		t.Fatalf("error = %v, want invalid scheme message", err)
+	}
+}
+
+func TestURLDispatchSubcommandRejectsMissingActionHost(t *testing.T) {
+	command := NewRootCommand()
+	command.SetArgs([]string{"url-dispatch", "--url", "neocode://"})
+	err := command.ExecuteContext(context.Background())
+	if err == nil {
+		t.Fatal("expected missing action host error")
+	}
+	if !strings.Contains(err.Error(), "missing action host") {
+		t.Fatalf("error = %v, want missing action host message", err)
+	}
+}
+
 func TestURLDispatchSubcommandRejectsMissingURL(t *testing.T) {
 	command := NewRootCommand()
 	command.SetArgs([]string{"url-dispatch"})
@@ -264,7 +368,87 @@ func TestURLDispatchSubcommandRejectsMissingURL(t *testing.T) {
 	}
 }
 
+func TestURLDispatchSubcommandDefaultRunnerError(t *testing.T) {
+	originalRunner := runURLDispatchCommand
+	t.Cleanup(func() { runURLDispatchCommand = originalRunner })
+	runURLDispatchCommand = defaultURLDispatchCommandRunner
+
+	command := NewRootCommand()
+	command.SetArgs([]string{"url-dispatch", "--url", "neocode://review?path=README.md"})
+	err := command.ExecuteContext(context.Background())
+	if err == nil {
+		t.Fatal("expected default runner error")
+	}
+	if !strings.Contains(err.Error(), "planned in EPIC-GW-02") {
+		t.Fatalf("error = %v, want planned message", err)
+	}
+}
+
+func TestNormalizeDispatchURL(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		normalized, err := normalizeDispatchURL("  neocode://review?path=README.md  ")
+		if err != nil {
+			t.Fatalf("normalizeDispatchURL() error = %v", err)
+		}
+		if normalized != "neocode://review?path=README.md" {
+			t.Fatalf("normalized = %q, want %q", normalized, "neocode://review?path=README.md")
+		}
+	})
+
+	t.Run("invalid format", func(t *testing.T) {
+		_, err := normalizeDispatchURL("://bad-url")
+		if err == nil {
+			t.Fatal("expected parse error")
+		}
+		if !strings.Contains(err.Error(), "invalid --url") {
+			t.Fatalf("error = %v, want invalid url message", err)
+		}
+	})
+
+	t.Run("invalid scheme", func(t *testing.T) {
+		_, err := normalizeDispatchURL("https://example.com")
+		if err == nil {
+			t.Fatal("expected scheme error")
+		}
+		if !strings.Contains(err.Error(), "must be neocode") {
+			t.Fatalf("error = %v, want scheme message", err)
+		}
+	})
+
+	t.Run("missing host", func(t *testing.T) {
+		_, err := normalizeDispatchURL("neocode://")
+		if err == nil {
+			t.Fatal("expected missing host error")
+		}
+		if !strings.Contains(err.Error(), "missing action host") {
+			t.Fatalf("error = %v, want missing host message", err)
+		}
+	})
+}
+
 type quitModel struct{}
+
+type stubGatewayServer struct {
+	listenAddress string
+	serveErr      error
+	closeErr      error
+	serveCalled   bool
+	closeCalled   bool
+}
+
+func (s *stubGatewayServer) ListenAddress() string {
+	return s.listenAddress
+}
+
+func (s *stubGatewayServer) Serve(_ context.Context, _ gateway.RuntimePort) error {
+	s.serveCalled = true
+	return s.serveErr
+}
+
+func (s *stubGatewayServer) Close(_ context.Context) error {
+	s.closeCalled = true
+	return s.closeErr
+}
 
 func (quitModel) Init() tea.Cmd {
 	return tea.Quit

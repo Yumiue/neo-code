@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -22,6 +23,7 @@ const (
 var (
 	runGatewayCommand     = defaultGatewayCommandRunner
 	runURLDispatchCommand = defaultURLDispatchCommandRunner
+	newGatewayServer      = defaultNewGatewayServer
 )
 
 type gatewayCommandOptions struct {
@@ -32,6 +34,12 @@ type gatewayCommandOptions struct {
 type urlDispatchCommandOptions struct {
 	URL           string
 	ListenAddress string
+}
+
+type gatewayServer interface {
+	ListenAddress() string
+	Serve(ctx context.Context, runtimePort gateway.RuntimePort) error
+	Close(ctx context.Context) error
 }
 
 // newGatewayCommand 创建并返回网关子命令，负责启动本地 Gateway 进程。
@@ -81,7 +89,7 @@ func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOpti
 	signalContext, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	server, err := gateway.NewServer(gateway.ServerOptions{
+	server, err := newGatewayServer(gateway.ServerOptions{
 		ListenAddress: options.ListenAddress,
 		Logger:        logger,
 	})
@@ -94,6 +102,11 @@ func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOpti
 
 	logger.Printf("gateway listen address: %s", server.ListenAddress())
 	return server.Serve(signalContext, nil)
+}
+
+// defaultNewGatewayServer 创建默认网关服务实例，供命令层启动流程调用。
+func defaultNewGatewayServer(options gateway.ServerOptions) (gatewayServer, error) {
+	return gateway.NewServer(options)
 }
 
 // newURLDispatchCommand 创建 URL Scheme 派发子命令骨架，仅做参数收敛与调用转发。
@@ -113,9 +126,13 @@ func newURLDispatchCommand() *cobra.Command {
 			if urlValue == "" {
 				return errors.New("missing required --url or positional <url>")
 			}
+			normalizedURL, err := normalizeDispatchURL(urlValue)
+			if err != nil {
+				return err
+			}
 
 			return runURLDispatchCommand(cmd.Context(), urlDispatchCommandOptions{
-				URL:           urlValue,
+				URL:           normalizedURL,
 				ListenAddress: strings.TrimSpace(options.ListenAddress),
 			})
 		},
@@ -130,4 +147,20 @@ func newURLDispatchCommand() *cobra.Command {
 // defaultURLDispatchCommandRunner 提供 url-dispatch 的默认骨架行为，明确告知后续步骤接管实现。
 func defaultURLDispatchCommandRunner(_ context.Context, _ urlDispatchCommandOptions) error {
 	return errors.New("url-dispatch is not implemented yet (planned in EPIC-GW-02)")
+}
+
+// normalizeDispatchURL 校验并标准化 url-dispatch 输入，确保只接受 neocode scheme。
+func normalizeDispatchURL(rawURL string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return "", fmt.Errorf("invalid --url %q: %w", rawURL, err)
+	}
+	if !strings.EqualFold(strings.TrimSpace(parsed.Scheme), "neocode") {
+		return "", fmt.Errorf("invalid --url scheme %q: must be neocode", parsed.Scheme)
+	}
+	if strings.TrimSpace(parsed.Host) == "" {
+		return "", errors.New("invalid --url: missing action host")
+	}
+
+	return parsed.String(), nil
 }
