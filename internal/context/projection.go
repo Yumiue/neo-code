@@ -2,9 +2,15 @@ package context
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/tools"
+)
+
+const (
+	recentWindowAbsoluteMessageLimit = 24
+	recentWindowToolContentCharLimit = 600
 )
 
 // ProjectToolMessagesForModel 原地投影 tool 消息，复用主链路对模型可见的只读格式化规则。
@@ -35,6 +41,20 @@ func BuildRecentMessagesForModel(messages []providertypes.Message, limit int) []
 
 	keep := make([]bool, len(messages))
 	anchors := 0
+	keptMessages := 0
+	maxMessages := recentWindowMessageBudget(limit)
+
+	markSpan := func(span []int) bool {
+		if len(span) == 0 || keptMessages+len(span) > maxMessages {
+			return false
+		}
+		for _, spanIndex := range span {
+			keep[spanIndex] = true
+		}
+		keptMessages += len(span)
+		anchors++
+		return true
+	}
 
 	for index := len(messages) - 1; index >= 0 && anchors < limit; index-- {
 		message := messages[index]
@@ -43,18 +63,13 @@ func BuildRecentMessagesForModel(messages []providertypes.Message, limit int) []
 		}
 
 		if message.Role == providertypes.RoleAssistant && len(message.ToolCalls) > 0 {
-			span := matchedToolCallSpan(messages, index)
-			for _, spanIndex := range span {
-				keep[spanIndex] = true
-			}
-			if len(span) > 0 {
-				anchors++
-			}
+			markSpan(matchedToolCallSpan(messages, index))
 			continue
 		}
 
-		keep[index] = true
-		anchors++
+		if !markSpan([]int{index}) {
+			break
+		}
 	}
 
 	selected := make([]providertypes.Message, 0, limit)
@@ -68,7 +83,7 @@ func BuildRecentMessagesForModel(messages []providertypes.Message, limit int) []
 		return nil
 	}
 
-	return ProjectToolMessagesForModel(cloneContextMessages(selected))
+	return sanitizeRecentWindowToolMessages(ProjectToolMessagesForModel(cloneContextMessages(selected)))
 }
 
 // matchedToolCallSpan 返回 assistant tool call 与其完整 tool 响应组成的合法窗口下标集合。
@@ -140,4 +155,73 @@ func isInjectableToolMessage(message providertypes.Message) bool {
 	}
 	content := strings.TrimSpace(message.Content)
 	return content != "" && content != microCompactClearedMessage
+}
+
+// recentWindowMessageBudget 计算 recent window 可保留的消息总数硬上限，避免窗口体积失控。
+func recentWindowMessageBudget(limit int) int {
+	if limit <= 0 {
+		return 0
+	}
+	budget := limit * 2
+	if budget < limit {
+		budget = limit
+	}
+	if budget > recentWindowAbsoluteMessageLimit {
+		budget = recentWindowAbsoluteMessageLimit
+	}
+	return budget
+}
+
+// sanitizeRecentWindowToolMessages 缩减 tool 消息内容，降低 memo 提取链路对原始工具输出的暴露面。
+func sanitizeRecentWindowToolMessages(messages []providertypes.Message) []providertypes.Message {
+	for index := range messages {
+		message := messages[index]
+		if message.Role != providertypes.RoleTool {
+			continue
+		}
+		messages[index].Content = sanitizeProjectedToolContent(message.Content)
+	}
+	return messages
+}
+
+// sanitizeProjectedToolContent 将投影后的 tool content 限制为固定长度摘要，避免注入完整原始输出。
+func sanitizeProjectedToolContent(content string) string {
+	const contentMarker = "\ncontent:\n"
+
+	index := strings.Index(content, contentMarker)
+	if index < 0 {
+		return content
+	}
+
+	prefix := strings.TrimRight(content[:index], "\n")
+	body := strings.TrimSpace(content[index+len(contentMarker):])
+	if body == "" {
+		return prefix
+	}
+
+	limited, truncated := truncateUTF8(body, recentWindowToolContentCharLimit)
+	lines := []string{prefix, "content_excerpt:", limited}
+	if truncated {
+		lines = append(lines, "[content truncated for memo extraction]")
+	}
+	return strings.Join(lines, "\n")
+}
+
+// truncateUTF8 按 rune 数量截断字符串，返回截断后的文本及是否发生截断。
+func truncateUTF8(text string, maxRunes int) (string, bool) {
+	if maxRunes <= 0 || text == "" {
+		return "", text != ""
+	}
+	if utf8.RuneCountInString(text) <= maxRunes {
+		return text, false
+	}
+
+	count := 0
+	for index := range text {
+		if count == maxRunes {
+			return text[:index], true
+		}
+		count++
+	}
+	return text, false
 }

@@ -102,6 +102,12 @@ func TestBuildRecentMessagesForModelKeepsOnlyRecentValidAnchors(t *testing.T) {
 	if recent[1].Role != providertypes.RoleTool || !strings.Contains(recent[1].Content, "tool result") {
 		t.Fatalf("expected tool message to be projected, got %+v", recent[1])
 	}
+	if strings.Contains(recent[1].Content, "content:\nREADME body") {
+		t.Fatalf("expected tool payload to be minimized, got %+v", recent[1])
+	}
+	if !strings.Contains(recent[1].Content, "content_excerpt:") {
+		t.Fatalf("expected tool payload excerpt marker, got %+v", recent[1])
+	}
 	if recent[2].Content != "latest-user" {
 		t.Fatalf("expected latest user anchor to remain, got %+v", recent[2])
 	}
@@ -109,6 +115,59 @@ func TestBuildRecentMessagesForModelKeepsOnlyRecentValidAnchors(t *testing.T) {
 	recent[1].Content = "changed"
 	if original[2].Content != "README body" {
 		t.Fatalf("expected original messages to remain unchanged, got %+v", original[2])
+	}
+}
+
+func TestBuildRecentMessagesForModelRespectsAbsoluteMessageBudget(t *testing.T) {
+	t.Parallel()
+
+	longSpan := []providertypes.Message{
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-1", Name: "bash", Arguments: `{}`},
+				{ID: "call-2", Name: "bash", Arguments: `{}`},
+				{ID: "call-3", Name: "bash", Arguments: `{}`},
+				{ID: "call-4", Name: "bash", Arguments: `{}`},
+				{ID: "call-5", Name: "bash", Arguments: `{}`},
+			},
+		},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "one"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "two"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: "three"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-4", Content: "four"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-5", Content: "five"},
+	}
+
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "old-user"},
+	}
+	messages = append(messages, longSpan...)
+	messages = append(messages, providertypes.Message{Role: providertypes.RoleUser, Content: "latest-user"})
+
+	recent := BuildRecentMessagesForModel(messages, 3)
+	if len(recent) != 2 {
+		t.Fatalf("len(recent) = %d, want 2", len(recent))
+	}
+	if recent[0].Content != "old-user" || recent[1].Content != "latest-user" {
+		t.Fatalf("expected oversized tool span to be skipped, got %+v", recent)
+	}
+}
+
+func TestSanitizeProjectedToolContent(t *testing.T) {
+	t.Parallel()
+
+	rawBody := strings.Repeat("甲", recentWindowToolContentCharLimit+10)
+	projected := "tool result\nstatus: ok\n\ncontent:\n" + rawBody
+	sanitized := sanitizeProjectedToolContent(projected)
+	if !strings.Contains(sanitized, "content_excerpt:") {
+		t.Fatalf("expected excerpt marker, got %q", sanitized)
+	}
+	if strings.Contains(sanitized, "content:\n") {
+		t.Fatalf("expected original content marker removed, got %q", sanitized)
+	}
+	if !strings.Contains(sanitized, "[content truncated for memo extraction]") {
+		t.Fatalf("expected truncation marker, got %q", sanitized)
 	}
 }
 
