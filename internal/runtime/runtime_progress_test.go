@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 
 	"neo-code/internal/config"
@@ -82,5 +83,61 @@ func TestProgressStreakStopsRun(t *testing.T) {
 				t.Errorf("expected detail to be %q, got %q", ErrNoProgressStreakLimit.Error(), payload.Detail)
 			}
 		}
+	}
+}
+
+func TestProgressEvidenceResetsNoProgressStreak(t *testing.T) {
+	t.Setenv("TEST_KEY", "dummy")
+
+	cfg := config.Config{
+		Providers:        []config.ProviderConfig{{Name: "test-progress", Driver: "test", BaseURL: "http://localhost", Model: "test", APIKeyEnv: "TEST_KEY"}},
+		SelectedProvider: "test-progress",
+		MaxLoops:         5,
+		Workdir:          t.TempDir(),
+	}
+
+	var executeCalls int32
+	toolManager := &stubToolManager{
+		specs: []providertypes.ToolSpec{
+			{Name: "tool_mixed"},
+		},
+		executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
+			call := int(atomic.AddInt32(&executeCalls, 1))
+			if call == 3 {
+				return tools.ToolResult{Name: input.Name, Content: "ok", IsError: false}, nil
+			}
+			return tools.ToolResult{Name: input.Name, Content: "error occurred", IsError: true}, nil
+		},
+	}
+
+	providerFactory := &scriptedProviderFactory{
+		provider: &scriptedProvider{
+			chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+				events <- providertypes.NewToolCallStartStreamEvent(0, "call_mixed", "tool_mixed")
+				events <- providertypes.NewToolCallDeltaStreamEvent(0, "call_mixed", "{}")
+				events <- providertypes.NewMessageDoneStreamEvent("tool_calls", nil)
+				return nil
+			},
+		},
+	}
+
+	manager := config.NewManager(config.NewLoader(t.TempDir(), &cfg))
+	service := NewWithFactory(
+		manager,
+		toolManager,
+		newMemoryStore(),
+		providerFactory,
+		nil,
+	)
+
+	err := service.Run(context.Background(), UserInput{
+		RunID:   "run-progress-reset",
+		Content: "trigger mixed progress loop",
+	})
+	if !errors.Is(err, ErrMaxLoopReached) {
+		t.Fatalf("expected ErrMaxLoopReached, got %v", err)
+	}
+	if errors.Is(err, ErrNoProgressStreakLimit) {
+		t.Fatalf("expected not to hit no-progress streak limit, got %v", err)
 	}
 }

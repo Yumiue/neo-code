@@ -67,18 +67,25 @@ type Service struct {
 	approvalBroker  *approval.Broker
 	memoExtractor   MemoExtractor
 
-	events           chan RuntimeEvent
-	sessionMu        sync.Mutex
-	sessionLocks     map[string]*sessionLockEntry
-	runMu            sync.Mutex
-	activeRunToken   uint64
-	nextRunToken     uint64
-	activeRunCancels map[uint64]context.CancelFunc
-	permissionAskMu  sync.Mutex
+	events             chan RuntimeEvent
+	sessionMu          sync.Mutex
+	sessionLocks       map[string]*sessionLockEntry
+	runMu              sync.Mutex
+	activeRunToken     uint64
+	nextRunToken       uint64
+	activeRunCancels   map[uint64]context.CancelFunc
+	permissionAskMapMu sync.Mutex
+	permissionAskLocks map[string]*permissionAskLockEntry
 }
 
 // sessionLockEntry 维护单个会话锁及其当前引用计数，用于在无引用时回收 map 项。
 type sessionLockEntry struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// permissionAskLockEntry 维护单个运行的审批串行锁与引用计数。
+type permissionAskLockEntry struct {
 	mu   sync.Mutex
 	refs int
 }
@@ -102,15 +109,16 @@ func NewWithFactory(
 	}
 
 	return &Service{
-		configManager:    configManager,
-		sessionStore:     sessionStore,
-		toolManager:      toolManager,
-		providerFactory:  providerFactory,
-		contextBuilder:   contextBuilder,
-		approvalBroker:   approval.NewBroker(),
-		events:           make(chan RuntimeEvent, 128),
-		sessionLocks:     make(map[string]*sessionLockEntry),
-		activeRunCancels: make(map[uint64]context.CancelFunc),
+		configManager:      configManager,
+		sessionStore:       sessionStore,
+		toolManager:        toolManager,
+		providerFactory:    providerFactory,
+		contextBuilder:     contextBuilder,
+		approvalBroker:     approval.NewBroker(),
+		events:             make(chan RuntimeEvent, 128),
+		sessionLocks:       make(map[string]*sessionLockEntry),
+		permissionAskLocks: make(map[string]*permissionAskLockEntry),
+		activeRunCancels:   make(map[uint64]context.CancelFunc),
 	}
 }
 

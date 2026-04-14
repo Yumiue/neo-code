@@ -256,6 +256,86 @@ func TestAwaitPermissionDecisionSerializesConcurrentAskRequests(t *testing.T) {
 	}
 }
 
+func TestAwaitPermissionDecisionDoesNotSerializeAcrossRuns(t *testing.T) {
+	t.Parallel()
+
+	service := NewWithFactory(
+		newRuntimeConfigManager(t),
+		&stubToolManager{},
+		newMemoryStore(),
+		&scriptedProviderFactory{provider: &scriptedProvider{}},
+		nil,
+	)
+	permissionErr := permissionDecisionAskError(t)
+
+	type awaitResult struct {
+		decision  approvalflow.Decision
+		requestID string
+		err       error
+	}
+	resultCh := make(chan awaitResult, 2)
+
+	runAwait := func(runID string, callID string) {
+		decision, requestID, err := service.awaitPermissionDecision(
+			context.Background(),
+			permissionExecutionInput{
+				RunID:     runID,
+				SessionID: "session-ask-shared",
+				Call: providertypes.ToolCall{
+					ID:   callID,
+					Name: "filesystem_read_file",
+				},
+			},
+			permissionErr,
+		)
+		resultCh <- awaitResult{decision: decision, requestID: requestID, err: err}
+	}
+
+	go runAwait("run-ask-a", "call-a")
+	go runAwait("run-ask-b", "call-b")
+
+	requestIDs := make([]string, 0, 2)
+	for len(requestIDs) < 2 {
+		select {
+		case event := <-service.Events():
+			if event.Type != EventPermissionRequested {
+				t.Fatalf("expected permission requested event, got %q", event.Type)
+			}
+			payload, ok := event.Payload.(PermissionRequestPayload)
+			if !ok {
+				t.Fatalf("expected PermissionRequestPayload, got %#v", event.Payload)
+			}
+			requestIDs = append(requestIDs, payload.RequestID)
+		case <-time.After(500 * time.Millisecond):
+			t.Fatalf("timed out waiting concurrent permission requests")
+		}
+	}
+
+	if requestIDs[0] == requestIDs[1] {
+		t.Fatalf("expected distinct permission request IDs, got %q", requestIDs[0])
+	}
+
+	for _, requestID := range requestIDs {
+		if err := service.ResolvePermission(context.Background(), PermissionResolutionInput{
+			RequestID: requestID,
+			Decision:  approvalflow.DecisionAllowOnce,
+		}); err != nil {
+			t.Fatalf("ResolvePermission(%q) error = %v", requestID, err)
+		}
+	}
+
+	for i := 0; i < 2; i++ {
+		select {
+		case res := <-resultCh:
+			if res.err != nil {
+				t.Fatalf("awaitPermissionDecision() error = %v", res.err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting awaitPermissionDecision result")
+		}
+	}
+}
+
 func TestServiceRunPermissionRejectFlow(t *testing.T) {
 	t.Parallel()
 

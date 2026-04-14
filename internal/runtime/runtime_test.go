@@ -333,6 +333,7 @@ func (b *stubContextBuilder) Build(ctx context.Context, input agentcontext.Build
 }
 
 type stubToolManager struct {
+	mu           sync.Mutex
 	specs        []providertypes.ToolSpec
 	result       tools.ToolResult
 	err          error
@@ -351,6 +352,8 @@ type stubToolManager struct {
 }
 
 func (m *stubToolManager) ListAvailableSpecs(ctx context.Context, input tools.SpecListInput) ([]providertypes.ToolSpec, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.listCalls++
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -362,6 +365,8 @@ func (m *stubToolManager) ListAvailableSpecs(ctx context.Context, input tools.Sp
 }
 
 func (m *stubToolManager) MicroCompactPolicy(name string) tools.MicroCompactPolicy {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if policy, ok := m.policies[name]; ok {
 		return policy
 	}
@@ -369,19 +374,25 @@ func (m *stubToolManager) MicroCompactPolicy(name string) tools.MicroCompactPoli
 }
 
 func (m *stubToolManager) Execute(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
+	m.mu.Lock()
 	m.executeCalls++
 	m.lastInput = input
-	if m.executeFn != nil {
-		return m.executeFn(ctx, input)
-	}
+	executeFn := m.executeFn
 	result := m.result
+	err := m.err
+	m.mu.Unlock()
+	if executeFn != nil {
+		return executeFn(ctx, input)
+	}
 	if result.Name == "" {
 		result.Name = input.Name
 	}
-	return result, m.err
+	return result, err
 }
 
 func (m *stubToolManager) RememberSessionDecision(sessionID string, action security.Action, scope tools.SessionPermissionScope) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.remembered = append(m.remembered, struct {
 		sessionID string
 		action    security.Action

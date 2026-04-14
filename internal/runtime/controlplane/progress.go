@@ -27,27 +27,13 @@ type ProgressState struct {
 }
 
 // ApplyProgressEvidence 根据证据更新分值与 streak。
-// 若仅出现 EVIDENCE_NEW_INFO_NON_DUP，则只增加 score_delta，不重置 no_progress_streak（回归约束）。
 func ApplyProgressEvidence(state ProgressState, records []ProgressEvidenceRecord) ProgressState {
 	next := state.LastScore
 	if len(records) == 0 {
 		next.NoProgressStreak++
-		return ProgressState{LastScore: next}
-	}
-
-	onlyNonDup := true
-	for _, r := range records {
-		if r.Kind != EvidenceNewInfoNonDup {
-			onlyNonDup = false
-			break
-		}
-	}
-	if onlyNonDup {
+	} else {
+		next.NoProgressStreak = 0
 		next.ScoreDelta++
-		return ProgressState{LastScore: next}
 	}
-
-	next.NoProgressStreak = 0
-	next.ScoreDelta++
 	return ProgressState{LastScore: next}
 }

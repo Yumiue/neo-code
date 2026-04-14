@@ -11,7 +11,7 @@ func TestApplyProgressEvidenceNoEvidenceIncrementsNoProgress(t *testing.T) {
 	}
 }
 
-func TestApplyProgressEvidenceOnlyNonDupDoesNotResetNoProgressStreak(t *testing.T) {
+func TestApplyProgressEvidenceOnlyNonDupResetsNoProgressStreak(t *testing.T) {
 	t.Parallel()
 	state := ProgressState{
 		LastScore: ProgressScore{NoProgressStreak: 3},
@@ -19,8 +19,8 @@ func TestApplyProgressEvidenceOnlyNonDupDoesNotResetNoProgressStreak(t *testing.
 	next := ApplyProgressEvidence(state, []ProgressEvidenceRecord{
 		{Kind: EvidenceNewInfoNonDup},
 	})
-	if next.LastScore.NoProgressStreak != 3 {
-		t.Fatalf("expected streak unchanged at 3, got %d", next.LastScore.NoProgressStreak)
+	if next.LastScore.NoProgressStreak != 0 {
+		t.Fatalf("expected streak reset to 0, got %d", next.LastScore.NoProgressStreak)
 	}
 	if next.LastScore.ScoreDelta != 1 {
 		t.Fatalf("expected score_delta 1, got %d", next.LastScore.ScoreDelta)
