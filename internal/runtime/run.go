@@ -157,7 +157,12 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 
 			s.emitRunScoped(ctx, EventProgressEvaluated, &state, ProgressEvaluatedPayload{Score: currentScore})
 
-			if streak >= noProgressStreakLimit {
+			limit := snapshot.config.Runtime.MaxNoProgressStreak
+			if limit <= 0 {
+				limit = config.DefaultMaxNoProgressStreak
+			}
+
+			if streak >= limit {
 				err = ErrNoProgressStreakLimit
 				return err
 			}
@@ -216,6 +221,23 @@ func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (tur
 		return turnSnapshot{}, false, err
 	}
 
+	state.mu.Lock()
+	streak := state.progress.LastScore.NoProgressStreak
+	state.mu.Unlock()
+
+	limit := cfg.Runtime.MaxNoProgressStreak
+	if limit <= 0 {
+		limit = config.DefaultMaxNoProgressStreak
+	}
+
+	messages := builtContext.Messages
+	if streak == limit-1 {
+		messages = append(messages, providertypes.Message{
+			Role:    providertypes.RoleUser,
+			Content: "System Reminder: You have made multiple consecutive attempts without making substantial progress. Please stop your current repetitive or ineffective strategy. Carefully review the previous errors, change your approach, or ask the user directly for help.",
+		})
+	}
+
 	model := strings.TrimSpace(cfg.CurrentModel)
 	return turnSnapshot{
 		config:         cfg,
@@ -226,7 +248,7 @@ func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (tur
 		request: providertypes.GenerateRequest{
 			Model:        model,
 			SystemPrompt: builtContext.SystemPrompt,
-			Messages:     builtContext.Messages,
+			Messages:     messages,
 			Tools:        toolSpecs,
 		},
 	}, false, nil

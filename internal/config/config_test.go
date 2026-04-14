@@ -1592,6 +1592,9 @@ func TestValidateSnapshotPropagatesCompactError(t *testing.T) {
 				SupportedContentTypes: []string{"text/html"},
 			},
 		},
+		Runtime: RuntimeConfig{
+			MaxNoProgressStreak: 3,
+		},
 		Context: ContextConfig{
 			Compact: CompactConfig{
 				ManualStrategy:           "invalid_strategy",
