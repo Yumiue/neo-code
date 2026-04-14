@@ -95,6 +95,11 @@ func (d *Dispatcher) Dispatch(ctx context.Context, request DispatchRequest) (Dis
 	if err := applyDispatchDeadline(conn, ctx); err != nil {
 		return DispatchResult{}, newDispatchError(ErrorCodeInternal, fmt.Sprintf("set connection deadline: %v", err))
 	}
+	if err := ensureDispatchContextActive(ctx); err != nil {
+		return DispatchResult{}, toDispatchError(err)
+	}
+	stopCancelWatcher := watchDispatchCancellation(ctx, conn)
+	defer stopCancelWatcher()
 
 	requestFrame := gateway.MessageFrame{
 		Type:      gateway.FrameTypeRequest,
@@ -105,14 +110,26 @@ func (d *Dispatcher) Dispatch(ctx context.Context, request DispatchRequest) (Dis
 		Payload:   intent,
 	}
 
+	if err := ensureDispatchContextActive(ctx); err != nil {
+		return DispatchResult{}, toDispatchError(err)
+	}
 	encoder := json.NewEncoder(conn)
 	if err := encoder.Encode(requestFrame); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return DispatchResult{}, toDispatchError(ctxErr)
+		}
 		return DispatchResult{}, newDispatchError(ErrorCodeInternal, fmt.Sprintf("write request frame: %v", err))
 	}
 
 	var responseFrame gateway.MessageFrame
+	if err := ensureDispatchContextActive(ctx); err != nil {
+		return DispatchResult{}, toDispatchError(err)
+	}
 	decoder := json.NewDecoder(conn)
 	if err := decoder.Decode(&responseFrame); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return DispatchResult{}, toDispatchError(ctxErr)
+		}
 		return DispatchResult{}, newDispatchError(ErrorCodeUnexpectedResponse, fmt.Sprintf("decode response frame: %v", err))
 	}
 	if responseFrame.Action != requestFrame.Action || responseFrame.RequestID != requestFrame.RequestID {
@@ -150,6 +167,33 @@ func applyDispatchDeadline(conn net.Conn, ctx context.Context) error {
 		return conn.SetDeadline(deadline)
 	}
 	return conn.SetDeadline(time.Now().Add(defaultDispatchIOTimeout))
+}
+
+// ensureDispatchContextActive 在网络读写前检查上下文是否已取消，避免进入无意义阻塞 I/O。
+func ensureDispatchContextActive(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	return ctx.Err()
+}
+
+// watchDispatchCancellation 监听上下文取消信号，并通过收紧连接 deadline 立刻中断阻塞 I/O。
+func watchDispatchCancellation(ctx context.Context, conn net.Conn) func() {
+	if ctx == nil {
+		return func() {}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.SetDeadline(time.Now())
+		case <-done:
+		}
+	}()
+	return func() {
+		close(done)
+	}
 }
 
 // toDispatchError 将不同来源错误转换为统一结构化错误。

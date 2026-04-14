@@ -244,6 +244,115 @@ func TestDispatcherDispatchInputAndDialErrors(t *testing.T) {
 	}
 }
 
+func TestDispatcherDispatchFailsFastOnCanceledContextBeforeIO(t *testing.T) {
+	conn := &stubDispatchConn{}
+	dispatcher := &Dispatcher{
+		resolveListenAddressFn: func(string) (string, error) { return "stub://gateway", nil },
+		dialFn:                 func(string) (net.Conn, error) { return conn, nil },
+		requestIDFn:            func() string { return "wake-ctx-1" },
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := dispatcher.Dispatch(ctx, DispatchRequest{
+		RawURL: "neocode://review?path=README.md",
+	})
+	if err == nil {
+		t.Fatal("expected canceled context error")
+	}
+
+	var dispatchErr *DispatchError
+	if !errors.As(err, &dispatchErr) {
+		t.Fatalf("error type = %T, want *DispatchError", err)
+	}
+	if dispatchErr.Code != ErrorCodeInternal {
+		t.Fatalf("error code = %q, want %q", dispatchErr.Code, ErrorCodeInternal)
+	}
+	if !strings.Contains(dispatchErr.Message, context.Canceled.Error()) {
+		t.Fatalf("error message = %q, want contains %q", dispatchErr.Message, context.Canceled.Error())
+	}
+	if conn.writeCalls != 0 {
+		t.Fatalf("write calls = %d, want %d", conn.writeCalls, 0)
+	}
+	if conn.readCalls != 0 {
+		t.Fatalf("read calls = %d, want %d", conn.readCalls, 0)
+	}
+}
+
+func TestDispatcherDispatchInterruptsBlockedReadOnContextCancel(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = serverConn.Close()
+		_ = clientConn.Close()
+	})
+
+	dispatcher := &Dispatcher{
+		resolveListenAddressFn: func(string) (string, error) { return "stub://gateway", nil },
+		dialFn:                 func(string) (net.Conn, error) { return clientConn, nil },
+		requestIDFn:            func() string { return "wake-ctx-2" },
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	requestArrived := make(chan struct{})
+	serverDone := make(chan struct{})
+	go func() {
+		defer close(serverDone)
+
+		decoder := json.NewDecoder(serverConn)
+		var frame gateway.MessageFrame
+		if err := decoder.Decode(&frame); err != nil {
+			t.Errorf("decode request frame: %v", err)
+			return
+		}
+		close(requestArrived)
+		<-ctx.Done()
+	}()
+
+	dispatchDone := make(chan error, 1)
+	go func() {
+		_, dispatchErr := dispatcher.Dispatch(ctx, DispatchRequest{
+			RawURL: "neocode://review?path=README.md",
+		})
+		dispatchDone <- dispatchErr
+	}()
+
+	select {
+	case <-requestArrived:
+	case <-time.After(1 * time.Second):
+		t.Fatal("request frame did not arrive in time")
+	}
+
+	cancel()
+
+	select {
+	case err := <-dispatchDone:
+		if err == nil {
+			t.Fatal("expected canceled dispatch error")
+		}
+		var dispatchErr *DispatchError
+		if !errors.As(err, &dispatchErr) {
+			t.Fatalf("error type = %T, want *DispatchError", err)
+		}
+		if dispatchErr.Code != ErrorCodeInternal {
+			t.Fatalf("error code = %q, want %q", dispatchErr.Code, ErrorCodeInternal)
+		}
+		if !strings.Contains(dispatchErr.Message, context.Canceled.Error()) {
+			t.Fatalf("error message = %q, want contains %q", dispatchErr.Message, context.Canceled.Error())
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("dispatch did not fail fast after context cancellation")
+	}
+
+	select {
+	case <-serverDone:
+	case <-time.After(1 * time.Second):
+		t.Fatal("server goroutine did not exit")
+	}
+}
+
 func TestDispatcherResolveAddressUsesTransportResolver(t *testing.T) {
 	dispatcher := NewDispatcher()
 	got, err := dispatcher.resolveListenAddressFn("")
@@ -435,9 +544,12 @@ type stubDispatchConn struct {
 	readBuffer     *bytes.Buffer
 	writeErr       error
 	setDeadlineErr error
+	readCalls      int
+	writeCalls     int
 }
 
 func (c *stubDispatchConn) Read(p []byte) (int, error) {
+	c.readCalls++
 	if c.readBuffer == nil {
 		return 0, io.EOF
 	}
@@ -445,6 +557,7 @@ func (c *stubDispatchConn) Read(p []byte) (int, error) {
 }
 
 func (c *stubDispatchConn) Write(p []byte) (int, error) {
+	c.writeCalls++
 	if c.writeErr != nil {
 		return 0, c.writeErr
 	}
