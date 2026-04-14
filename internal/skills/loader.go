@@ -20,11 +20,24 @@ var headingPattern = regexp.MustCompile(`^\s{0,3}#{1,6}\s+(.+?)\s*$`)
 // LocalLoader scans one root directory and loads local skills.
 type LocalLoader struct {
 	root string
+
+	absPath            func(string) (string, error)
+	statPath           func(string) (os.FileInfo, error)
+	readDir            func(string) ([]os.DirEntry, error)
+	readFile           func(string) ([]byte, error)
+	validateDescriptor func(Descriptor) error
 }
 
 // NewLocalLoader creates a loader for one local skills root.
 func NewLocalLoader(root string) *LocalLoader {
-	return &LocalLoader{root: strings.TrimSpace(root)}
+	return &LocalLoader{
+		root:               strings.TrimSpace(root),
+		absPath:            filepath.Abs,
+		statPath:           os.Stat,
+		readDir:            os.ReadDir,
+		readFile:           os.ReadFile,
+		validateDescriptor: Descriptor.Validate,
+	}
 }
 
 // Load scans local skill directories and returns parsed skills + non-fatal issues.
@@ -37,11 +50,32 @@ func (l *LocalLoader) Load(ctx context.Context) (Snapshot, error) {
 		return Snapshot{}, fmt.Errorf("%w: empty root", ErrSkillRootNotFound)
 	}
 
-	absRoot, err := filepath.Abs(root)
+	absPath := l.absPath
+	if absPath == nil {
+		absPath = filepath.Abs
+	}
+	statPath := l.statPath
+	if statPath == nil {
+		statPath = os.Stat
+	}
+	readDir := l.readDir
+	if readDir == nil {
+		readDir = os.ReadDir
+	}
+	readFile := l.readFile
+	if readFile == nil {
+		readFile = os.ReadFile
+	}
+	validateDescriptor := l.validateDescriptor
+	if validateDescriptor == nil {
+		validateDescriptor = Descriptor.Validate
+	}
+
+	absRoot, err := absPath(root)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("skills: resolve root %q: %w", root, err)
 	}
-	info, err := os.Stat(absRoot)
+	info, err := statPath(absRoot)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return Snapshot{}, fmt.Errorf("%w: %s", ErrSkillRootNotFound, absRoot)
@@ -52,14 +86,14 @@ func (l *LocalLoader) Load(ctx context.Context) (Snapshot, error) {
 		return Snapshot{}, fmt.Errorf("skills: root %q is not directory", absRoot)
 	}
 
-	entries, err := os.ReadDir(absRoot)
+	entries, err := readDir(absRoot)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("skills: read root %q: %w", absRoot, err)
 	}
 
 	candidates := make([]string, 0, len(entries)+1)
 	rootSkillFile := filepath.Join(absRoot, skillFileName)
-	if _, err := os.Stat(rootSkillFile); err == nil {
+	if _, err := statPath(rootSkillFile); err == nil {
 		candidates = append(candidates, absRoot)
 	}
 
@@ -85,7 +119,7 @@ func (l *LocalLoader) Load(ctx context.Context) (Snapshot, error) {
 		}
 
 		skillPath := filepath.Join(skillDir, skillFileName)
-		data, readErr := os.ReadFile(skillPath)
+		data, readErr := readFile(skillPath)
 		if readErr != nil {
 			if errors.Is(readErr, os.ErrNotExist) {
 				snapshot.Issues = append(snapshot.Issues, LoadIssue{
@@ -105,7 +139,13 @@ func (l *LocalLoader) Load(ctx context.Context) (Snapshot, error) {
 			continue
 		}
 
-		skill, parseIssues, parseErr := parseLocalSkill(absRoot, skillDir, skillPath, string(data))
+		skill, parseIssues, parseErr := parseLocalSkillWithValidator(
+			absRoot,
+			skillDir,
+			skillPath,
+			string(data),
+			validateDescriptor,
+		)
 		if len(parseIssues) > 0 {
 			snapshot.Issues = append(snapshot.Issues, parseIssues...)
 		}
@@ -128,7 +168,16 @@ type skillFrontMatter struct {
 	ToolHints   []string `yaml:"tool_hints"`
 }
 
+// parseLocalSkill 解析单个本地技能文件并返回结构化结果与非致命问题。
 func parseLocalSkill(root, skillDir, skillPath, raw string) (Skill, []LoadIssue, error) {
+	return parseLocalSkillWithValidator(root, skillDir, skillPath, raw, Descriptor.Validate)
+}
+
+// parseLocalSkillWithValidator 与 parseLocalSkill 逻辑一致，但允许注入校验器以覆盖异常分支测试。
+func parseLocalSkillWithValidator(
+	root, skillDir, skillPath, raw string,
+	validateDescriptor func(Descriptor) error,
+) (Skill, []LoadIssue, error) {
 	metaText, body, hasMeta, splitErr := splitFrontMatter(raw)
 	if splitErr != nil {
 		issue := LoadIssue{
@@ -238,7 +287,7 @@ func parseLocalSkill(root, skillDir, skillPath, raw string) (Skill, []LoadIssue,
 		},
 		Scope: scope,
 	}
-	if err := descriptor.Validate(); err != nil {
+	if err := validateDescriptor(descriptor); err != nil {
 		issue := LoadIssue{
 			Code:    IssueInvalidMetadata,
 			Path:    skillPath,
@@ -306,9 +355,6 @@ func parseSections(body string) map[string]string {
 	lines := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")
 
 	appendLine := func(key string, line string) {
-		if _, ok := sections[key]; !ok {
-			return
-		}
 		if sections[key] == "" {
 			sections[key] = line
 			return
