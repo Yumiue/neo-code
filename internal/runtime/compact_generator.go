@@ -185,8 +185,12 @@ func extractJSONObject(text string) (string, error) {
 	for {
 		candidate, err := extractJSONObjectCandidate(text, start)
 		if err == nil {
-			if _, decodeErr := decodeCompactSummaryResponse(candidate); decodeErr == nil {
-				return candidate, nil
+			// 验证候选对象可被容忍解析器接受
+			var probe tolerantSummaryResponse
+			if unmarshalErr := json.Unmarshal([]byte(candidate), &probe); unmarshalErr == nil {
+				if strings.TrimSpace(probe.DisplaySummary) != "" {
+					return candidate, nil
+				}
 			}
 		}
 
