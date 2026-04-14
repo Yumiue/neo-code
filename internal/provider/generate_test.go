@@ -181,3 +181,21 @@ func TestGenerateTextRejectsMessageDoneWithNilPayload(t *testing.T) {
 		t.Fatalf("GenerateText() error = %v", err)
 	}
 }
+
+func TestGenerateTextCombinesProviderAndStreamErrors(t *testing.T) {
+	providerErr := errors.New("provider error")
+	providerStub := &stubTextGenProvider{
+		generate: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+			events <- providertypes.StreamEvent{Type: "unexpected"}
+			return providerErr
+		},
+	}
+
+	_, err := provider.GenerateText(context.Background(), providerStub, providertypes.GenerateRequest{})
+	if !errors.Is(err, providerErr) {
+		t.Fatalf("expected wrapped provider error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "unexpected provider stream event") {
+		t.Fatalf("expected stream error context to be preserved, got %v", err)
+	}
+}
