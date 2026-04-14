@@ -161,7 +161,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 
 			s.emitRunScoped(ctx, EventProgressEvaluated, &state, ProgressEvaluatedPayload{Score: currentScore})
 
-			if streak >= 3 {
+			if streak >= noProgressStreakLimit {
 				err = ErrNoProgressStreakLimit
 				return err
 			}

@@ -145,6 +145,7 @@ compact 相关 runtime 事件包括：
 
 - `applied`
 - `before_chars`
+- `before_tokens`
 - `after_chars`
 - `saved_ratio`
 - `trigger_mode`

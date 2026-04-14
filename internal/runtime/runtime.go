@@ -21,6 +21,7 @@ const (
 	providerRetryMaxWait    = 5 * time.Second
 	defaultMaxLoops         = 8
 	defaultToolParallelism  = 4
+	noProgressStreakLimit   = 3
 
 	terminationEventEmitTimeout = 500 * time.Millisecond
 )

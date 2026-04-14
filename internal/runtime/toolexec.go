@@ -20,11 +20,13 @@ func (s *Service) executeAssistantToolCalls(
 		return nil
 	}
 
-	var wg sync.WaitGroup
+	parallelism := resolveToolParallelism(len(assistant.ToolCalls))
+	orderedCalls := reorderToolCallsByNameRoundRobin(assistant.ToolCalls)
+	toolLocks := buildToolExecutionLocks(assistant.ToolCalls)
+	taskCh := make(chan providertypes.ToolCall)
 	var mu sync.Mutex
 	var firstErr error
-	semaphore := make(chan struct{}, resolveToolParallelism(len(assistant.ToolCalls)))
-	toolLocks := buildToolExecutionLocks(assistant.ToolCalls)
+	var workerWG sync.WaitGroup
 
 	checkContext := func() bool {
 		if err := ctx.Err(); err != nil {
@@ -34,75 +36,91 @@ func (s *Service) executeAssistantToolCalls(
 		return false
 	}
 
-	for _, call := range assistant.ToolCalls {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		wg.Add(1)
-		go func(call providertypes.ToolCall, toolLock *sync.Mutex) {
-			defer wg.Done()
-			if checkContext() {
-				return
+	for i := 0; i < parallelism; i++ {
+		workerWG.Add(1)
+		go func() {
+			defer workerWG.Done()
+			for call := range taskCh {
+				s.executeOneToolCall(ctx, state, snapshot, call, toolLocks[normalizeToolLockKey(call.Name)], checkContext, &mu, &firstErr)
 			}
-			if err := acquireToolSlot(ctx, semaphore); err != nil {
-				rememberFirstError(&mu, &firstErr, err)
-				return
-			}
-			defer releaseToolSlot(semaphore)
-
-			toolLock.Lock()
-			defer toolLock.Unlock()
-
-			s.emitRunScoped(ctx, EventToolStart, state, call)
-
-			result, execErr := s.executeToolCallWithPermission(ctx, permissionExecutionInput{
-				RunID:       state.runID,
-				SessionID:   state.session.ID,
-				Call:        call,
-				Workdir:     snapshot.workdir,
-				ToolTimeout: snapshot.toolTimeout,
-			})
-
-			if errors.Is(execErr, context.Canceled) {
-				rememberFirstError(&mu, &firstErr, execErr)
-				return
-			}
-			if execErr == nil && checkContext() {
-				return
-			}
-
-			if execErr != nil && strings.TrimSpace(result.Content) == "" {
-				result.Content = execErr.Error()
-			}
-
-			if err := s.appendToolMessageAndSave(ctx, state, call, result); err != nil {
-				if execErr != nil && errors.Is(err, context.Canceled) {
-					s.emitRunScoped(ctx, EventToolResult, state, result)
-				}
-				rememberFirstError(&mu, &firstErr, err)
-				return
-			}
-
-			if execErr == nil && checkContext() {
-				return
-			}
-
-			s.emitRunScoped(ctx, EventToolResult, state, result)
-
-			if isSuccessfulRememberToolCall(call.Name, result, execErr) {
-				state.mu.Lock()
-				state.rememberedThisRun = true
-				state.mu.Unlock()
-			}
-
-			if execErr != nil && checkContext() {
-				return
-			}
-		}(call, toolLocks[normalizeToolLockKey(call.Name)])
+		}()
 	}
 
-	wg.Wait()
+	for _, call := range orderedCalls {
+		if checkContext() {
+			break
+		}
+		taskCh <- call
+	}
+
+	close(taskCh)
+	workerWG.Wait()
 	return firstErr
+}
+
+// executeOneToolCall 在单个 worker 中执行一次工具调用并处理结果回写与事件发射。
+func (s *Service) executeOneToolCall(
+	ctx context.Context,
+	state *runState,
+	snapshot turnSnapshot,
+	call providertypes.ToolCall,
+	toolLock *sync.Mutex,
+	checkContext func() bool,
+	mu *sync.Mutex,
+	firstErr *error,
+) {
+	if checkContext() {
+		return
+	}
+
+	toolLock.Lock()
+	defer toolLock.Unlock()
+
+	s.emitRunScoped(ctx, EventToolStart, state, call)
+
+	result, execErr := s.executeToolCallWithPermission(ctx, permissionExecutionInput{
+		RunID:       state.runID,
+		SessionID:   state.session.ID,
+		Call:        call,
+		Workdir:     snapshot.workdir,
+		ToolTimeout: snapshot.toolTimeout,
+	})
+
+	if errors.Is(execErr, context.Canceled) {
+		rememberFirstError(mu, firstErr, execErr)
+		return
+	}
+	if execErr == nil && checkContext() {
+		return
+	}
+
+	if execErr != nil && strings.TrimSpace(result.Content) == "" {
+		result.Content = execErr.Error()
+	}
+
+	if err := s.appendToolMessageAndSave(ctx, state, call, result); err != nil {
+		if execErr != nil && errors.Is(err, context.Canceled) {
+			s.emitRunScoped(ctx, EventToolResult, state, result)
+		}
+		rememberFirstError(mu, firstErr, err)
+		return
+	}
+
+	if execErr == nil && checkContext() {
+		return
+	}
+
+	s.emitRunScoped(ctx, EventToolResult, state, result)
+
+	if isSuccessfulRememberToolCall(call.Name, result, execErr) {
+		state.mu.Lock()
+		state.rememberedThisRun = true
+		state.mu.Unlock()
+	}
+
+	if execErr != nil && checkContext() {
+		return
+	}
 }
 
 // resolveToolParallelism 计算本轮工具执行的并发上限，避免无界 goroutine 扩散。
@@ -114,6 +132,40 @@ func resolveToolParallelism(toolCallCount int) int {
 		return toolCallCount
 	}
 	return defaultToolParallelism
+}
+
+// reorderToolCallsByNameRoundRobin 按工具名分组后轮询展开，降低同名批量调用导致的队头阻塞。
+func reorderToolCallsByNameRoundRobin(calls []providertypes.ToolCall) []providertypes.ToolCall {
+	if len(calls) <= 1 {
+		return append([]providertypes.ToolCall(nil), calls...)
+	}
+	grouped := make(map[string][]providertypes.ToolCall, len(calls))
+	order := make([]string, 0, len(calls))
+	for _, call := range calls {
+		key := normalizeToolLockKey(call.Name)
+		if _, ok := grouped[key]; !ok {
+			order = append(order, key)
+		}
+		grouped[key] = append(grouped[key], call)
+	}
+
+	ordered := make([]providertypes.ToolCall, 0, len(calls))
+	for {
+		progressed := false
+		for _, key := range order {
+			queue := grouped[key]
+			if len(queue) == 0 {
+				continue
+			}
+			ordered = append(ordered, queue[0])
+			grouped[key] = queue[1:]
+			progressed = true
+		}
+		if !progressed {
+			break
+		}
+	}
+	return ordered
 }
 
 // buildToolExecutionLocks 按工具名构造互斥锁，确保同名工具调用在单轮内串行执行。
@@ -131,21 +183,6 @@ func buildToolExecutionLocks(calls []providertypes.ToolCall) map[string]*sync.Mu
 // normalizeToolLockKey 将工具名规范化为锁键，防止大小写差异导致重复并发执行。
 func normalizeToolLockKey(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
-}
-
-// acquireToolSlot 获取一个并发槽位，并在上下文取消时尽快返回。
-func acquireToolSlot(ctx context.Context, semaphore chan struct{}) error {
-	select {
-	case semaphore <- struct{}{}:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-// releaseToolSlot 释放工具执行并发槽位。
-func releaseToolSlot(semaphore chan struct{}) {
-	<-semaphore
 }
 
 // rememberFirstError 记录首次错误，后续错误只保留用于日志和事件路径。
