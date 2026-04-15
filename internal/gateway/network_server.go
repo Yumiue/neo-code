@@ -40,6 +40,7 @@ const (
 
 var (
 	resolveNetworkListenAddressFn = ResolveNetworkListenAddress
+	dispatchRPCRequestFn          = dispatchRPCRequest
 )
 
 // NetworkServerOptions 描述网关网络访问面服务启动所需的可选配置。
@@ -70,7 +71,7 @@ type NetworkServer struct {
 	mu         sync.Mutex
 	server     *http.Server
 	listener   net.Listener
-	wsConns    map[*websocket.Conn]struct{}
+	wsConns    map[*websocket.Conn]context.CancelFunc
 	sseCancels map[int]context.CancelFunc
 	nextSSEID  int
 }
@@ -132,7 +133,7 @@ func NewNetworkServer(options NetworkServerOptions) (*NetworkServer, error) {
 		maxRequestBytes:      maxRequestBytes,
 		maxStreamConnections: maxStreamConnections,
 		listenFn:             listenFn,
-		wsConns:              make(map[*websocket.Conn]struct{}),
+		wsConns:              make(map[*websocket.Conn]context.CancelFunc),
 		sseCancels:           make(map[int]context.CancelFunc),
 	}, nil
 }
@@ -272,19 +273,32 @@ func (s *NetworkServer) buildHandler(runtimePort RuntimePort) http.Handler {
 	mux.HandleFunc("/rpc", func(writer http.ResponseWriter, request *http.Request) {
 		s.handleRPCRequest(writer, request, runtimePort)
 	})
-	mux.Handle("/ws", websocket.Handler(func(conn *websocket.Conn) {
-		s.handleWebSocket(conn, runtimePort)
-	}))
+	mux.Handle("/ws", websocket.Server{
+		Handshake: func(config *websocket.Config, request *http.Request) error {
+			return validateOriginForWebSocket(request)
+		},
+		Handler: websocket.Handler(func(conn *websocket.Conn) {
+			s.handleWebSocket(conn, runtimePort)
+		}),
+	})
 	mux.HandleFunc("/sse", func(writer http.ResponseWriter, request *http.Request) {
 		s.handleSSERequest(writer, request, runtimePort)
 	})
 	return mux
 }
 
-// withCORS 为网络入口统一注入基础 CORS 响应头，并快速处理 OPTIONS 预检请求。
+// withCORS 为网络入口注入 CORS 头，仅对白名单 Origin 回显允许值。
 func (s *NetworkServer) withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		writer.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := strings.TrimSpace(request.Header.Get("Origin"))
+		if origin != "" {
+			if !isAllowedControlPlaneOrigin(origin) {
+				http.Error(writer, "origin is not allowed", http.StatusForbidden)
+				return
+			}
+			writer.Header().Set("Access-Control-Allow-Origin", origin)
+			writer.Header().Set("Vary", "Origin")
+		}
 		writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if request.Method == http.MethodOptions {
@@ -309,19 +323,27 @@ func (s *NetworkServer) handleRPCRequest(writer http.ResponseWriter, request *ht
 		return
 	}
 
-	response := dispatchRPCRequest(request.Context(), rpcRequest, runtimePort)
+	response := dispatchRPCRequestFn(request.Context(), rpcRequest, runtimePort)
 	writeJSONRPCHTTPResponse(writer, response)
 }
 
-// handleWebSocket 处理 WS 入口请求，并将每条文本消息作为 JSON-RPC 请求进行分发。
+// handleWebSocket 处理 WS 入口请求，连接上下文会在关停或异常时主动取消。
 func (s *NetworkServer) handleWebSocket(conn *websocket.Conn, runtimePort RuntimePort) {
-	if !s.registerWSConnection(conn) {
+	parentContext := context.Background()
+	if request := conn.Request(); request != nil && request.Context() != nil {
+		parentContext = request.Context()
+	}
+	connectionContext, cancelConnection := context.WithCancel(parentContext)
+
+	if !s.registerWSConnection(conn, cancelConnection) {
+		cancelConnection()
 		_ = conn.SetWriteDeadline(time.Now().Add(s.writeTimeout))
 		_ = websocket.Message.Send(conn, `{"status":"error","code":"too_many_connections","message":"stream connection limit exceeded"}`)
 		_ = conn.Close()
 		return
 	}
 	defer func() {
+		cancelConnection()
 		s.unregisterWSConnection(conn)
 		_ = conn.Close()
 	}()
@@ -334,16 +356,13 @@ func (s *NetworkServer) handleWebSocket(conn *websocket.Conn, runtimePort Runtim
 	var writeMu sync.Mutex
 	stopHeartbeat := make(chan struct{})
 	defer close(stopHeartbeat)
-
 	go s.runWSHeartbeatLoop(conn, &writeMu, stopHeartbeat)
 
 	for {
-		if s.readTimeout > 0 {
-			_ = conn.SetReadDeadline(time.Now().Add(s.readTimeout))
-		}
-
+		// 注意：此处不再强制上行读超时，避免单向推送场景下误杀健康连接。
 		var rawMessage string
 		if err := websocket.Message.Receive(conn, &rawMessage); err != nil {
+			cancelConnection()
 			if isConnectionClosedError(err) {
 				return
 			}
@@ -356,10 +375,11 @@ func (s *NetworkServer) handleWebSocket(conn *websocket.Conn, runtimePort Runtim
 		if rpcErr != nil {
 			rpcResponse = protocol.NewJSONRPCErrorResponse(nil, rpcErr)
 		} else {
-			rpcResponse = dispatchRPCRequest(context.Background(), rpcRequest, runtimePort)
+			rpcResponse = dispatchRPCRequestFn(connectionContext, rpcRequest, runtimePort)
 		}
 
 		if err := s.writeWebSocketMessage(conn, &writeMu, rpcResponse); err != nil {
+			cancelConnection()
 			if !isConnectionClosedError(err) {
 				s.logger.Printf("websocket write failed: %v", err)
 			}
@@ -436,7 +456,7 @@ func (s *NetworkServer) handleSSERequest(writer http.ResponseWriter, request *ht
 	flusher.Flush()
 
 	rpcRequest := buildSSETriggerRequest(request)
-	rpcResponse := dispatchRPCRequest(streamCtx, rpcRequest, runtimePort)
+	rpcResponse := dispatchRPCRequestFn(streamCtx, rpcRequest, runtimePort)
 	if err := s.writeSSEEvent(writer, flusher, "result", rpcResponse); err != nil {
 		return
 	}
@@ -537,7 +557,7 @@ func writeJSONRPCHTTPResponse(writer http.ResponseWriter, response protocol.JSON
 }
 
 // registerWSConnection 登记一个 WebSocket 长连接，并执行统一并发上限控制。
-func (s *NetworkServer) registerWSConnection(conn *websocket.Conn) bool {
+func (s *NetworkServer) registerWSConnection(conn *websocket.Conn, cancel context.CancelFunc) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.server == nil {
@@ -546,7 +566,7 @@ func (s *NetworkServer) registerWSConnection(conn *websocket.Conn) bool {
 	if len(s.wsConns)+len(s.sseCancels) >= s.maxStreamConnections {
 		return false
 	}
-	s.wsConns[conn] = struct{}{}
+	s.wsConns[conn] = cancel
 	return true
 }
 
@@ -582,7 +602,10 @@ func (s *NetworkServer) unregisterSSEConnection(connectionID int) {
 
 // forceCloseStreamConnections 在关停流程中主动切断 WS/SSE 长连接，避免退出被阻塞。
 func (s *NetworkServer) forceCloseStreamConnections() {
-	wsConnections, sseCancels := s.snapshotStreamConnections()
+	wsConnections, wsCancels, sseCancels := s.snapshotStreamConnections()
+	for _, cancel := range wsCancels {
+		cancel()
+	}
 	for _, cancel := range sseCancels {
 		cancel()
 	}
@@ -593,15 +616,17 @@ func (s *NetworkServer) forceCloseStreamConnections() {
 }
 
 // snapshotStreamConnections 拍平当前长连接快照并清空登记表，供关闭流程安全遍历。
-func (s *NetworkServer) snapshotStreamConnections() ([]*websocket.Conn, []context.CancelFunc) {
+func (s *NetworkServer) snapshotStreamConnections() ([]*websocket.Conn, []context.CancelFunc, []context.CancelFunc) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	wsConnections := make([]*websocket.Conn, 0, len(s.wsConns))
-	for conn := range s.wsConns {
+	wsCancels := make([]context.CancelFunc, 0, len(s.wsConns))
+	for conn, cancel := range s.wsConns {
 		wsConnections = append(wsConnections, conn)
+		wsCancels = append(wsCancels, cancel)
 	}
-	s.wsConns = make(map[*websocket.Conn]struct{})
+	s.wsConns = make(map[*websocket.Conn]context.CancelFunc)
 
 	sseCancels := make([]context.CancelFunc, 0, len(s.sseCancels))
 	for connectionID, cancel := range s.sseCancels {
@@ -609,7 +634,39 @@ func (s *NetworkServer) snapshotStreamConnections() ([]*websocket.Conn, []contex
 		delete(s.sseCancels, connectionID)
 	}
 
-	return wsConnections, sseCancels
+	return wsConnections, wsCancels, sseCancels
+}
+
+// isAllowedControlPlaneOrigin 校验请求来源是否命中本地控制面允许的 Origin 白名单。
+func isAllowedControlPlaneOrigin(origin string) bool {
+	normalizedOrigin := strings.ToLower(strings.TrimSpace(origin))
+	switch {
+	case normalizedOrigin == "":
+		return false
+	case strings.HasPrefix(normalizedOrigin, "http://localhost:"),
+		normalizedOrigin == "http://localhost",
+		strings.HasPrefix(normalizedOrigin, "http://127.0.0.1:"),
+		normalizedOrigin == "http://127.0.0.1",
+		strings.HasPrefix(normalizedOrigin, "app://"):
+		return true
+	default:
+		return false
+	}
+}
+
+// validateOriginForWebSocket 在握手阶段校验 Origin 白名单，阻断非可信网页来源。
+func validateOriginForWebSocket(request *http.Request) error {
+	if request == nil {
+		return errors.New("invalid websocket request")
+	}
+	origin := strings.TrimSpace(request.Header.Get("Origin"))
+	if origin == "" {
+		return nil
+	}
+	if !isAllowedControlPlaneOrigin(origin) {
+		return fmt.Errorf("websocket origin %q is not allowed", origin)
+	}
+	return nil
 }
 
 // isConnectionClosedError 判断错误是否由连接关闭触发，便于安静退出读写循环。
