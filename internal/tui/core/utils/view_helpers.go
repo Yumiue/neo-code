@@ -13,6 +13,8 @@ func PickerLabelFromMode(mode tuistate.PickerMode) string {
 		return "provider"
 	case tuistate.PickerModel:
 		return "model"
+	case tuistate.PickerSession:
+		return "session"
 	case tuistate.PickerFile:
 		return "file"
 	case tuistate.PickerHelp:

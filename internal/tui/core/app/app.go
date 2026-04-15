@@ -26,7 +26,6 @@ import (
 type panel = tuistate.Panel
 
 const (
-	panelSessions   panel = tuistate.PanelSessions
 	panelTranscript panel = tuistate.PanelTranscript
 	panelActivity   panel = tuistate.PanelActivity
 	panelInput      panel = tuistate.PanelInput
@@ -38,6 +37,7 @@ const (
 	pickerNone     pickerMode = tuistate.PickerNone
 	pickerProvider pickerMode = tuistate.PickerProvider
 	pickerModel    pickerMode = tuistate.PickerModel
+	pickerSession  pickerMode = tuistate.PickerSession
 	pickerFile     pickerMode = tuistate.PickerFile
 	pickerHelp     pickerMode = tuistate.PickerHelp
 )
@@ -72,11 +72,11 @@ type appComponents struct {
 	keys             keyMap
 	help             help.Model
 	spinner          spinner.Model
-	sessions         list.Model
 	commandMenu      list.Model
 	commandMenuMeta  tuistate.CommandMenuMeta
 	providerPicker   list.Model
 	modelPicker      list.Model
+	sessionPicker    list.Model
 	helpPicker       list.Model
 	fileBrowser      filepicker.Model
 	progress         progress.Model
@@ -88,24 +88,38 @@ type appComponents struct {
 
 // appRuntimeState 聚合运行期易变字段，降低 App 顶层字段密度。
 type appRuntimeState struct {
-	codeCopyBlocks    map[int]string
-	pendingCopyID     int
-	deferredEventCmd  tea.Cmd
-	nowFn             func() time.Time
-	lastInputEditAt   time.Time
-	lastPasteLikeAt   time.Time
-	inputBurstStart   time.Time
-	inputBurstCount   int
-	pasteMode         bool
-	activeMessages    []providertypes.Message
-	activities        []tuistate.ActivityEntry
-	fileCandidates    []string
-	modelRefreshID    string
-	focus             panel
-	runProgressValue  float64
-	runProgressKnown  bool
-	runProgressLabel  string
-	pendingPermission *permissionPromptState
+	codeCopyBlocks           map[int]string
+	pendingCopyID            int
+	deferredEventCmd         tea.Cmd
+	nowFn                    func() time.Time
+	lastInputEditAt          time.Time
+	lastPasteLikeAt          time.Time
+	inputBurstStart          time.Time
+	inputBurstCount          int
+	pasteMode                bool
+	activeMessages           []providertypes.Message
+	activities               []tuistate.ActivityEntry
+	fileCandidates           []string
+	modelRefreshID           string
+	focus                    panel
+	runProgressValue         float64
+	runProgressKnown         bool
+	runProgressLabel         string
+	pendingPermission        *permissionPromptState
+	pendingImageAttachments  []pendingImageAttachment
+	currentModelCapabilities modelCapabilityState
+}
+
+type pendingImageAttachment struct {
+	Path     string
+	MimeType string
+	Size     int64
+	Name     string
+}
+
+type modelCapabilityState struct {
+	supportsImageInput bool
+	checked            bool
 }
 
 type App struct {
@@ -160,18 +174,6 @@ func newApp(container tuibootstrap.Container) (App, error) {
 		return App{}, err
 	}
 	keys := newKeyMap()
-	delegate := sessionDelegate{styles: uiStyles}
-	sessionList := list.New([]list.Item{}, delegate, 0, 0)
-	sessionList.Title = ""
-	sessionList.SetShowTitle(false)
-	sessionList.SetShowHelp(false)
-	sessionList.SetShowStatusBar(false)
-	sessionList.SetShowFilter(false)
-	sessionList.SetShowPagination(false)
-	sessionList.SetFilteringEnabled(true)
-	sessionList.DisableQuitKeybindings()
-	sessionList.FilterInput.Prompt = "Filter: "
-	sessionList.FilterInput.Placeholder = "Type to search sessions"
 
 	input := textarea.New()
 	input.Placeholder = "Ask NeoCode to inspect, edit, or build. Type / to browse commands."
@@ -237,10 +239,10 @@ func newApp(container tuibootstrap.Container) (App, error) {
 			keys:             keys,
 			help:             h,
 			spinner:          spin,
-			sessions:         sessionList,
 			commandMenu:      commandMenu,
 			providerPicker:   newSelectionPickerItems(nil),
 			modelPicker:      newSelectionPickerItems(nil),
+			sessionPicker:    newSelectionPickerItems(nil),
 			helpPicker:       newHelpPickerItems(nil),
 			fileBrowser:      fileBrowser,
 			progress:         progressBar,
@@ -259,15 +261,6 @@ func newApp(container tuibootstrap.Container) (App, error) {
 		styles: uiStyles,
 	}
 
-	if err := app.refreshSessions(); err != nil {
-		return App{}, err
-	}
-	if len(app.state.Sessions) > 0 {
-		app.state.ActiveSessionID = app.state.Sessions[0].ID
-		if err := app.refreshMessages(); err != nil {
-			return App{}, err
-		}
-	}
 	app.syncActiveSessionTitle()
 	app.syncConfigState(configManager.Get())
 	if err := app.refreshProviderPicker(); err != nil {

@@ -19,6 +19,25 @@ type layout struct {
 
 const headerBarHeight = 2
 
+const (
+	pickerPanelHorizontalInset = 8
+	pickerPanelVerticalInset   = 4
+	pickerPanelMinWidth        = 42
+	pickerPanelMaxWidth        = 72
+	pickerPanelMinHeight       = 14
+	pickerPanelMaxHeight       = 24
+	pickerListMinWidth         = 28
+	pickerListMinHeight        = 8
+	pickerHeaderRows           = 2
+)
+
+type pickerLayoutSpec struct {
+	panelWidth  int
+	panelHeight int
+	listWidth   int
+	listHeight  int
+}
+
 func (a App) View() string {
 	docWidth := max(0, a.width-a.styles.doc.GetHorizontalFrameSize())
 	docHeight := max(0, a.height-a.styles.doc.GetVerticalFrameSize())
@@ -76,12 +95,13 @@ func (a App) waterfallMetrics(width int, height int) (int, int, int, int) {
 
 func (a App) renderWaterfall(width int, height int) string {
 	if a.state.ActivePicker != pickerNone {
+		pickerLayout := a.buildPickerLayout(width, height)
 		return lipgloss.Place(
 			width,
 			height,
 			lipgloss.Center,
 			lipgloss.Center,
-			a.renderPicker(tuiutils.Clamp(width-10, 36, 56), tuiutils.Clamp(height-6, 10, 14)),
+			a.renderPicker(pickerLayout.panelWidth, pickerLayout.panelHeight),
 		)
 	}
 
@@ -108,6 +128,23 @@ func (a App) renderWaterfall(width int, height int) string {
 	return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top, content)
 }
 
+func (a App) buildPickerLayout(contentWidth int, contentHeight int) pickerLayoutSpec {
+	panelWidth := tuiutils.Clamp(contentWidth-pickerPanelHorizontalInset, pickerPanelMinWidth, pickerPanelMaxWidth)
+	panelHeight := tuiutils.Clamp(contentHeight-pickerPanelVerticalInset, pickerPanelMinHeight, pickerPanelMaxHeight)
+
+	frameWidth := a.styles.panelFocused.GetHorizontalFrameSize()
+	frameHeight := a.styles.panelFocused.GetVerticalFrameSize()
+	listWidth := max(pickerListMinWidth, panelWidth-frameWidth)
+	listHeight := max(pickerListMinHeight, panelHeight-frameHeight-pickerHeaderRows)
+
+	return pickerLayoutSpec{
+		panelWidth:  panelWidth,
+		panelHeight: panelHeight,
+		listWidth:   listWidth,
+		listHeight:  listHeight,
+	}
+}
+
 func (a App) renderPicker(width int, height int) string {
 	frameHeight := a.styles.panelFocused.GetVerticalFrameSize()
 	title := modelPickerTitle
@@ -117,6 +154,11 @@ func (a App) renderPicker(width int, height int) string {
 		title = providerPickerTitle
 		subtitle = providerPickerSubtitle
 		body = a.providerPicker.View()
+	}
+	if a.state.ActivePicker == pickerSession {
+		title = sessionPickerTitle
+		subtitle = sessionPickerSubtitle
+		body = a.sessionPicker.View()
 	}
 	if a.state.ActivePicker == pickerFile {
 		title = filePickerTitle

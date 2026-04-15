@@ -13,6 +13,7 @@ func TestPickerLabelFromMode(t *testing.T) {
 	}{
 		{tuistate.PickerProvider, "provider"},
 		{tuistate.PickerModel, "model"},
+		{tuistate.PickerSession, "session"},
 		{tuistate.PickerFile, "file"},
 		{tuistate.PickerHelp, "help"},
 		{tuistate.PickerMode(999), "none"},

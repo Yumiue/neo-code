@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"errors"
-	"log"
 	"math/rand/v2"
 	"strings"
 	"time"
@@ -101,12 +100,6 @@ func (s *Service) handleRunError(ctx context.Context, runID string, sessionID st
 	_ = sessionID
 	if errors.Is(err, context.Canceled) {
 		return context.Canceled
-	}
-
-	var providerErr *provider.ProviderError
-	if errors.As(err, &providerErr) {
-		log.Printf("runtime: provider error (status=%d, code=%s, retryable=%v): %s",
-			providerErr.StatusCode, providerErr.Code, providerErr.Retryable, providerErr.Message)
 	}
 
 	return err

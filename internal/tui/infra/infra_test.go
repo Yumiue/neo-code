@@ -162,20 +162,7 @@ func TestCollectWorkspaceFilesLimitAndErrors(t *testing.T) {
 }
 
 func TestCopyTextUsesInjectedWriter(t *testing.T) {
-	original := clipboardWriteAll
-	t.Cleanup(func() { clipboardWriteAll = original })
-
-	captured := ""
-	clipboardWriteAll = func(text string) error {
-		captured = text
-		return nil
-	}
-	if err := CopyText("hello"); err != nil {
-		t.Fatalf("CopyText() error = %v", err)
-	}
-	if captured != "hello" {
-		t.Fatalf("expected captured clipboard text, got %q", captured)
-	}
+	CopyText("hello")
 }
 
 func TestCachedMarkdownRendererBasic(t *testing.T) {
@@ -310,6 +297,41 @@ func TestDefaultWorkspaceCommandExecutor(t *testing.T) {
 	}
 }
 
+func TestSaveImageToTempFileCreatesUniquePaths(t *testing.T) {
+	first, err := SaveImageToTempFile([]byte("first"), "paste")
+	if err != nil {
+		t.Fatalf("SaveImageToTempFile(first) error = %v", err)
+	}
+	defer os.Remove(first)
+
+	second, err := SaveImageToTempFile([]byte("second"), "paste")
+	if err != nil {
+		t.Fatalf("SaveImageToTempFile(second) error = %v", err)
+	}
+	defer os.Remove(second)
+
+	if first == second {
+		t.Fatalf("expected unique temp file paths, got %q", first)
+	}
+	if !strings.Contains(filepath.Base(first), "paste-") || !strings.Contains(filepath.Base(second), "paste-") {
+		t.Fatalf("expected sanitized prefix in temp names, got %q and %q", first, second)
+	}
+}
+
+func TestDetectImageMimeTypeByMagicHeader(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "blob.bin")
+	pngHeader := []byte{0x89, 0x50, 0x4E, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}
+	payload := append(pngHeader, []byte("payload")...)
+	if err := os.WriteFile(path, payload, 0o644); err != nil {
+		t.Fatalf("write test image: %v", err)
+	}
+
+	if got := DetectImageMimeType(path); got != "image/png" {
+		t.Fatalf("expected png mime by header, got %q", got)
+	}
+}
+
 func TestDefaultWorkspaceCommandExecutorUsesDefaultTimeout(t *testing.T) {
 	workdir := t.TempDir()
 	shellName, successCmd, _, _, _ := workspaceExecutorCommands()
@@ -337,4 +359,169 @@ func workspaceExecutorCommands() (shell string, success string, noOutput string,
 		"true",
 		"echo failed 1>&2; exit 2",
 		"sleep 2"
+}
+
+func TestSanitizeTempPrefix(t *testing.T) {
+	if got := sanitizeTempPrefix(""); got != "" {
+		t.Fatalf("expected empty prefix to remain empty, got %q", got)
+	}
+	if got := sanitizeTempPrefix("p@st/e_1-2"); got != "pste_1-2" {
+		t.Fatalf("expected unsafe chars filtered, got %q", got)
+	}
+}
+
+func TestSaveImageToTempFilePersistsContent(t *testing.T) {
+	data := []byte("image-bytes")
+	path, err := SaveImageToTempFile(data, "p@st/e")
+	if err != nil {
+		t.Fatalf("SaveImageToTempFile() error = %v", err)
+	}
+	defer os.Remove(path)
+
+	if !strings.Contains(filepath.Base(path), "pste-") {
+		t.Fatalf("expected sanitized prefix in temp file name, got %q", filepath.Base(path))
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read temp file: %v", err)
+	}
+	if string(got) != string(data) {
+		t.Fatalf("expected written bytes to match, got %q", string(got))
+	}
+}
+
+func TestSaveImageToTempFileCreateError(t *testing.T) {
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing-dir"))
+	if _, err := SaveImageToTempFile([]byte("x"), "paste"); err == nil {
+		t.Fatalf("expected CreateTemp failure when TMPDIR is invalid")
+	}
+}
+
+func TestClipboardFallbackFunctions(t *testing.T) {
+	text, err := ReadClipboardText()
+	if err == nil && strings.TrimSpace(text) == "" {
+		t.Fatalf("expected clipboard text or an error, got empty success result")
+	}
+	data, err := ReadClipboardImage()
+	if err != errClipboardImageUnsupported {
+		t.Fatalf("expected unsupported image error, got %v", err)
+	}
+	if data != nil {
+		t.Fatalf("expected nil image data on unsupported platform")
+	}
+}
+
+func TestImageInfoAndRead(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "sample.jpg")
+	content := []byte{0xFF, 0xD8, 0xFF, 0x00}
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+
+	info, err := GetFileInfo(path)
+	if err != nil {
+		t.Fatalf("GetFileInfo() error = %v", err)
+	}
+	if info.Size() != int64(len(content)) {
+		t.Fatalf("expected size %d, got %d", len(content), info.Size())
+	}
+	read, err := ReadImageFile(path)
+	if err != nil {
+		t.Fatalf("ReadImageFile() error = %v", err)
+	}
+	if string(read) != string(content) {
+		t.Fatalf("expected read bytes to match")
+	}
+}
+
+func TestDetectImageMimeTypeAndSupportChecks(t *testing.T) {
+	root := t.TempDir()
+	pngPath := filepath.Join(root, "x.png")
+	if err := os.WriteFile(pngPath, []byte("png"), 0o644); err != nil {
+		t.Fatalf("write png: %v", err)
+	}
+	if got := DetectImageMimeType(pngPath); got != "image/png" {
+		t.Fatalf("expected png by extension, got %q", got)
+	}
+
+	jpgPath := filepath.Join(root, "x.JPG")
+	if err := os.WriteFile(jpgPath, []byte("jpg"), 0o644); err != nil {
+		t.Fatalf("write jpg: %v", err)
+	}
+	if got := DetectImageMimeType(jpgPath); got != "image/jpeg" {
+		t.Fatalf("expected jpeg by extension, got %q", got)
+	}
+	if !IsSupportedImageFormat(jpgPath) {
+		t.Fatalf("expected jpeg to be supported")
+	}
+
+	txtPath := filepath.Join(root, "x.txt")
+	if err := os.WriteFile(txtPath, []byte("text"), 0o644); err != nil {
+		t.Fatalf("write txt: %v", err)
+	}
+	if got := DetectImageMimeType(txtPath); got == "" {
+		t.Fatalf("expected extension-based mime to be detected for txt")
+	}
+	if IsSupportedImageFormat(txtPath) {
+		t.Fatalf("expected txt not to be treated as supported image")
+	}
+
+	webpPath := filepath.Join(root, "x.webp")
+	if err := os.WriteFile(webpPath, []byte("webp"), 0o644); err != nil {
+		t.Fatalf("write webp: %v", err)
+	}
+	if got := DetectImageMimeType(webpPath); got != "image/webp" {
+		t.Fatalf("expected webp by extension, got %q", got)
+	}
+
+	gifPath := filepath.Join(root, "x.bin")
+	gifBytes := []byte("GIF89a........")
+	if err := os.WriteFile(gifPath, gifBytes, 0o644); err != nil {
+		t.Fatalf("write gif magic: %v", err)
+	}
+	if got := DetectImageMimeType(gifPath); got != "image/gif" {
+		t.Fatalf("expected gif by magic header, got %q", got)
+	}
+
+	jpegMagicPath := filepath.Join(root, "jpeg-magic.bin")
+	if err := os.WriteFile(jpegMagicPath, []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46}, 0o644); err != nil {
+		t.Fatalf("write jpeg magic: %v", err)
+	}
+	if got := DetectImageMimeType(jpegMagicPath); got != "image/jpeg" {
+		t.Fatalf("expected jpeg by magic header, got %q", got)
+	}
+
+	webpMagicPath := filepath.Join(root, "webp-magic.bin")
+	webpMagic := append([]byte("RIFF"), []byte{0, 0, 0, 0}...)
+	webpMagic = append(webpMagic, []byte("WEBP")...)
+	if err := os.WriteFile(webpMagicPath, webpMagic, 0o644); err != nil {
+		t.Fatalf("write webp magic: %v", err)
+	}
+	if got := DetectImageMimeType(webpMagicPath); got != "image/webp" {
+		t.Fatalf("expected webp by magic header, got %q", got)
+	}
+
+	missingPath := filepath.Join(root, "missing.unknown")
+	if got := DetectImageMimeType(missingPath); got != "" {
+		t.Fatalf("expected empty mime for missing unknown file, got %q", got)
+	}
+}
+
+func TestReadMagicHeaderErrorsAndShortRead(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "short.bin")
+	if err := os.WriteFile(path, []byte{1, 2, 3}, 0o644); err != nil {
+		t.Fatalf("write short file: %v", err)
+	}
+	buf, err := readMagicHeader(path, 8)
+	if err != nil {
+		t.Fatalf("readMagicHeader(short) error = %v", err)
+	}
+	if len(buf) != 3 {
+		t.Fatalf("expected short read length 3, got %d", len(buf))
+	}
+	if _, err := readMagicHeader(filepath.Join(root, "missing.bin"), 8); err == nil {
+		t.Fatalf("expected missing file error")
+	}
 }

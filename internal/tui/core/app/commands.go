@@ -25,6 +25,7 @@ const (
 	slashCommandStatus    = "/status"
 	slashCommandProvider  = "/provider"
 	slashCommandModelPick = "/model"
+	slashCommandSession   = "/session"
 	slashCommandCWD       = "/cwd"
 	slashCommandMemo      = "/memo"
 	slashCommandRemember  = "/remember"
@@ -37,6 +38,7 @@ const (
 	slashUsageStatus   = "/status"
 	slashUsageProvider = "/provider"
 	slashUsageModel    = "/model"
+	slashUsageSession  = "/session"
 	slashUsageWorkdir  = "/cwd"
 	slashUsageMemo     = "/memo"
 	slashUsageRemember = "/remember <text>"
@@ -47,6 +49,8 @@ const (
 	providerPickerSubtitle = "Up/Down choose, Enter confirm, Esc cancel"
 	modelPickerTitle       = "Select Model"
 	modelPickerSubtitle    = "Up/Down choose, Enter confirm, Esc cancel"
+	sessionPickerTitle     = "Select Session"
+	sessionPickerSubtitle  = "Up/Down choose, Enter confirm, Esc cancel"
 	helpPickerTitle        = "Slash Commands"
 	helpPickerSubtitle     = "Up/Down choose, Enter run, Esc cancel"
 	filePickerTitle        = "Browse Files"
@@ -76,6 +80,7 @@ const (
 	statusCompacting           = "Compacting context"
 	statusChooseProvider       = "Choose a provider"
 	statusChooseModel          = "Choose a model"
+	statusChooseSession        = "Choose a session"
 	statusChooseHelp           = "Choose a slash command"
 	statusBrowseFile           = "Browse workspace files"
 	statusPermissionRequired   = "Permission required: choose a decision and press Enter"
@@ -119,6 +124,7 @@ var builtinSlashCommands = []slashCommand{
 	{Usage: slashUsageForget, Description: "Remove memos matching keyword (/forget <keyword>)"},
 	{Usage: slashUsageProvider, Description: "Open the interactive provider picker"},
 	{Usage: slashUsageModel, Description: "Open the interactive model picker"},
+	{Usage: slashUsageSession, Description: "Switch to another session"},
 	{Usage: slashUsageExit, Description: "Exit NeoCode"},
 }
 

@@ -6,12 +6,13 @@ func TestPanelAndPickerConstants(t *testing.T) {
 	if PanelSessions != 0 || PanelTranscript != 1 || PanelActivity != 2 || PanelInput != 3 {
 		t.Fatalf("unexpected panel constants: %d %d %d %d", PanelSessions, PanelTranscript, PanelActivity, PanelInput)
 	}
-	if PickerNone != 0 || PickerProvider != 1 || PickerModel != 2 || PickerFile != 3 || PickerHelp != 4 {
+	if PickerNone != 0 || PickerProvider != 1 || PickerModel != 2 || PickerSession != 3 || PickerFile != 4 || PickerHelp != 5 {
 		t.Fatalf(
-			"unexpected picker constants: %d %d %d %d %d",
+			"unexpected picker constants: %d %d %d %d %d %d",
 			PickerNone,
 			PickerProvider,
 			PickerModel,
+			PickerSession,
 			PickerFile,
 			PickerHelp,
 		)

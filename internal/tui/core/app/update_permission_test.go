@@ -78,12 +78,12 @@ func newPermissionTestApp(runtime agentruntime.Runtime) *App {
 			runtime: runtime,
 		},
 		appComponents: appComponents{
-			keys:       newKeyMap(),
-			spinner:    spin,
-			sessions:   sessionList,
-			input:      input,
-			transcript: viewport.New(0, 0),
-			activity:   viewport.New(0, 0),
+			keys:          newKeyMap(),
+			spinner:       spin,
+			sessionPicker: sessionList,
+			input:         input,
+			transcript:    viewport.New(0, 0),
+			activity:      viewport.New(0, 0),
 		},
 		appRuntimeState: appRuntimeState{
 			nowFn:          time.Now,

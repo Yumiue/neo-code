@@ -19,6 +19,7 @@ const (
 	PickerNone PickerMode = iota
 	PickerProvider
 	PickerModel
+	PickerSession
 	PickerFile
 	PickerHelp
 )

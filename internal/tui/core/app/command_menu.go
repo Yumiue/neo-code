@@ -86,6 +86,14 @@ type sessionItem struct {
 	Active  bool
 }
 
+func (s sessionItem) Title() string {
+	return s.Summary.Title
+}
+
+func (s sessionItem) Description() string {
+	return s.Summary.UpdatedAt.Format("01-02 15:04")
+}
+
 func (s sessionItem) FilterValue() string {
 	return strings.ToLower(s.Summary.Title)
 }
