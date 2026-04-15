@@ -55,18 +55,34 @@ func (s *Service) appendToolMessageAndSave(
 	result tools.ToolResult,
 ) error {
 	state.mu.Lock()
-	toolMessage := providertypes.Message{
-		Role:         providertypes.RoleTool,
-		Content:      result.Content,
-		ToolCallID:   call.ID,
-		IsError:      result.IsError,
-		ToolMetadata: tools.SanitizeToolMetadata(result.Name, result.Metadata),
-	}
+	toolMessage := normalizeToolMessageForPersistence(call, result)
 	state.session.Messages = append(state.session.Messages, toolMessage)
 	state.touchSession()
 	sessionSnapshot := cloneSessionForPersistence(state.session)
 	state.mu.Unlock()
 	return s.sessionStore.Save(ctx, &sessionSnapshot)
+}
+
+// normalizeToolMessageForPersistence 负责在写入会话前收敛工具结果，避免成功结果落成完全空语义消息。
+func normalizeToolMessageForPersistence(call providertypes.ToolCall, result tools.ToolResult) providertypes.Message {
+	toolName := strings.TrimSpace(result.Name)
+	if toolName == "" {
+		toolName = strings.TrimSpace(call.Name)
+	}
+
+	sanitizedMetadata := tools.SanitizeToolMetadata(toolName, result.Metadata)
+	content := result.Content
+	if !result.IsError && strings.TrimSpace(content) == "" && len(tools.SanitizeToolMetadata("", result.Metadata)) == 0 {
+		content = "ok"
+	}
+
+	return providertypes.Message{
+		Role:         providertypes.RoleTool,
+		Content:      content,
+		ToolCallID:   call.ID,
+		IsError:      result.IsError,
+		ToolMetadata: sanitizedMetadata,
+	}
 }
 
 // cloneSessionForPersistence 复制会话快照，避免持久化阶段与并发写入共享可变切片/映射。
