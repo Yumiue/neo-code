@@ -11,6 +11,7 @@ import (
 	agentcontext "neo-code/internal/context"
 	contextcompact "neo-code/internal/context/compact"
 	providertypes "neo-code/internal/provider/types"
+	agentsession "neo-code/internal/session"
 	"neo-code/internal/skills"
 	"neo-code/internal/tools"
 )
@@ -106,6 +107,26 @@ func TestActivateSessionSkillRejectsMissingSkill(t *testing.T) {
 	}
 }
 
+func TestActivateSessionSkillValidatesInputAndRegistry(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	service := NewWithFactory(manager, &stubToolManager{}, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, &stubContextBuilder{})
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := service.ActivateSessionSkill(canceledCtx, "session-id", "go-review"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled context error, got %v", err)
+	}
+	if err := service.ActivateSessionSkill(context.Background(), " ", "go-review"); err == nil {
+		t.Fatalf("expected empty session id to fail")
+	}
+	if err := service.ActivateSessionSkill(context.Background(), "session-id", "go-review"); !errors.Is(err, errSkillsRegistryUnavailable) {
+		t.Fatalf("expected registry unavailable error, got %v", err)
+	}
+}
+
 func TestDeactivateSessionSkillIsIdempotentForUnknownSkill(t *testing.T) {
 	t.Parallel()
 
@@ -121,6 +142,47 @@ func TestDeactivateSessionSkillIsIdempotentForUnknownSkill(t *testing.T) {
 	}
 	if got := store.sessions[session.ID].ActiveSkillIDs(); len(got) != 1 || got[0] != "go-review" {
 		t.Fatalf("expected unchanged activations, got %+v", got)
+	}
+}
+
+func TestDeactivateSessionSkillEmitsEventWhenChanged(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	session := newRuntimeSession("session-deactivate-emits")
+	session.ActivateSkill("go_review")
+	store.sessions[session.ID] = cloneSession(session)
+
+	service := NewWithFactory(manager, &stubToolManager{}, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, &stubContextBuilder{})
+	if err := service.DeactivateSessionSkill(context.Background(), session.ID, "GO_REVIEW"); err != nil {
+		t.Fatalf("DeactivateSessionSkill() error = %v", err)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	if len(events) != 1 || events[0].Type != EventSkillDeactivated {
+		t.Fatalf("expected skill_deactivated event, got %+v", events)
+	}
+	payload, ok := events[0].Payload.(SessionSkillEventPayload)
+	if !ok || payload.SkillID != "go-review" {
+		t.Fatalf("unexpected event payload: %+v", events[0].Payload)
+	}
+}
+
+func TestDeactivateSessionSkillValidatesInput(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	service := NewWithFactory(manager, &stubToolManager{}, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, &stubContextBuilder{})
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := service.DeactivateSessionSkill(canceledCtx, "session-id", "go-review"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled context error, got %v", err)
+	}
+	if err := service.DeactivateSessionSkill(context.Background(), " ", "go-review"); err == nil {
+		t.Fatalf("expected empty session id to fail")
 	}
 }
 
@@ -253,6 +315,122 @@ func TestListSessionSkillsPropagatesRegistryFailure(t *testing.T) {
 
 	if _, err := service.ListSessionSkills(context.Background(), session.ID); !errors.Is(err, os.ErrPermission) {
 		t.Fatalf("expected registry failure to propagate, got %v", err)
+	}
+}
+
+func TestListSessionSkillsHandlesEmptyMissingAndResolvedStates(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	service := NewWithFactory(manager, &stubToolManager{}, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, &stubContextBuilder{})
+
+	empty := newRuntimeSession("session-list-empty")
+	store.sessions[empty.ID] = cloneSession(empty)
+	states, err := service.ListSessionSkills(context.Background(), empty.ID)
+	if err != nil {
+		t.Fatalf("ListSessionSkills() error = %v", err)
+	}
+	if states != nil {
+		t.Fatalf("expected nil states for empty session, got %+v", states)
+	}
+
+	missing := newRuntimeSession("session-list-missing")
+	missing.ActivateSkill("missing")
+	store.sessions[missing.ID] = cloneSession(missing)
+	states, err = service.ListSessionSkills(context.Background(), missing.ID)
+	if err != nil {
+		t.Fatalf("ListSessionSkills() error = %v", err)
+	}
+	if len(states) != 1 || !states[0].Missing || states[0].Descriptor != nil {
+		t.Fatalf("expected missing state when registry is nil, got %+v", states)
+	}
+
+	resolved := newRuntimeSession("session-list-resolved")
+	resolved.ActivateSkill("go-review")
+	store.sessions[resolved.ID] = cloneSession(resolved)
+	service.SetSkillsRegistry(&stubSkillsRegistry{
+		skills: map[string]skills.Skill{
+			"go-review": {
+				Descriptor: skills.Descriptor{ID: "go-review", Name: "Go Review"},
+				Content:    skills.Content{Instruction: "review code"},
+			},
+		},
+	})
+	states, err = service.ListSessionSkills(context.Background(), resolved.ID)
+	if err != nil {
+		t.Fatalf("ListSessionSkills() error = %v", err)
+	}
+	if len(states) != 1 || states[0].Missing || states[0].Descriptor == nil || states[0].Descriptor.ID != "go-review" {
+		t.Fatalf("expected resolved descriptor state, got %+v", states)
+	}
+}
+
+func TestListSessionSkillsValidatesInput(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	service := NewWithFactory(manager, &stubToolManager{}, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, &stubContextBuilder{})
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := service.ListSessionSkills(canceledCtx, "session-id"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled context error, got %v", err)
+	}
+	if _, err := service.ListSessionSkills(context.Background(), " "); err == nil {
+		t.Fatalf("expected empty session id to fail")
+	}
+}
+
+func TestMutateSessionSkillsCoversValidationAndSaveFailure(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	baseStore := newMemoryStore()
+	session := newRuntimeSession("session-mutate-branches")
+	baseStore.sessions[session.ID] = cloneSession(session)
+	service := NewWithFactory(manager, &stubToolManager{}, baseStore, &scriptedProviderFactory{provider: &scriptedProvider{}}, &stubContextBuilder{})
+
+	if _, _, err := service.mutateSessionSkills(context.Background(), session.ID, nil); err == nil {
+		t.Fatalf("expected nil mutate function to fail")
+	}
+
+	failing := &failingStore{Store: baseStore, saveErr: errors.New("save failed"), failOnSave: 1, ignoreContextErr: true}
+	service.sessionStore = failing
+	if _, _, err := service.mutateSessionSkills(context.Background(), session.ID, func(current *agentsession.Session) bool {
+		return current.ActivateSkill("go-review")
+	}); err == nil {
+		t.Fatalf("expected save failure to propagate")
+	}
+}
+
+func TestEmitSkillMissingOnceHandlesNilStateAndDedup(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	service := NewWithFactory(manager, &stubToolManager{}, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, &stubContextBuilder{})
+
+	service.emitSkillMissingOnce(context.Background(), nil, "missing-nil-state")
+	state := newRunState("run-missing-once", newRuntimeSession("session-missing-once"))
+	service.emitSkillMissingOnce(context.Background(), &state, "go_review")
+	service.emitSkillMissingOnce(context.Background(), &state, "go-review")
+
+	events := collectRuntimeEvents(service.Events())
+	if len(events) != 2 {
+		t.Fatalf("expected one nil-state event and one deduped run-state event, got %+v", events)
+	}
+}
+
+func TestNormalizeRuntimeSkillID(t *testing.T) {
+	t.Parallel()
+
+	if got := normalizeRuntimeSkillID("  Go_Review  "); got != "go-review" {
+		t.Fatalf("unexpected normalized id: %q", got)
+	}
+	if got := normalizeRuntimeSkillID(" -  "); got != "" {
+		t.Fatalf("expected blank normalized id, got %q", got)
 	}
 }
 

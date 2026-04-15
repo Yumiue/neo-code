@@ -826,6 +826,23 @@ func TestBuildRuntimeInjectsSkillsRegistryWhenRootExists(t *testing.T) {
 	}
 }
 
+func TestBuildSkillsRegistryKeepsInstanceWhenRefreshFails(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	registry := buildSkillsRegistry(canceledCtx, baseDir)
+	if registry == nil {
+		t.Fatalf("expected non-nil registry even when refresh fails")
+	}
+	_, _, err := registry.Get(context.Background(), "missing")
+	if !errors.Is(err, skills.ErrSkillNotFound) {
+		t.Fatalf("expected empty catalog behavior, got %v", err)
+	}
+}
+
 func TestBuildRuntimeRejectsInvalidWorkdirOverride(t *testing.T) {
 	disableBuiltinProviderAPIKeys(t)
 

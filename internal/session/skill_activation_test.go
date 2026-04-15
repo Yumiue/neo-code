@@ -122,3 +122,46 @@ func TestJSONStoreLoadAllowsMissingActivatedSkillsField(t *testing.T) {
 		t.Fatalf("expected no activated skills, got %+v", loaded.ActiveSkillIDs())
 	}
 }
+
+func TestSkillActivationHelpersHandleNilSessionAndBlankInput(t *testing.T) {
+	t.Parallel()
+
+	var nilSession *Session
+	if nilSession.ActivateSkill("go-review") {
+		t.Fatalf("expected nil session activate to be no-op")
+	}
+	if nilSession.DeactivateSkill("go-review") {
+		t.Fatalf("expected nil session deactivate to be no-op")
+	}
+
+	session := New("blank")
+	if session.ActivateSkill("   ") {
+		t.Fatalf("expected blank skill id to be rejected")
+	}
+	if session.DeactivateSkill("   ") {
+		t.Fatalf("expected blank deactivation to be rejected")
+	}
+}
+
+func TestSkillActivationCloneHelpers(t *testing.T) {
+	t.Parallel()
+
+	original := []SkillActivation{{SkillID: "go-review"}, {SkillID: "zeta"}}
+	cloned := cloneSkillActivations(original)
+	if len(cloned) != len(original) {
+		t.Fatalf("expected clone length %d, got %d", len(original), len(cloned))
+	}
+
+	cloned[0].SkillID = "changed"
+	if original[0].SkillID != "go-review" {
+		t.Fatalf("expected source not to be mutated, got %+v", original)
+	}
+
+	if got := (SkillActivation{SkillID: "go-review"}).Clone(); got.SkillID != "go-review" {
+		t.Fatalf("unexpected clone result: %+v", got)
+	}
+
+	if cloneSkillActivations(nil) != nil {
+		t.Fatalf("expected nil input to cloneSkillActivations to return nil")
+	}
+}

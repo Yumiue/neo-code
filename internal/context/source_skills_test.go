@@ -2,6 +2,7 @@ package context
 
 import (
 	stdcontext "context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -83,5 +84,55 @@ func TestDefaultBuilderBuildSkipsSkillsSectionWhenNoActiveSkills(t *testing.T) {
 	}
 	if strings.Contains(result.SystemPrompt, "## Skills") {
 		t.Fatalf("did not expect skills section without active skills, got %q", result.SystemPrompt)
+	}
+}
+
+func TestSkillPromptSourceSectionsHonorsContextCancel(t *testing.T) {
+	t.Parallel()
+
+	canceledCtx, cancel := stdcontext.WithCancel(stdcontext.Background())
+	cancel()
+	_, err := (skillPromptSource{}).Sections(canceledCtx, BuildInput{})
+	if !errors.Is(err, stdcontext.Canceled) {
+		t.Fatalf("expected canceled error, got %v", err)
+	}
+}
+
+func TestNormalizeActiveSkillsDropsBlankIDs(t *testing.T) {
+	t.Parallel()
+
+	normalized := normalizeActiveSkills([]skills.Skill{
+		{Descriptor: skills.Descriptor{ID: "  "}},
+		{Descriptor: skills.Descriptor{ID: "go_review", Name: "Go Review"}},
+	})
+	if len(normalized) != 1 || normalized[0].Descriptor.ID != "go_review" {
+		t.Fatalf("unexpected normalized skills: %+v", normalized)
+	}
+}
+
+func TestTruncateSkillReferencesAndHelpers(t *testing.T) {
+	t.Parallel()
+
+	references := truncateSkillReferences([]skills.Reference{
+		{Title: "A", Summary: "sum-a"},
+		{Title: "TitleOnly"},
+		{Summary: "SummaryOnly"},
+		{Path: "/tmp/path-only"},
+		{Title: "A", Summary: "sum-a"},
+	}, 4)
+	if len(references) != 4 {
+		t.Fatalf("expected four rendered references, got %+v", references)
+	}
+	if references[0] != "A: sum-a" || references[1] != "TitleOnly" || references[2] != "SummaryOnly" || references[3] != "/tmp/path-only" {
+		t.Fatalf("unexpected rendered references: %+v", references)
+	}
+	if got := truncateSkillReferences([]skills.Reference{{Title: "x"}}, 0); got != nil {
+		t.Fatalf("expected nil references when limit <= 0, got %+v", got)
+	}
+	if got := min(3, 1); got != 1 {
+		t.Fatalf("unexpected min result: %d", got)
+	}
+	if got := normalizeSkillID(" - "); got != "" {
+		t.Fatalf("expected blank normalized skill id, got %q", got)
 	}
 }
