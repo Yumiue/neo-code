@@ -253,9 +253,6 @@ func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (tur
 	state.mu.Unlock()
 
 	limit := resolveNoProgressStreakLimit(cfg.Runtime)
-<<<<<<< codex/issue-294-auto-compact-threshold
-	systemPrompt := withSelfHealingReminder(builtContext.SystemPrompt, streak, limit)
-=======
 	repeatLimit := resolveRepeatCycleStreakLimit(cfg.Runtime)
 	systemPrompt := builtContext.SystemPrompt
 
@@ -266,15 +263,9 @@ func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (tur
 		} else {
 			systemPrompt = trimmed + "\n\n" + selfHealingRepeatReminder
 		}
-	} else if streak == limit-1 {
-		trimmed := strings.TrimSpace(systemPrompt)
-		if trimmed == "" {
-			systemPrompt = selfHealingReminder
-		} else {
-			systemPrompt = trimmed + "\n\n" + selfHealingReminder
-		}
+	} else {
+		systemPrompt = withSelfHealingReminder(systemPrompt, streak, limit)
 	}
->>>>>>> main
 
 	model := strings.TrimSpace(cfg.CurrentModel)
 	return turnSnapshot{
