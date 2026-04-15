@@ -87,8 +87,8 @@ func (g *compactSummaryGenerator) Generate(
 		Model:        g.model,
 		SystemPrompt: prompt.SystemPrompt,
 		Messages: []providertypes.Message{{
-			Role:    providertypes.RoleUser,
-			Content: prompt.UserPrompt,
+			Role:  providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{providertypes.NewTextPart(prompt.UserPrompt)},
 		}},
 	}, streaming.Hooks{})
 	if outcome.err != nil {
@@ -100,7 +100,7 @@ func (g *compactSummaryGenerator) Generate(
 		return contextcompact.SummaryOutput{}, errors.New("runtime: compact summary response must not contain tool calls")
 	}
 
-	return parseCompactSummaryOutput(message.Content)
+	return parseCompactSummaryOutput(providertypes.ExtractTextForProjection(message.Parts))
 }
 
 // parseCompactSummaryOutput 解析 compact 生成器返回的 JSON 响应，容忍数组字段被返回为字符串。

@@ -38,7 +38,11 @@ func BuildRequest(cfg provider.RuntimeConfig, req providertypes.GenerateRequest)
 	}
 
 	for _, message := range req.Messages {
-		payload.Messages = append(payload.Messages, ToOpenAIMessage(message))
+		msg, err := ToOpenAIMessage(message)
+		if err != nil {
+			return Request{}, err
+		}
+		payload.Messages = append(payload.Messages, msg)
 	}
 
 	if len(req.Tools) > 0 {
@@ -60,11 +64,56 @@ func BuildRequest(cfg provider.RuntimeConfig, req providertypes.GenerateRequest)
 }
 
 // ToOpenAIMessage 将通用 Message 转换为 OpenAI 协议消息格式。
-func ToOpenAIMessage(message providertypes.Message) Message {
+func ToOpenAIMessage(message providertypes.Message) (Message, error) {
 	out := Message{
 		Role:       message.Role,
-		Content:    message.Content,
 		ToolCallID: message.ToolCallID,
+	}
+
+	var hasImage bool
+	for _, part := range message.Parts {
+		if part.Kind == providertypes.ContentPartImage {
+			hasImage = true
+			break
+		}
+	}
+
+	if !hasImage {
+		var text string
+		for _, part := range message.Parts {
+			if part.Kind == providertypes.ContentPartText {
+				text += part.Text
+			}
+		}
+		if text != "" {
+			out.Content = text
+		}
+	} else {
+		var contentParts []MessageContentPart
+		for _, part := range message.Parts {
+			if part.Kind == providertypes.ContentPartText {
+				contentParts = append(contentParts, MessageContentPart{
+					Type: "text",
+					Text: part.Text,
+				})
+			} else if part.Kind == providertypes.ContentPartImage {
+				if part.Image != nil && part.Image.SourceType == providertypes.ImageSourceRemote {
+					contentParts = append(contentParts, MessageContentPart{
+						Type: "image_url",
+						ImageURL: &ImageURL{
+							URL: part.Image.URL,
+						},
+					})
+				} else if part.Image != nil && part.Image.SourceType == providertypes.ImageSourceSessionAsset {
+					return Message{}, errors.New("session_asset image is not supported in this phase")
+				} else {
+					return Message{}, errors.New("unsupported image part payload")
+				}
+			}
+		}
+		if len(contentParts) > 0 {
+			out.Content = contentParts
+		}
 	}
 
 	if len(message.ToolCalls) > 0 {
@@ -81,7 +130,7 @@ func ToOpenAIMessage(message providertypes.Message) Message {
 		}
 	}
 
-	return out
+	return out, nil
 }
 
 // ParseError 解析 HTTP 错误响应并包装为 ProviderError。

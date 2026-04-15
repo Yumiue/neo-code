@@ -165,8 +165,8 @@ func TestRenderUserMessageKeepsTagAndBodyRightAligned(t *testing.T) {
 	app, _ := newTestApp(t)
 
 	block, _ := app.renderMessageBlockWithCopy(providertypes.Message{
-		Role:    roleUser,
-		Content: "hello right aligned",
+		Role:  roleUser,
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello right aligned")},
 	}, 72, 1)
 
 	plain := copyCodeANSIPattern.ReplaceAllString(block, "")

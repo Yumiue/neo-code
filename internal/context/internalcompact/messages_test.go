@@ -10,17 +10,17 @@ func TestBuildMessageSpansPreservesToolBlocksAndProtectedTail(t *testing.T) {
 	t.Parallel()
 
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "old"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("old")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-1", Name: "filesystem_read_file", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "result"},
-		{Role: providertypes.RoleAssistant, Content: "after tool"},
-		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
-		{Role: providertypes.RoleAssistant, Content: "latest answer"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("result")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("after tool")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest answer")}},
 	}
 
 	spans := BuildMessageSpans(messages)

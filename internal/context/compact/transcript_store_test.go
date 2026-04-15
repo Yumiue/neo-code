@@ -26,7 +26,7 @@ func TestTranscriptStoreSaveSanitizesSessionIDAndWritesJSONL(t *testing.T) {
 	}
 
 	id, path, err := store.Save([]providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "hello"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
 	}, "session with spaces", filepath.Join(home, "workspace"))
 	if err != nil {
 		t.Fatalf("Save() error = %v", err)
@@ -113,7 +113,7 @@ func TestTranscriptStoreSaveRemovesTemporaryFileWhenRenameFails(t *testing.T) {
 		},
 	}
 
-	_, _, err := store.Save([]providertypes.Message{{Role: providertypes.RoleUser, Content: "hello"}}, "session", filepath.Join(home, "workspace"))
+	_, _, err := store.Save([]providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}}, "session", filepath.Join(home, "workspace"))
 	if err == nil || !strings.Contains(err.Error(), "rename boom") {
 		t.Fatalf("expected rename error, got %v", err)
 	}

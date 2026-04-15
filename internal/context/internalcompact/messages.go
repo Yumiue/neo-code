@@ -75,7 +75,7 @@ func RetainedStartForKeepRecentMessages(spans []MessageSpan, keepMessages int) i
 // lastExplicitUserMessageIndex 返回最后一条非空用户消息的位置，用于保护最近明确指令。
 func lastExplicitUserMessageIndex(messages []providertypes.Message) int {
 	for index := len(messages) - 1; index >= 0; index-- {
-		if messages[index].Role == providertypes.RoleUser && strings.TrimSpace(messages[index].Content) != "" {
+		if messages[index].Role == providertypes.RoleUser && strings.TrimSpace(providertypes.ExtractTextForProjection(messages[index].Parts)) != "" {
 			return index
 		}
 	}

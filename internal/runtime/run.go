@@ -71,8 +71,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	}()
 	ctx = runCtx
 
-	if strings.TrimSpace(input.Content) == "" {
-		err = errors.New("runtime: input content is empty")
+	if err = validateUserInputParts(input.Parts); err != nil {
 		return err
 	}
 
@@ -92,7 +91,8 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		}
 	}
 
-	session, err := s.loadOrCreateSession(ctx, input.SessionID, input.Content, initialCfg.Workdir, input.Workdir)
+	sessionTitle := sessionTitleFromParts(input.Parts)
+	session, err := s.loadOrCreateSession(ctx, input.SessionID, sessionTitle, initialCfg.Workdir, input.Workdir)
 	if err != nil {
 		return s.handleRunError(ctx, input.RunID, input.SessionID, err)
 	}
@@ -108,7 +108,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 
 	state := newRunState(input.RunID, session)
 	statePtr = &state
-	if err := s.appendUserMessageAndSave(ctx, &state, input.Content); err != nil {
+	if err := s.appendUserMessageAndSave(ctx, &state, input.Parts); err != nil {
 		return s.handleRunError(ctx, state.runID, state.session.ID, err)
 	}
 
@@ -429,4 +429,28 @@ func degradeKeepRecentMessages(base int, attempt int) int {
 		return 1
 	}
 	return base
+}
+
+// validateUserInputParts 校验输入 parts 的结构合法性和语义有效性，避免空白文本触发无效运行。
+func validateUserInputParts(parts []providertypes.ContentPart) error {
+	if len(parts) == 0 {
+		return errors.New("runtime: input parts is empty")
+	}
+	if err := providertypes.ValidateParts(parts); err != nil {
+		return fmt.Errorf("runtime: invalid input parts: %w", err)
+	}
+	if strings.TrimSpace(providertypes.ExtractTextForProjection(parts)) == "" {
+		return errors.New("runtime: input content is empty")
+	}
+	return nil
+}
+
+// sessionTitleFromParts extracts a sensible title from the input parts.
+func sessionTitleFromParts(parts []providertypes.ContentPart) string {
+	for _, part := range parts {
+		if part.Kind == providertypes.ContentPartText && strings.TrimSpace(part.Text) != "" {
+			return strings.TrimSpace(part.Text)
+		}
+	}
+	return "Image Message"
 }

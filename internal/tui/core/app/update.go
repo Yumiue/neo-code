@@ -425,7 +425,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			}
 
 			composedInput := a.composeMessageWithImageAttachments(input)
-			a.activeMessages = append(a.activeMessages, providertypes.Message{Role: roleUser, Content: composedInput})
+			a.activeMessages = append(a.activeMessages, providertypes.Message{Role: roleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart(input)}})
 			a.rebuildTranscript()
 			runID := fmt.Sprintf("run-%d", a.now().UnixNano())
 			a.state.ActiveRunID = runID
@@ -617,18 +617,6 @@ func (a App) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return a, nil
 			}
 			return a, runModelSelection(a.providerSvc, item.id)
-		case pickerSession:
-			item, ok := a.sessionPicker.SelectedItem().(sessionItem)
-			a.closePicker()
-			if !ok {
-				return a, nil
-			}
-			if err := a.activateSessionByID(item.Summary.ID); err != nil {
-				a.state.ExecutionError = err.Error()
-				a.state.StatusText = err.Error()
-				a.appendActivity("system", "Failed to switch session", err.Error(), true)
-			}
-			return a, nil
 		case pickerHelp:
 			item, ok := a.helpPicker.SelectedItem().(selectionItem)
 			a.closePicker()
@@ -963,9 +951,6 @@ func runtimeEventRunContextHandler(a *App, event agentruntime.RuntimeEvent) bool
 		a.state.CurrentProvider = mapped.Provider
 	}
 	if strings.TrimSpace(mapped.Model) != "" {
-		if !strings.EqualFold(strings.TrimSpace(a.state.CurrentModel), strings.TrimSpace(mapped.Model)) {
-			a.invalidateModelCapabilityCache()
-		}
 		a.state.CurrentModel = mapped.Model
 	}
 	if strings.TrimSpace(mapped.Workdir) != "" {
@@ -1036,7 +1021,7 @@ func runtimeEventToolResultHandler(a *App, event agentruntime.RuntimeEvent) bool
 	}
 	a.activeMessages = append(a.activeMessages, providertypes.Message{
 		Role:    roleTool,
-		Content: payload.Content,
+		Parts:   []providertypes.ContentPart{providertypes.NewTextPart(payload.Content)},
 		IsError: payload.IsError,
 	})
 	if payload.IsError {
@@ -1083,8 +1068,8 @@ func runtimeEventAgentDoneHandler(a *App, event agentruntime.RuntimeEvent) bool 
 	if strings.TrimSpace(a.state.ExecutionError) == "" {
 		a.state.StatusText = statusReady
 	}
-	if payload, ok := event.Payload.(providertypes.Message); ok && strings.TrimSpace(payload.Content) != "" && !a.lastAssistantMatches(payload.Content) {
-		a.activeMessages = append(a.activeMessages, providertypes.Message{Role: roleAssistant, Content: payload.Content})
+	if payload, ok := event.Payload.(providertypes.Message); ok && strings.TrimSpace(providertypes.ExtractTextForProjection(payload.Parts)) != "" && !a.lastAssistantMatches(providertypes.ExtractTextForProjection(payload.Parts)) {
+		a.activeMessages = append(a.activeMessages, providertypes.Message{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart(providertypes.ExtractTextForProjection(payload.Parts))}})
 		return true
 	}
 	return false
@@ -1241,12 +1226,13 @@ func (a *App) appendAssistantChunk(chunk string) {
 	}
 
 	if !a.state.StreamingReply || len(a.activeMessages) == 0 || a.activeMessages[len(a.activeMessages)-1].Role != roleAssistant {
-		a.activeMessages = append(a.activeMessages, providertypes.Message{Role: roleAssistant, Content: chunk})
+		a.activeMessages = append(a.activeMessages, providertypes.Message{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart(chunk)}})
 		a.state.StreamingReply = true
 		return
 	}
 
-	a.activeMessages[len(a.activeMessages)-1].Content += chunk
+	content := providertypes.ExtractTextForProjection(a.activeMessages[len(a.activeMessages)-1].Parts)
+	a.activeMessages[len(a.activeMessages)-1].Parts = []providertypes.ContentPart{providertypes.NewTextPart(content + chunk)}
 }
 
 func (a *App) appendInlineMessage(role string, message string) {
@@ -1255,7 +1241,7 @@ func (a *App) appendInlineMessage(role string, message string) {
 		return
 	}
 
-	a.activeMessages = append(a.activeMessages, providertypes.Message{Role: role, Content: content})
+	a.activeMessages = append(a.activeMessages, providertypes.Message{Role: role, Parts: []providertypes.ContentPart{providertypes.NewTextPart(content)}})
 }
 
 func (a *App) appendActivity(kind string, title string, detail string, isError bool) {
@@ -1307,7 +1293,7 @@ func (a *App) lastAssistantMatches(content string) bool {
 	}
 
 	last := a.activeMessages[len(a.activeMessages)-1]
-	return last.Role == roleAssistant && strings.TrimSpace(last.Content) == strings.TrimSpace(content)
+	return last.Role == roleAssistant && strings.TrimSpace(providertypes.ExtractTextForProjection(last.Parts)) == strings.TrimSpace(content)
 }
 
 func (a *App) handleViewportKeys(vp *viewport.Model, msg tea.KeyMsg) {
@@ -1876,7 +1862,7 @@ func runAgent(runtime agentruntime.Runtime, runID string, sessionID string, work
 		agentruntime.UserInput{
 			SessionID: sessionID,
 			RunID:     strings.TrimSpace(runID),
-			Content:   content,
+			Parts:     []providertypes.ContentPart{providertypes.NewTextPart(content)},
 			Workdir:   workdir,
 		},
 		func(err error) tea.Msg { return runFinishedMsg{Err: err} },

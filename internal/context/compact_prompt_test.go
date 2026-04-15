@@ -27,8 +27,8 @@ func TestBuildCompactPromptIncludesFixedInstructionsAndBoundaries(t *testing.T) 
 		},
 		ArchivedMessages: []providertypes.Message{
 			{
-				Role:    providertypes.RoleUser,
-				Content: "legacy request\nwith details",
+				Role:  providertypes.RoleUser,
+				Parts: []providertypes.ContentPart{providertypes.NewTextPart("legacy request\nwith details")},
 			},
 			{
 				Role: providertypes.RoleAssistant,
@@ -38,7 +38,7 @@ func TestBuildCompactPromptIncludesFixedInstructionsAndBoundaries(t *testing.T) 
 			},
 		},
 		RetainedMessages: []providertypes.Message{
-			{Role: providertypes.RoleAssistant, Content: "recent answer"},
+			{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent answer")}},
 		},
 	})
 

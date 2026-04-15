@@ -122,8 +122,8 @@ func FormatToolMessageForModel(message providertypes.Message) string {
 	lines = append(lines, fmt.Sprintf("truncated: %t", toolMessageTruncated(message.ToolMetadata)))
 	lines = append(lines, formatToolMetadataLines(message.ToolMetadata)...)
 
-	if strings.TrimSpace(message.Content) != "" {
-		lines = append(lines, "", "content:", message.Content)
+	if strings.TrimSpace(providertypes.ExtractTextForProjection(message.Parts)) != "" {
+		lines = append(lines, "", "content:", providertypes.ExtractTextForProjection(message.Parts))
 	}
 
 	return strings.Join(lines, "\n")

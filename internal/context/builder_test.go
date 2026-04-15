@@ -36,7 +36,7 @@ func TestDefaultBuilderBuild(t *testing.T) {
 	builder := NewBuilder()
 	input := BuildInput{
 		Messages: []providertypes.Message{
-			{Role: "user", Content: "hello"},
+			{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
 		},
 		Metadata: testMetadata(t.TempDir()),
 	}
@@ -94,7 +94,7 @@ func TestDefaultBuilderBuildComposesPromptSectionsInOrder(t *testing.T) {
 
 	builder := NewBuilder()
 	got, err := builder.Build(stdcontext.Background(), BuildInput{
-		Messages: []providertypes.Message{{Role: "user", Content: "hello"}},
+		Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
 		Metadata: testMetadata(root),
 	})
 	if err != nil {
@@ -117,7 +117,7 @@ func TestDefaultBuilderBuildIncludesTaskStateBeforeSystemState(t *testing.T) {
 
 	builder := NewBuilder()
 	got, err := builder.Build(stdcontext.Background(), BuildInput{
-		Messages: []providertypes.Message{{Role: "user", Content: "hello"}},
+		Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
 		TaskState: agentsession.TaskState{
 			Goal:      "Finish task state refactor",
 			OpenItems: []string{"Update tests"},
@@ -148,8 +148,8 @@ func TestDefaultBuilderBuildUsesSpanTrimPolicyWhenTrimPolicyIsUnset(t *testing.T
 	messages := make([]providertypes.Message, 0, maxRetainedMessageSpans+2)
 	for i := 0; i < maxRetainedMessageSpans+2; i++ {
 		messages = append(messages, providertypes.Message{
-			Role:    providertypes.RoleUser,
-			Content: fmt.Sprintf("u-%d", i),
+			Role:  providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{providertypes.NewTextPart(fmt.Sprintf("u-%d", i))},
 		})
 	}
 
@@ -169,7 +169,7 @@ func TestDefaultBuilderBuildUsesSpanTrimPolicyWhenTrimPolicyIsUnset(t *testing.T
 	if len(got.Messages) != maxRetainedMessageSpans {
 		t.Fatalf("expected %d retained messages, got %d", maxRetainedMessageSpans, len(got.Messages))
 	}
-	if got.Messages[0].Content != "u-2" {
+	if providertypes.ExtractTextForProjection(got.Messages[0].Parts) != "u-2" {
 		t.Fatalf("expected oldest messages to be trimmed, got first message %+v", got.Messages[0])
 	}
 }
@@ -199,30 +199,30 @@ func TestDefaultBuilderBuildAppliesMicroCompactAfterTrim(t *testing.T) {
 	}
 
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "older user"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older user")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-1", Name: "filesystem_read_file", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "old read result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("old read result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-2", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent bash result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-3", Name: "webfetch", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: "latest webfetch result"},
-		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
-		{Role: providertypes.RoleAssistant, Content: "current reply"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest webfetch result")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("current reply")}},
 	}
 
 	got, err := builder.Build(stdcontext.Background(), BuildInput{
@@ -235,14 +235,14 @@ func TestDefaultBuilderBuildAppliesMicroCompactAfterTrim(t *testing.T) {
 	if len(got.Messages) != len(messages) {
 		t.Fatalf("expected builder output to keep message count, got %d want %d", len(got.Messages), len(messages))
 	}
-	if got.Messages[2].Content != microCompactClearedMessage {
-		t.Fatalf("expected builder output to clear older tool result, got %q", got.Messages[2].Content)
+	if providertypes.ExtractTextForProjection(got.Messages[2].Parts) != microCompactClearedMessage {
+		t.Fatalf("expected builder output to clear older tool result, got %q", providertypes.ExtractTextForProjection(got.Messages[2].Parts))
 	}
-	if got.Messages[4].Content != "recent bash result" {
-		t.Fatalf("expected recent tool result to stay visible, got %q", got.Messages[4].Content)
+	if providertypes.ExtractTextForProjection(got.Messages[4].Parts) != "recent bash result" {
+		t.Fatalf("expected recent tool result to stay visible, got %q", providertypes.ExtractTextForProjection(got.Messages[4].Parts))
 	}
-	if got.Messages[6].Content != "latest webfetch result" {
-		t.Fatalf("expected latest tool result to stay visible, got %q", got.Messages[6].Content)
+	if providertypes.ExtractTextForProjection(got.Messages[6].Parts) != "latest webfetch result" {
+		t.Fatalf("expected latest tool result to stay visible, got %q", providertypes.ExtractTextForProjection(got.Messages[6].Parts))
 	}
 }
 
@@ -256,29 +256,29 @@ func TestDefaultBuilderBuildSkipsMicroCompactWithoutEstablishedTaskState(t *test
 	}
 
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "older user"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older user")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-1", Name: "filesystem_read_file", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "old read result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("old read result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-2", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent bash result")}},
 	}
 
 	got, err := builder.Build(stdcontext.Background(), BuildInput{Messages: messages})
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	if got.Messages[2].Content != "old read result" {
-		t.Fatalf("expected old tool result to remain visible without task state, got %q", got.Messages[2].Content)
+	if providertypes.ExtractTextForProjection(got.Messages[2].Parts) != "old read result" {
+		t.Fatalf("expected old tool result to remain visible without task state, got %q", providertypes.ExtractTextForProjection(got.Messages[2].Parts))
 	}
 }
 
@@ -292,30 +292,30 @@ func TestDefaultBuilderBuildSkipsMicroCompactWhenDisabled(t *testing.T) {
 	}
 
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "older user"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older user")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-1", Name: "filesystem_read_file", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "old read result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("old read result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-2", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent bash result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-3", Name: "webfetch", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: "latest webfetch result"},
-		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
-		{Role: providertypes.RoleAssistant, Content: "current reply"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest webfetch result")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("current reply")}},
 	}
 
 	got, err := builder.Build(stdcontext.Background(), BuildInput{
@@ -348,37 +348,37 @@ func TestDefaultBuilderBuildHonorsToolMicroCompactPolicies(t *testing.T) {
 	}
 
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "older user"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older user")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-1", Name: "custom_tool", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "old custom result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("old custom result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-2", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent bash result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-3", Name: "webfetch", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: "latest webfetch result"},
-		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest webfetch result")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
 	}
 
 	got, err := builder.Build(stdcontext.Background(), BuildInput{Messages: messages})
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	if got.Messages[2].Content != "old custom result" {
-		t.Fatalf("expected preserved tool result to remain, got %q", got.Messages[2].Content)
+	if providertypes.ExtractTextForProjection(got.Messages[2].Parts) != "old custom result" {
+		t.Fatalf("expected preserved tool result to remain, got %q", providertypes.ExtractTextForProjection(got.Messages[2].Parts))
 	}
 }
 
@@ -390,37 +390,37 @@ func TestNewBuilderWithToolPoliciesUsesProvidedPolicySource(t *testing.T) {
 	})
 
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "older user"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older user")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-1", Name: "custom_tool", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "old custom result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("old custom result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-2", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent bash result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-3", Name: "webfetch", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: "latest webfetch result"},
-		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest webfetch result")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
 	}
 
 	got, err := builder.Build(stdcontext.Background(), BuildInput{Messages: messages})
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	if got.Messages[2].Content != "old custom result" {
-		t.Fatalf("expected preserved tool result to remain, got %q", got.Messages[2].Content)
+	if providertypes.ExtractTextForProjection(got.Messages[2].Parts) != "old custom result" {
+		t.Fatalf("expected preserved tool result to remain, got %q", providertypes.ExtractTextForProjection(got.Messages[2].Parts))
 	}
 }
 
@@ -429,7 +429,7 @@ func TestTrimMessagesPreservesToolPairs(t *testing.T) {
 
 	messages := make([]providertypes.Message, 0, maxRetainedMessageSpans+4)
 	for i := 0; i < 8; i++ {
-		messages = append(messages, providertypes.Message{Role: "user", Content: fmt.Sprintf("u-%d", i)})
+		messages = append(messages, providertypes.Message{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart(fmt.Sprintf("u-%d", i))}})
 	}
 	messages = append(messages,
 		providertypes.Message{
@@ -438,9 +438,9 @@ func TestTrimMessagesPreservesToolPairs(t *testing.T) {
 				{ID: "call-1", Name: "filesystem_edit", Arguments: "{}"},
 			},
 		},
-		providertypes.Message{Role: "tool", ToolCallID: "call-1", Content: "tool-result"},
-		providertypes.Message{Role: "assistant", Content: "after-tool"},
-		providertypes.Message{Role: "user", Content: "latest"},
+		providertypes.Message{Role: "tool", ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("tool-result")}},
+		providertypes.Message{Role: "assistant", Parts: []providertypes.ContentPart{providertypes.NewTextPart("after-tool")}},
+		providertypes.Message{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest")}},
 	)
 
 	trimmed := trimMessages(messages, maxRetainedMessageSpans)
@@ -470,25 +470,25 @@ func TestTrimMessagesProtectsLatestExplicitUserInstructionTail(t *testing.T) {
 
 	messages := make([]providertypes.Message, 0, maxRetainedMessageSpans+5)
 	for i := 0; i < 2; i++ {
-		messages = append(messages, providertypes.Message{Role: providertypes.RoleUser, Content: fmt.Sprintf("old-%d", i)})
+		messages = append(messages, providertypes.Message{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart(fmt.Sprintf("old-%d", i))}})
 	}
 	messages = append(messages,
-		providertypes.Message{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
-		providertypes.Message{Role: providertypes.RoleAssistant, Content: "follow-up-1"},
-		providertypes.Message{Role: providertypes.RoleAssistant, Content: "follow-up-2"},
-		providertypes.Message{Role: providertypes.RoleAssistant, Content: "follow-up-3"},
-		providertypes.Message{Role: providertypes.RoleAssistant, Content: "follow-up-4"},
-		providertypes.Message{Role: providertypes.RoleAssistant, Content: "follow-up-5"},
-		providertypes.Message{Role: providertypes.RoleAssistant, Content: "follow-up-6"},
-		providertypes.Message{Role: providertypes.RoleAssistant, Content: "follow-up-7"},
-		providertypes.Message{Role: providertypes.RoleAssistant, Content: "follow-up-8"},
-		providertypes.Message{Role: providertypes.RoleAssistant, Content: "follow-up-9"},
-		providertypes.Message{Role: providertypes.RoleAssistant, Content: "follow-up-10"},
-		providertypes.Message{Role: providertypes.RoleAssistant, Content: "follow-up-11"},
+		providertypes.Message{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+		providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("follow-up-1")}},
+		providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("follow-up-2")}},
+		providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("follow-up-3")}},
+		providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("follow-up-4")}},
+		providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("follow-up-5")}},
+		providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("follow-up-6")}},
+		providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("follow-up-7")}},
+		providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("follow-up-8")}},
+		providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("follow-up-9")}},
+		providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("follow-up-10")}},
+		providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("follow-up-11")}},
 	)
 
 	trimmed := trimMessages(messages, retainedSpans)
-	if trimmed[0].Role != providertypes.RoleUser || trimmed[0].Content != "latest explicit instruction" {
+	if trimmed[0].Role != providertypes.RoleUser || providertypes.ExtractTextForProjection(trimmed[0].Parts) != "latest explicit instruction" {
 		t.Fatalf("expected protected tail to keep latest explicit user instruction, got %+v", trimmed[0])
 	}
 	if len(trimmed) != 12 {
@@ -503,7 +503,7 @@ func TestTrimMessagesUsesSharedSpanModel(t *testing.T) {
 
 	messages := make([]providertypes.Message, 0, maxRetainedMessageSpans+6)
 	for i := 0; i < 3; i++ {
-		messages = append(messages, providertypes.Message{Role: providertypes.RoleUser, Content: fmt.Sprintf("u-%d", i)})
+		messages = append(messages, providertypes.Message{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart(fmt.Sprintf("u-%d", i))}})
 	}
 	messages = append(messages,
 		providertypes.Message{
@@ -512,23 +512,23 @@ func TestTrimMessagesUsesSharedSpanModel(t *testing.T) {
 				{ID: "call-2", Name: "filesystem_read_file", Arguments: "{}"},
 			},
 		},
-		providertypes.Message{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "tool-result"},
-		providertypes.Message{Role: providertypes.RoleAssistant, Content: "after tool"},
-		providertypes.Message{Role: providertypes.RoleUser, Content: "u-4"},
-		providertypes.Message{Role: providertypes.RoleAssistant, Content: "a-5"},
-		providertypes.Message{Role: providertypes.RoleUser, Content: "u-6"},
-		providertypes.Message{Role: providertypes.RoleAssistant, Content: "a-7"},
-		providertypes.Message{Role: providertypes.RoleUser, Content: "u-8"},
-		providertypes.Message{Role: providertypes.RoleAssistant, Content: "a-9"},
-		providertypes.Message{Role: providertypes.RoleUser, Content: "u-10"},
-		providertypes.Message{Role: providertypes.RoleAssistant, Content: "a-11"},
+		providertypes.Message{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("tool-result")}},
+		providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("after tool")}},
+		providertypes.Message{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("u-4")}},
+		providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("a-5")}},
+		providertypes.Message{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("u-6")}},
+		providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("a-7")}},
+		providertypes.Message{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("u-8")}},
+		providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("a-9")}},
+		providertypes.Message{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("u-10")}},
+		providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("a-11")}},
 	)
 
 	spans := internalcompact.BuildMessageSpans(messages)
 	trimmed := trimMessages(messages, retainedSpans)
 
 	start := spans[len(spans)-retainedSpans].Start
-	if len(trimmed) == 0 || trimmed[0].Content != messages[start].Content {
+	if len(trimmed) == 0 || providertypes.ExtractTextForProjection(trimmed[0].Parts) != providertypes.ExtractTextForProjection(messages[start].Parts) {
 		t.Fatalf("expected trim to start from shared span boundary %d, got %+v", start, trimmed)
 	}
 	if trimmed[0].Role != providertypes.RoleAssistant || len(trimmed[0].ToolCalls) != 1 {
@@ -548,8 +548,8 @@ func TestTrimMessagesBoundaries(t *testing.T) {
 		{
 			name: "within max turns returns full cloned slice",
 			input: []providertypes.Message{
-				{Role: "user", Content: "one"},
-				{Role: "assistant", Content: "two"},
+				{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("one")}},
+				{Role: "assistant", Parts: []providertypes.ContentPart{providertypes.NewTextPart("two")}},
 			},
 			wantLen: 2,
 			assert: func(t *testing.T, original []providertypes.Message, trimmed []providertypes.Message) {
@@ -564,7 +564,7 @@ func TestTrimMessagesBoundaries(t *testing.T) {
 			input: func() []providertypes.Message {
 				messages := make([]providertypes.Message, 0, maxRetainedMessageSpans+3)
 				for i := 0; i < maxRetainedMessageSpans-1; i++ {
-					messages = append(messages, providertypes.Message{Role: "user", Content: fmt.Sprintf("u-%d", i)})
+					messages = append(messages, providertypes.Message{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart(fmt.Sprintf("u-%d", i))}})
 				}
 				messages = append(messages,
 					providertypes.Message{
@@ -573,8 +573,8 @@ func TestTrimMessagesBoundaries(t *testing.T) {
 							{ID: "call-1", Name: "filesystem_edit", Arguments: "{}"},
 						},
 					},
-					providertypes.Message{Role: "tool", ToolCallID: "call-1", Content: "tool-1"},
-					providertypes.Message{Role: "tool", ToolCallID: "call-1", Content: "tool-2"},
+					providertypes.Message{Role: "tool", ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("tool-1")}},
+					providertypes.Message{Role: "tool", ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("tool-2")}},
 				)
 				return messages
 			}(),
@@ -591,7 +591,7 @@ func TestTrimMessagesBoundaries(t *testing.T) {
 			input: func() []providertypes.Message {
 				messages := make([]providertypes.Message, 0, maxRetainedMessageSpans+5)
 				for i := 0; i < maxRetainedMessageSpans+1; i++ {
-					messages = append(messages, providertypes.Message{Role: "user", Content: fmt.Sprintf("u-%d", i)})
+					messages = append(messages, providertypes.Message{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart(fmt.Sprintf("u-%d", i))}})
 				}
 				messages = append(messages,
 					providertypes.Message{
@@ -600,14 +600,14 @@ func TestTrimMessagesBoundaries(t *testing.T) {
 							{ID: "call-2", Name: "filesystem_edit", Arguments: "{}"},
 						},
 					},
-					providertypes.Message{Role: "tool", ToolCallID: "call-2", Content: "tool-result"},
+					providertypes.Message{Role: "tool", ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("tool-result")}},
 				)
 				return messages
 			}(),
 			wantLen: maxRetainedMessageSpans + 1,
 			assert: func(t *testing.T, original []providertypes.Message, trimmed []providertypes.Message) {
 				t.Helper()
-				if trimmed[0].Content != "u-2" {
+				if providertypes.ExtractTextForProjection(trimmed[0].Parts) != "u-2" {
 					t.Fatalf("expected oldest spans to be removed, got first message %+v", trimmed[0])
 				}
 				if trimmed[len(trimmed)-1].Role != "tool" {
@@ -636,7 +636,7 @@ func TestBuildAutoCompactSuggestedDisabled(t *testing.T) {
 
 	builder := NewBuilder()
 	input := BuildInput{
-		Messages: []providertypes.Message{{Role: "user", Content: "hello"}},
+		Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
 		Metadata: testMetadata(t.TempDir()),
 		Compact:  CompactOptions{AutoCompactThreshold: 0},
 	}
@@ -656,7 +656,7 @@ func TestBuildAutoCompactSuggestedBelowThreshold(t *testing.T) {
 
 	builder := NewBuilder()
 	input := BuildInput{
-		Messages: []providertypes.Message{{Role: "user", Content: "hello"}},
+		Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
 		Metadata: testMetadata(t.TempDir()),
 		Compact:  CompactOptions{AutoCompactThreshold: 100},
 	}
@@ -676,7 +676,7 @@ func TestBuildAutoCompactSuggestedAtThreshold(t *testing.T) {
 
 	builder := NewBuilder()
 	input := BuildInput{
-		Messages: []providertypes.Message{{Role: "user", Content: "hello"}},
+		Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
 		Metadata: testMetadata(t.TempDir()),
 		Compact:  CompactOptions{AutoCompactThreshold: 100},
 	}
@@ -696,7 +696,7 @@ func TestBuildAutoCompactSuggestedAboveThreshold(t *testing.T) {
 
 	builder := NewBuilder()
 	input := BuildInput{
-		Messages: []providertypes.Message{{Role: "user", Content: "hello"}},
+		Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
 		Metadata: testMetadata(t.TempDir()),
 		Compact:  CompactOptions{AutoCompactThreshold: 100},
 	}
@@ -720,7 +720,7 @@ func TestNewBuilderWithMemo(t *testing.T) {
 		}
 		builder := NewBuilderWithMemo(stubMicroCompactPolicySource{}, memoSource)
 		input := BuildInput{
-			Messages: []providertypes.Message{{Role: "user", Content: "hello"}},
+			Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
 			Metadata: testMetadata(t.TempDir()),
 		}
 		result, err := builder.Build(stdcontext.Background(), input)
@@ -738,7 +738,7 @@ func TestNewBuilderWithMemo(t *testing.T) {
 	t.Run("nil memo source skips memo section", func(t *testing.T) {
 		builder := NewBuilderWithMemo(stubMicroCompactPolicySource{}, nil)
 		input := BuildInput{
-			Messages: []providertypes.Message{{Role: "user", Content: "hello"}},
+			Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
 			Metadata: testMetadata(t.TempDir()),
 		}
 		result, err := builder.Build(stdcontext.Background(), input)
@@ -758,7 +758,7 @@ func TestProjectToolMessagesForModelKeepsBuilderProjectionBehavior(t *testing.T)
 		{
 			Role:         providertypes.RoleTool,
 			ToolCallID:   "call-1",
-			Content:      "tool output",
+			Parts:        []providertypes.ContentPart{providertypes.NewTextPart("tool output")},
 			ToolMetadata: map[string]string{"tool_name": "filesystem_read_file", "path": "README.md"},
 		},
 	}
@@ -767,8 +767,9 @@ func TestProjectToolMessagesForModelKeepsBuilderProjectionBehavior(t *testing.T)
 	if len(projected) != 1 {
 		t.Fatalf("len(projected) = %d, want 1", len(projected))
 	}
-	if !strings.Contains(projected[0].Content, "tool result") || !strings.Contains(projected[0].Content, "tool: filesystem_read_file") {
-		t.Fatalf("unexpected projected content: %q", projected[0].Content)
+	projectedText := providertypes.ExtractTextForProjection(projected[0].Parts)
+	if !strings.Contains(projectedText, "tool result") || !strings.Contains(projectedText, "tool: filesystem_read_file") {
+		t.Fatalf("unexpected projected content: %q", projectedText)
 	}
 	if projected[0].ToolMetadata != nil {
 		t.Fatalf("expected projected metadata to be cleared, got %#v", projected[0].ToolMetadata)
@@ -784,7 +785,7 @@ func TestDefaultBuilderBuildProjectsMetadataOnlyToolResult(t *testing.T) {
 	builder := NewBuilder()
 	result, err := builder.Build(stdcontext.Background(), BuildInput{
 		Messages: []providertypes.Message{
-			{Role: providertypes.RoleUser, Content: "inspect README"},
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("inspect README")}},
 			{
 				Role: providertypes.RoleAssistant,
 				ToolCalls: []providertypes.ToolCall{
@@ -794,7 +795,7 @@ func TestDefaultBuilderBuildProjectsMetadataOnlyToolResult(t *testing.T) {
 			{
 				Role:         providertypes.RoleTool,
 				ToolCallID:   "call-1",
-				Content:      "   ",
+				Parts:        []providertypes.ContentPart{providertypes.NewTextPart("   ")},
 				ToolMetadata: map[string]string{"tool_name": "filesystem_read_file", "path": "README.md"},
 			},
 		},
@@ -810,10 +811,11 @@ func TestDefaultBuilderBuildProjectsMetadataOnlyToolResult(t *testing.T) {
 	if toolMessage.Role != providertypes.RoleTool {
 		t.Fatalf("expected tool message at index 2, got %+v", toolMessage)
 	}
-	if !strings.Contains(toolMessage.Content, "tool result") ||
-		!strings.Contains(toolMessage.Content, "tool: filesystem_read_file") ||
-		!strings.Contains(toolMessage.Content, "meta.path: README.md") {
-		t.Fatalf("expected metadata-only tool result to be projected, got %q", toolMessage.Content)
+	toolMessageText := providertypes.ExtractTextForProjection(toolMessage.Parts)
+	if !strings.Contains(toolMessageText, "tool result") ||
+		!strings.Contains(toolMessageText, "tool: filesystem_read_file") ||
+		!strings.Contains(toolMessageText, "meta.path: README.md") {
+		t.Fatalf("expected metadata-only tool result to be projected, got %q", toolMessageText)
 	}
 	if toolMessage.ToolMetadata != nil {
 		t.Fatalf("expected projected tool metadata to be cleared, got %#v", toolMessage.ToolMetadata)
