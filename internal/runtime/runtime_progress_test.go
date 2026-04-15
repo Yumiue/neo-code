@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -31,9 +32,13 @@ func TestProgressStreakStopsRun(t *testing.T) {
 		},
 	}
 
+	var promptInjected bool
 	providerFactory := &scriptedProviderFactory{
 		provider: &scriptedProvider{
 			chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+				if strings.Contains(req.SystemPrompt, selfHealingReminder) {
+					promptInjected = true
+				}
 				// the model always decides to call the tool
 				events <- providertypes.NewToolCallStartStreamEvent(0, "call_err", "tool_error")
 				events <- providertypes.NewToolCallDeltaStreamEvent(0, "call_err", "{}")
@@ -82,6 +87,10 @@ func TestProgressStreakStopsRun(t *testing.T) {
 				t.Errorf("expected detail to be %q, got %q", ErrNoProgressStreakLimit.Error(), payload.Detail)
 			}
 		}
+	}
+
+	if !promptInjected {
+		t.Error("expected self-healing prompt to be injected before streak limit is reached, but it wasn't")
 	}
 }
 

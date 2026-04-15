@@ -26,6 +26,7 @@ type persistedConfig struct {
 	CurrentModel     string                 `yaml:"current_model,omitempty"`
 	Shell            string                 `yaml:"shell"`
 	ToolTimeoutSec   int                    `yaml:"tool_timeout_sec,omitempty"`
+	Runtime          RuntimeConfig          `yaml:"runtime,omitempty"`
 	Context          persistedContextConfig `yaml:"context,omitempty"`
 	Tools            ToolsConfig            `yaml:"tools,omitempty"`
 	Memo             persistedMemoConfig    `yaml:"memo,omitempty"`
@@ -204,6 +205,7 @@ func parseCurrentConfig(data []byte, contextDefaults ContextConfig, memoDefaults
 		CurrentModel:     strings.TrimSpace(file.CurrentModel),
 		Shell:            strings.TrimSpace(file.Shell),
 		ToolTimeoutSec:   file.ToolTimeoutSec,
+		Runtime:          file.Runtime,
 		Context:          fromPersistedContextConfig(file.Context, contextDefaults),
 		Tools:            file.Tools,
 		Memo:             fromPersistedMemoConfig(file.Memo, memoDefaults),
@@ -218,6 +220,7 @@ func marshalPersistedConfig(snapshot Config) ([]byte, error) {
 		CurrentModel:     snapshot.CurrentModel,
 		Shell:            snapshot.Shell,
 		ToolTimeoutSec:   snapshot.ToolTimeoutSec,
+		Runtime:          snapshot.Runtime,
 		Context:          newPersistedContextConfig(snapshot.Context),
 		Tools:            snapshot.Tools,
 		Memo:             newPersistedMemoConfig(snapshot.Memo),

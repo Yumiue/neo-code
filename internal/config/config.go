@@ -21,6 +21,7 @@ type Config struct {
 	Workdir          string           `yaml:"-"`
 	Shell            string           `yaml:"shell"`
 	ToolTimeoutSec   int              `yaml:"tool_timeout_sec,omitempty"`
+	Runtime          RuntimeConfig    `yaml:"runtime,omitempty"`
 	Context          ContextConfig    `yaml:"context,omitempty"`
 	Tools            ToolsConfig      `yaml:"tools,omitempty"`
 	Memo             MemoConfig       `yaml:"memo,omitempty"`
@@ -32,6 +33,7 @@ func StaticDefaults() *Config {
 		Workdir:        DefaultWorkdir,
 		Shell:          defaultShell(),
 		ToolTimeoutSec: DefaultToolTimeoutSec,
+		Runtime:        defaultRuntimeConfig(),
 		Context:        defaultContextConfig(),
 		Tools: ToolsConfig{
 			WebFetch: defaultWebFetchConfig(),
@@ -48,6 +50,7 @@ func (c *Config) Clone() Config {
 
 	clone := *c
 	clone.Providers = cloneProviders(c.Providers)
+	clone.Runtime = c.Runtime.Clone()
 	clone.Context = c.Context.Clone()
 	clone.Tools = c.Tools.Clone()
 	clone.Memo = c.Memo.Clone()
@@ -69,6 +72,7 @@ func (c *Config) applyStaticDefaults(defaults Config) {
 	if c.ToolTimeoutSec <= 0 {
 		c.ToolTimeoutSec = defaults.ToolTimeoutSec
 	}
+	c.Runtime.ApplyDefaults(defaults.Runtime)
 	c.Context.ApplyDefaults(defaults.Context)
 	c.Tools.ApplyDefaults(defaults.Tools)
 	c.Memo.ApplyDefaults(defaults.Memo)
@@ -121,6 +125,9 @@ func (c *Config) ValidateSnapshot() error {
 	}
 	if err := c.Tools.Validate(); err != nil {
 		return fmt.Errorf("config: tools: %w", err)
+	}
+	if err := c.Runtime.Validate(); err != nil {
+		return fmt.Errorf("config: runtime: %w", err)
 	}
 	if err := c.Context.Validate(); err != nil {
 		return fmt.Errorf("config: context: %w", err)

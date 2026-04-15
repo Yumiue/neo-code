@@ -1592,6 +1592,9 @@ func TestValidateSnapshotPropagatesCompactError(t *testing.T) {
 				SupportedContentTypes: []string{"text/html"},
 			},
 		},
+		Runtime: RuntimeConfig{
+			MaxNoProgressStreak: 3,
+		},
 		Context: ContextConfig{
 			Compact: CompactConfig{
 				ManualStrategy:           "invalid_strategy",
@@ -1679,6 +1682,52 @@ func TestMarshalPersistedConfigEndsWithNewline(t *testing.T) {
 	}
 	if data[len(data)-1] != '\n' {
 		t.Fatal("expected marshaled data to end with newline")
+	}
+}
+
+func TestParseCurrentConfigRoundTripRuntimeConfig(t *testing.T) {
+	t.Parallel()
+
+	snapshot := testDefaultConfig().Clone()
+	snapshot.Runtime.MaxNoProgressStreak = 5
+
+	data, err := marshalPersistedConfig(snapshot)
+	if err != nil {
+		t.Fatalf("marshalPersistedConfig() error = %v", err)
+	}
+
+	parsed, err := parseCurrentConfig(data, StaticDefaults().Context, StaticDefaults().Memo)
+	if err != nil {
+		t.Fatalf("parseCurrentConfig() error = %v", err)
+	}
+	if parsed.Runtime.MaxNoProgressStreak != 5 {
+		t.Fatalf("expected max_no_progress_streak=5, got %d", parsed.Runtime.MaxNoProgressStreak)
+	}
+}
+
+func TestParseCurrentConfigInvalidRuntimeValueDefaultsBeforeValidation(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte(`
+selected_provider: openai
+current_model: gpt-4.1
+shell: bash
+runtime:
+  max_no_progress_streak: -2
+`)
+
+	parsed, err := parseCurrentConfig(raw, StaticDefaults().Context, StaticDefaults().Memo)
+	if err != nil {
+		t.Fatalf("parseCurrentConfig() error = %v", err)
+	}
+	parsed.Providers = cloneProviders(testDefaultConfig().Providers)
+	parsed.applyStaticDefaults(*StaticDefaults())
+	if err := parsed.ValidateSnapshot(); err != nil {
+		t.Fatalf("ValidateSnapshot() error = %v", err)
+	}
+	if parsed.Runtime.MaxNoProgressStreak != DefaultMaxNoProgressStreak {
+		t.Fatalf("expected default max_no_progress_streak=%d, got %d",
+			DefaultMaxNoProgressStreak, parsed.Runtime.MaxNoProgressStreak)
 	}
 }
 
