@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"neo-code/internal/config"
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/approval"
@@ -20,6 +19,25 @@ type stubMemoExtractor struct {
 	calls    int
 	lastMsgs []providertypes.Message
 	doneCh   chan struct{}
+}
+
+type lockProbeStore struct {
+	saveFn func(ctx context.Context, session *agentsession.Session) error
+}
+
+func (s *lockProbeStore) Save(ctx context.Context, session *agentsession.Session) error {
+	if s.saveFn == nil {
+		return nil
+	}
+	return s.saveFn(ctx, session)
+}
+
+func (s *lockProbeStore) Load(ctx context.Context, id string) (agentsession.Session, error) {
+	return agentsession.Session{}, errors.New("not implemented")
+}
+
+func (s *lockProbeStore) ListSummaries(ctx context.Context) ([]agentsession.Summary, error) {
+	return nil, errors.New("not implemented")
 }
 
 func (s *stubMemoExtractor) Schedule(_ string, messages []providertypes.Message) {
@@ -53,13 +71,12 @@ func TestRunStateMutationsAndSync(t *testing.T) {
 
 	state.recordUsage(10, 20)
 	if state.session.TokenInputTotal != 11 || state.session.TokenOutputTotal != 22 {
-		t.Fatalf("session totals not synced: %+v", state.session)
+		t.Fatalf("unexpected token totals: in=%d out=%d", state.session.TokenInputTotal, state.session.TokenOutputTotal)
 	}
 
 	state.resetTokenTotals()
 	if state.session.TokenInputTotal != 0 || state.session.TokenOutputTotal != 0 {
-		t.Fatalf("expected reset totals to be zero, got in=%d out=%d",
-			state.session.TokenInputTotal, state.session.TokenOutputTotal)
+		t.Fatalf("expected reset totals to be zero, got in=%d out=%d", state.session.TokenInputTotal, state.session.TokenOutputTotal)
 	}
 
 	before := state.session.UpdatedAt
@@ -69,7 +86,7 @@ func TestRunStateMutationsAndSync(t *testing.T) {
 		t.Fatalf("expected touchSession to update time")
 	}
 	if state.session.TokenInputTotal != 1 || state.session.TokenOutputTotal != 2 {
-		t.Fatalf("expected touchSession to keep latest totals")
+		t.Fatalf("expected recordUsage to sync totals")
 	}
 }
 
@@ -138,17 +155,36 @@ func TestAppendToolMessageAndSaveSanitizesMetadata(t *testing.T) {
 	}
 }
 
-func TestResolveMaxLoopsBranches(t *testing.T) {
+func TestAppendToolMessageAndSaveUnlocksStateBeforePersist(t *testing.T) {
 	t.Parallel()
 
-	if got := resolveMaxLoops(config.Config{MaxLoops: 0}); got != defaultMaxLoops {
-		t.Fatalf("expected default max loops for zero, got %d", got)
+	session := newRuntimeSession("session-append-tool-lock")
+	state := newRunState("run-append-tool-lock", session)
+
+	store := &lockProbeStore{
+		saveFn: func(_ context.Context, _ *agentsession.Session) error {
+			locked := make(chan struct{})
+			go func() {
+				state.mu.Lock()
+				state.mu.Unlock()
+				close(locked)
+			}()
+
+			select {
+			case <-locked:
+				return nil
+			case <-time.After(200 * time.Millisecond):
+				return errors.New("state lock is still held during save")
+			}
+		},
 	}
-	if got := resolveMaxLoops(config.Config{MaxLoops: -3}); got != defaultMaxLoops {
-		t.Fatalf("expected default max loops for negative, got %d", got)
-	}
-	if got := resolveMaxLoops(config.Config{MaxLoops: 12}); got != 12 {
-		t.Fatalf("expected explicit max loops, got %d", got)
+
+	service := &Service{sessionStore: store}
+	call := providertypes.ToolCall{ID: "call-1", Name: "filesystem_read_file"}
+	result := tools.ToolResult{Name: "filesystem_read_file", Content: "ok"}
+
+	if err := service.appendToolMessageAndSave(context.Background(), &state, call, result); err != nil {
+		t.Fatalf("appendToolMessageAndSave() error = %v", err)
 	}
 }
 
