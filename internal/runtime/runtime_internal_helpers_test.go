@@ -236,6 +236,37 @@ func TestAppendToolMessageAndSaveNormalizesSemanticallyEmptySuccessResult(t *tes
 	}
 }
 
+func TestAppendToolMessageAndSaveNormalizesToolNameOnlyMetadataSuccessResult(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	session := newRuntimeSession("session-append-tool-name-only-metadata-success")
+	store.sessions[session.ID] = cloneSession(session)
+
+	service := &Service{sessionStore: store}
+	state := newRunState("run-append-tool-name-only-metadata-success", session)
+	call := providertypes.ToolCall{ID: "call-1", Name: "filesystem_read_file"}
+	result := tools.ToolResult{
+		Name:    "filesystem_read_file",
+		Content: "   ",
+		Metadata: map[string]any{
+			"unsupported_key": "ignored",
+		},
+	}
+
+	if err := service.appendToolMessageAndSave(context.Background(), &state, call, result); err != nil {
+		t.Fatalf("appendToolMessageAndSave() error = %v", err)
+	}
+
+	msg := state.session.Messages[0]
+	if msg.Content != "ok" {
+		t.Fatalf("expected tool_name-only metadata success to normalize content to ok, got %q", msg.Content)
+	}
+	if len(msg.ToolMetadata) != 1 || msg.ToolMetadata["tool_name"] != "filesystem_read_file" {
+		t.Fatalf("expected only tool_name metadata to remain, got %+v", msg.ToolMetadata)
+	}
+}
+
 func TestAppendToolMessageAndSaveFallsBackToCallNameForToolMetadata(t *testing.T) {
 	t.Parallel()
 

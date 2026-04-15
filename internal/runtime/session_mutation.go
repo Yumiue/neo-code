@@ -9,6 +9,8 @@ import (
 	"neo-code/internal/tools"
 )
 
+const toolNameMetadataKey = "tool_name"
+
 // appendUserMessageAndSave 将用户消息追加到会话并立即持久化。
 func (s *Service) appendUserMessageAndSave(ctx context.Context, state *runState, content string) error {
 	message := providertypes.Message{
@@ -72,7 +74,7 @@ func normalizeToolMessageForPersistence(call providertypes.ToolCall, result tool
 
 	sanitizedMetadata := tools.SanitizeToolMetadata(toolName, result.Metadata)
 	content := result.Content
-	if !result.IsError && strings.TrimSpace(content) == "" && len(tools.SanitizeToolMetadata("", result.Metadata)) == 0 {
+	if !result.IsError && strings.TrimSpace(content) == "" && !hasNonToolNameToolMetadata(sanitizedMetadata) {
 		content = "ok"
 	}
 
@@ -83,6 +85,16 @@ func normalizeToolMessageForPersistence(call providertypes.ToolCall, result tool
 		IsError:      result.IsError,
 		ToolMetadata: sanitizedMetadata,
 	}
+}
+
+// hasNonToolNameToolMetadata 判断 metadata 中是否存在除 tool_name 外的语义字段。
+func hasNonToolNameToolMetadata(metadata map[string]string) bool {
+	for key := range metadata {
+		if key != toolNameMetadataKey {
+			return true
+		}
+	}
+	return false
 }
 
 // cloneSessionForPersistence 复制会话快照，避免持久化阶段与并发写入共享可变切片/映射。
