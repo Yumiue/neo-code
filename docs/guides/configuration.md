@@ -58,7 +58,9 @@ context:
     micro_compact_disabled: false
   auto_compact:
     enabled: false
-    input_token_threshold: 100000
+    input_token_threshold: 0
+    reserve_tokens: 13000
+    fallback_input_token_threshold: 100000
 ```
 
 ### 基础字段
@@ -141,6 +143,13 @@ openai_compatible:
   base_url: https://llm.example.com/v1
   api_style: chat_completions
 ```
+
+## Auto Compact 失败与校验补充
+
+- 当 `context.auto_compact.input_token_threshold <= 0` 时，如果当前 provider 选择无效、catalog snapshot 查询失败，或模型缺少可用的 `ContextWindow`，系统会回退到 `fallback_input_token_threshold`，不会静默关闭 auto compact。
+- `~/.neocode/providers/<provider-name>/provider.yaml` 中的 `models[].id` 必须非空。
+- `models[].context_window` 和 `models[].max_output_tokens` 如果显式配置，必须大于 `0`。
+- `models` 中重复的模型 `id` 会在加载 `provider.yaml` 时直接报错。
 
 文件路径：
 
@@ -230,3 +239,26 @@ config: environment variable OPENAI_API_KEY is empty
 - [添加 Provider](./adding-providers.md)
 - [配置管理详细设计](../config-management-detail-design.md)
 - [Context Compact](../context-compact.md)
+
+## Auto Compact 补充说明
+
+- `context.auto_compact.input_token_threshold > 0` 时，系统直接使用该显式阈值。
+- `context.auto_compact.input_token_threshold <= 0` 时，系统会根据当前 `current_model` 对应的 `ContextWindow` 自动推导输入阈值。
+- 推导公式为 `context_window - reserve_tokens`。
+- `reserve_tokens` 默认 `13000`。
+- 如果当前 provider/model 没有可用的 `ContextWindow` 元数据，则回退到 `fallback_input_token_threshold`。
+- custom provider 可以在 `~/.neocode/providers/<provider-name>/provider.yaml` 中通过 `models` 字段补齐模型元数据，例如：
+
+```yaml
+name: company-gateway
+driver: openaicompat
+api_key_env: COMPANY_GATEWAY_API_KEY
+models:
+  - id: deepseek-coder
+    name: DeepSeek Coder
+    context_window: 131072
+    max_output_tokens: 8192
+openai_compatible:
+  base_url: https://llm.example.com/v1
+  api_style: chat_completions
+```

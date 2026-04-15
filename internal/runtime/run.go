@@ -184,7 +184,7 @@ func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (tur
 		},
 		Compact: agentcontext.CompactOptions{
 			DisableMicroCompact:           cfg.Context.Compact.MicroCompactDisabled,
-			AutoCompactThreshold:          autoCompactThreshold(cfg),
+			AutoCompactThreshold:          s.autoCompactThreshold(ctx, cfg),
 			MicroCompactRetainedToolSpans: cfg.Context.Compact.MicroCompactRetainedToolSpans,
 			ReadTimeMaxMessageSpans:       cfg.Context.Compact.ReadTimeMaxMessageSpans,
 		},
@@ -350,11 +350,20 @@ func (s *Service) applyCompactForState(
 }
 
 // autoCompactThreshold 返回当前配置下的自动 compact 触发阈值。
-func autoCompactThreshold(cfg config.Config) int {
-	if cfg.Context.AutoCompact.Enabled && cfg.Context.AutoCompact.InputTokenThreshold > 0 {
+func (s *Service) autoCompactThreshold(ctx context.Context, cfg config.Config) int {
+	if !cfg.Context.AutoCompact.Enabled {
+		return 0
+	}
+	if cfg.Context.AutoCompact.InputTokenThreshold > 0 {
 		return cfg.Context.AutoCompact.InputTokenThreshold
 	}
-	return 0
+	if s != nil && s.autoCompactThresholdResolver != nil {
+		threshold, err := s.autoCompactThresholdResolver.ResolveAutoCompactThreshold(ctx, cfg)
+		if err == nil {
+			return threshold
+		}
+	}
+	return fallbackAutoCompactThreshold(cfg)
 }
 
 // degradeKeepRecentMessages 根据 reactive compact 尝试次数逐步减少保留消息数。
@@ -366,4 +375,12 @@ func degradeKeepRecentMessages(base int, attempt int) int {
 		return 1
 	}
 	return base
+}
+
+// fallbackAutoCompactThreshold 返回自动推导失败时仍可继续使用的保底阈值。
+func fallbackAutoCompactThreshold(cfg config.Config) int {
+	if cfg.Context.AutoCompact.FallbackInputTokenThreshold > 0 {
+		return cfg.Context.AutoCompact.FallbackInputTokenThreshold
+	}
+	return 0
 }
