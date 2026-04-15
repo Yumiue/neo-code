@@ -23,17 +23,38 @@ type ProgressScore struct {
 
 // ProgressState 汇总当前运行期 progress 控制面状态。
 type ProgressState struct {
-	LastScore ProgressScore `json:"last_score"`
+	LastScore     ProgressScore `json:"last_score"`
+	LastSignature string        `json:"last_signature,omitempty"`
 }
 
 // ApplyProgressEvidence 根据证据更新分值与 streak。
-func ApplyProgressEvidence(state ProgressState, records []ProgressEvidenceRecord) ProgressState {
+func ApplyProgressEvidence(state ProgressState, records []ProgressEvidenceRecord, currentSignature string) ProgressState {
 	next := state.LastScore
+	isRepeated := false
+
+	if len(records) > 0 {
+		if currentSignature != "" && currentSignature == state.LastSignature {
+			isRepeated = true
+		}
+	}
+
+	nextSignature := currentSignature
+
 	if len(records) == 0 {
 		next.NoProgressStreak++
+		next.RepeatCycleStreak = 0
+		nextSignature = "" // Clear signature on failure to only count consecutive successes
+	} else if isRepeated {
+		next.NoProgressStreak++
+		next.RepeatCycleStreak++
 	} else {
 		next.NoProgressStreak = 0
+		next.RepeatCycleStreak = 0
 		next.ScoreDelta++
 	}
-	return ProgressState{LastScore: next}
+
+	return ProgressState{
+		LastScore:     next,
+		LastSignature: nextSignature,
+	}
 }
