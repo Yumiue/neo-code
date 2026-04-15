@@ -139,8 +139,8 @@ func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (tur
 			Shell:               cfg.Shell,
 			Provider:            cfg.SelectedProvider,
 			Model:               cfg.CurrentModel,
-			SessionInputTokens:  state.tokenInputTotal,
-			SessionOutputTokens: state.tokenOutputTotal,
+			SessionInputTokens:  state.session.TokenInputTotal,
+			SessionOutputTokens: state.session.TokenOutputTotal,
 		},
 		Compact: agentcontext.CompactOptions{
 			DisableMicroCompact:           cfg.Context.Compact.MicroCompactDisabled,
@@ -257,8 +257,8 @@ func (s *Service) emitTokenUsage(ctx context.Context, state *runState, result pr
 	s.emit(ctx, EventTokenUsage, state.runID, state.session.ID, TokenUsagePayload{
 		InputTokens:         result.inputTokens,
 		OutputTokens:        result.outputTokens,
-		SessionInputTokens:  state.tokenInputTotal,
-		SessionOutputTokens: state.tokenOutputTotal,
+		SessionInputTokens:  state.session.TokenInputTotal,
+		SessionOutputTokens: state.session.TokenOutputTotal,
 	})
 }
 

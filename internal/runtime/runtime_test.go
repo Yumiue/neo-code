@@ -4059,11 +4059,11 @@ func TestRestoreSessionTokens(t *testing.T) {
 
 	state := newRunState("", session)
 
-	if state.tokenInputTotal != 500 {
-		t.Fatalf("expected sessionInputTokens == 500, got %d", state.tokenInputTotal)
+	if state.session.TokenInputTotal != 500 {
+		t.Fatalf("expected sessionInputTokens == 500, got %d", state.session.TokenInputTotal)
 	}
-	if state.tokenOutputTotal != 200 {
-		t.Fatalf("expected sessionOutputTokens == 200, got %d", state.tokenOutputTotal)
+	if state.session.TokenOutputTotal != 200 {
+		t.Fatalf("expected sessionOutputTokens == 200, got %d", state.session.TokenOutputTotal)
 	}
 }
 
@@ -4077,11 +4077,11 @@ func TestRestoreSessionTokensNewSession(t *testing.T) {
 
 	state := newRunState("", session)
 
-	if state.tokenInputTotal != 0 {
-		t.Fatalf("expected sessionInputTokens == 0, got %d", state.tokenInputTotal)
+	if state.session.TokenInputTotal != 0 {
+		t.Fatalf("expected sessionInputTokens == 0, got %d", state.session.TokenInputTotal)
 	}
-	if state.tokenOutputTotal != 0 {
-		t.Fatalf("expected sessionOutputTokens == 0, got %d", state.tokenOutputTotal)
+	if state.session.TokenOutputTotal != 0 {
+		t.Fatalf("expected sessionOutputTokens == 0, got %d", state.session.TokenOutputTotal)
 	}
 }
 
@@ -4165,8 +4165,8 @@ func TestTokenUsageRecordedOnMessageDone(t *testing.T) {
 				service.emit(context.Background(), EventTokenUsage, "test-run-id", "test-session-id", TokenUsagePayload{
 					InputTokens:         payload.Usage.InputTokens,
 					OutputTokens:        payload.Usage.OutputTokens,
-					SessionInputTokens:  state.tokenInputTotal,
-					SessionOutputTokens: state.tokenOutputTotal,
+					SessionInputTokens:  state.session.TokenInputTotal,
+					SessionOutputTokens: state.session.TokenOutputTotal,
 				})
 			}
 		}},
@@ -4176,11 +4176,11 @@ func TestTokenUsageRecordedOnMessageDone(t *testing.T) {
 	}
 
 	// Verify the service counters are updated
-	if state.tokenInputTotal != 100 {
-		t.Fatalf("expected sessionInputTokens == 100, got %d", state.tokenInputTotal)
+	if state.session.TokenInputTotal != 100 {
+		t.Fatalf("expected sessionInputTokens == 100, got %d", state.session.TokenInputTotal)
 	}
-	if state.tokenOutputTotal != 50 {
-		t.Fatalf("expected sessionOutputTokens == 50, got %d", state.tokenOutputTotal)
+	if state.session.TokenOutputTotal != 50 {
+		t.Fatalf("expected sessionOutputTokens == 50, got %d", state.session.TokenOutputTotal)
 	}
 
 	// Verify EventTokenUsage was emitted with correct payload

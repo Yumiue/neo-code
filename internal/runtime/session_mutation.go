@@ -33,7 +33,6 @@ func (s *Service) appendAssistantMessageAndSave(
 	metadataChanged := state.session.Provider != snapshot.providerConfig.Name || state.session.Model != snapshot.model
 	state.session.Provider = snapshot.providerConfig.Name
 	state.session.Model = snapshot.model
-	state.syncSessionTokenTotals()
 
 	if strings.TrimSpace(assistant.Content) != "" || len(assistant.ToolCalls) > 0 {
 		state.session.Messages = append(state.session.Messages, assistant)
