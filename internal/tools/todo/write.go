@@ -223,6 +223,9 @@ func (t *Tool) Execute(ctx context.Context, call tools.ToolCallInput) (tools.Too
 func (t *Tool) dispatch(call tools.ToolCallInput, input writeInput) error {
 	switch input.Action {
 	case actionPlan:
+		if input.Items == nil {
+			return fmt.Errorf("%w: action %q requires items", errTodoInvalidArguments, actionPlan)
+		}
 		return call.SessionMutator.ReplaceTodos(input.Items)
 	case actionAdd:
 		if input.Item == nil {
@@ -246,7 +249,7 @@ func (t *Tool) dispatch(call tools.ToolCallInput, input writeInput) error {
 		if input.ID == "" {
 			return fmt.Errorf("%w: action %q requires id", errTodoInvalidArguments, actionRemove)
 		}
-		return call.SessionMutator.DeleteTodo(input.ID)
+		return call.SessionMutator.DeleteTodo(input.ID, input.ExpectedRevision)
 	case actionClaim:
 		if input.ID == "" {
 			return fmt.Errorf("%w: action %q requires id", errTodoInvalidArguments, actionClaim)

@@ -50,6 +50,9 @@ type TodoItem struct {
 	Acceptance    []string   `json:"acceptance,omitempty"`
 	Artifacts     []string   `json:"artifacts,omitempty"`
 	FailureReason string     `json:"failure_reason,omitempty"`
+	RetryCount    int        `json:"retry_count,omitempty"`
+	RetryLimit    int        `json:"retry_limit,omitempty"`
+	NextRetryAt   time.Time  `json:"next_retry_at,omitempty"`
 	Revision      int64      `json:"revision"`
 	CreatedAt     time.Time  `json:"created_at"`
 	UpdatedAt     time.Time  `json:"updated_at"`
@@ -66,6 +69,9 @@ type TodoPatch struct {
 	Acceptance    *[]string
 	Artifacts     *[]string
 	FailureReason *string
+	RetryCount    *int
+	RetryLimit    *int
+	NextRetryAt   *time.Time
 }
 
 // Clone 返回 Todo 项的深拷贝，避免切片共享底层内存。
@@ -282,8 +288,8 @@ func (s *Session) FailTodo(id string, reason string, expectedRevision int64) err
 	return s.UpdateTodo(id, patch, expectedRevision)
 }
 
-// DeleteTodo 按 ID 删除 Todo，删除前会检查反向依赖。
-func (s *Session) DeleteTodo(id string) error {
+// DeleteTodo 按 ID 删除 Todo，删除前会检查 revision 与反向依赖。
+func (s *Session) DeleteTodo(id string, expectedRevision int64) error {
 	if s == nil {
 		return errors.New("session: session is nil")
 	}
@@ -293,14 +299,16 @@ func (s *Session) DeleteTodo(id string) error {
 	if err != nil {
 		return err
 	}
-	if dependents := findTodoDependents(s.Todos, id); len(dependents) > 0 {
-		return fmt.Errorf("%w: todo %q is still required by %s", ErrDependencyViolation, id, strings.Join(dependents, ", "))
-	}
-
 	items := make([]TodoItem, 0, len(s.Todos))
 	found := false
 	for _, item := range s.Todos {
 		if item.ID == id {
+			if err := ensureTodoRevision(item, expectedRevision); err != nil {
+				return err
+			}
+			if dependents := findTodoDependents(s.Todos, id); len(dependents) > 0 {
+				return fmt.Errorf("%w: todo %q is still required by %s", ErrDependencyViolation, id, strings.Join(dependents, ", "))
+			}
 			found = true
 			continue
 		}
@@ -516,6 +524,15 @@ func applyTodoPatch(item TodoItem, patch TodoPatch) (TodoItem, error) {
 	}
 	if patch.FailureReason != nil {
 		next.FailureReason = strings.TrimSpace(*patch.FailureReason)
+	}
+	if patch.RetryCount != nil {
+		next.RetryCount = *patch.RetryCount
+	}
+	if patch.RetryLimit != nil {
+		next.RetryLimit = *patch.RetryLimit
+	}
+	if patch.NextRetryAt != nil {
+		next.NextRetryAt = *patch.NextRetryAt
 	}
 	if patch.Status != nil {
 		target := *patch.Status

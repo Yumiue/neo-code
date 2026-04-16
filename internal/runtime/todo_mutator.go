@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"time"
 
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
@@ -76,9 +77,9 @@ func (m *runtimeSessionMutator) SetTodoStatus(id string, status agentsession.Tod
 }
 
 // DeleteTodo 删除 Todo 并立即持久化。
-func (m *runtimeSessionMutator) DeleteTodo(id string) error {
+func (m *runtimeSessionMutator) DeleteTodo(id string, expectedRevision int64) error {
 	return m.mutateAndSave(func(session *agentsession.Session) error {
-		return session.DeleteTodo(id)
+		return session.DeleteTodo(id, expectedRevision)
 	})
 }
 
@@ -103,7 +104,7 @@ func (m *runtimeSessionMutator) FailTodo(id string, reason string, expectedRevis
 	})
 }
 
-// mutateAndSave 在持锁上下文中修改会话，再落盘保存快照。
+// mutateAndSave 在同一临界区内完成“基于快照修改 + 落盘 + 内存替换”，保证会话更新原子性。
 func (m *runtimeSessionMutator) mutateAndSave(mutate func(session *agentsession.Session) error) error {
 	if m == nil || m.service == nil || m.state == nil {
 		return errors.New("runtime: session mutator is unavailable")
@@ -113,12 +114,17 @@ func (m *runtimeSessionMutator) mutateAndSave(mutate func(session *agentsession.
 	}
 
 	m.state.mu.Lock()
-	if err := mutate(&m.state.session); err != nil {
+	sessionSnapshot := cloneSessionForPersistence(m.state.session)
+	if err := mutate(&sessionSnapshot); err != nil {
 		m.state.mu.Unlock()
 		return err
 	}
-	m.state.touchSession()
-	sessionSnapshot := cloneSessionForPersistence(m.state.session)
+	sessionSnapshot.UpdatedAt = time.Now()
+	if err := m.service.sessionStore.Save(m.ctx, &sessionSnapshot); err != nil {
+		m.state.mu.Unlock()
+		return err
+	}
+	m.state.session = sessionSnapshot
 	m.state.mu.Unlock()
-	return m.service.sessionStore.Save(m.ctx, &sessionSnapshot)
+	return nil
 }

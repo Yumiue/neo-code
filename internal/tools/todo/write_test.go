@@ -40,8 +40,8 @@ func (m *stubMutator) SetTodoStatus(id string, status agentsession.TodoStatus, e
 	return m.session.SetTodoStatus(id, status, expectedRevision)
 }
 
-func (m *stubMutator) DeleteTodo(id string) error {
-	return m.session.DeleteTodo(id)
+func (m *stubMutator) DeleteTodo(id string, expectedRevision int64) error {
+	return m.session.DeleteTodo(id, expectedRevision)
 }
 
 func (m *stubMutator) ClaimTodo(id string, ownerType string, ownerID string, expectedRevision int64) error {
@@ -126,9 +126,16 @@ func TestToolExecute(t *testing.T) {
 		},
 		{
 			name:        "remove success",
-			raw:         []byte(`{"action":"remove","id":"task"}`),
+			raw:         []byte(`{"action":"remove","id":"task","expected_revision":1}`),
 			withMutator: true,
 			want:        "action: remove",
+		},
+		{
+			name:        "remove revision conflict",
+			raw:         []byte(`{"action":"remove","id":"task","expected_revision":2}`),
+			withMutator: true,
+			wantErr:     true,
+			want:        reasonRevisionConflict,
 		},
 		{
 			name:        "plan success",
@@ -406,6 +413,11 @@ func TestParseInput(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "invalid arguments") {
 		t.Fatalf("parseInput() expected invalid arguments for too many dependencies, err=%v", err)
 	}
+
+	_, err = parseInput([]byte(`{"action":"remove","id":"a","expected_revision":-1}`))
+	if err == nil || !strings.Contains(err.Error(), "expected_revision must be >= 0") {
+		t.Fatalf("parseInput() expected invalid arguments for negative expected_revision, err=%v", err)
+	}
 }
 
 func TestTodoPatchInputToSessionPatch(t *testing.T) {
@@ -487,6 +499,7 @@ func TestDispatchValidationErrors(t *testing.T) {
 		{name: "set_status without id", in: writeInput{Action: actionSetStatus, Status: agentsession.TodoStatusPending}, want: "requires id"},
 		{name: "set_status invalid status", in: writeInput{Action: actionSetStatus, ID: "a", Status: "paused"}, want: "requires valid status"},
 		{name: "remove without id", in: writeInput{Action: actionRemove}, want: "requires id"},
+		{name: "plan without items", in: writeInput{Action: actionPlan}, want: "requires items"},
 		{name: "claim without id", in: writeInput{Action: actionClaim, OwnerType: "subagent", OwnerID: "w1"}, want: "requires id"},
 		{name: "claim without owner", in: writeInput{Action: actionClaim, ID: "a"}, want: "requires owner_type and owner_id"},
 		{name: "complete without id", in: writeInput{Action: actionComplete}, want: "requires id"},

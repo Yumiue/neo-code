@@ -212,6 +212,9 @@ func decodeLegacyItem(rawItem json.RawMessage) (agentsession.TodoItem, error) {
 
 // validateInputLimits 校验 todo_write 入参的字符串与数组规模，避免放大 token/内存占用。
 func validateInputLimits(input writeInput) error {
+	if input.ExpectedRevision < 0 {
+		return fmt.Errorf("%w: expected_revision must be >= 0", errTodoInvalidArguments)
+	}
 	if err := ensureTodoWriteTextLength("id", input.ID); err != nil {
 		return err
 	}

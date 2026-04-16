@@ -53,11 +53,26 @@ func TestSessionAddFindDeleteTodo(t *testing.T) {
 		t.Fatalf("revision = %d, want 1", found.Revision)
 	}
 
-	if err := session.DeleteTodo("base"); err == nil || !errors.Is(err, ErrDependencyViolation) {
+	if err := session.DeleteTodo("base", 1); err == nil || !errors.Is(err, ErrDependencyViolation) {
 		t.Fatalf("DeleteTodo(base) error = %v, want dependency violation", err)
 	}
-	if err := session.DeleteTodo("child"); err != nil {
+	if err := session.DeleteTodo("child", found.Revision); err != nil {
 		t.Fatalf("DeleteTodo(child) error = %v", err)
+	}
+}
+
+func TestSessionDeleteTodoRevisionConflict(t *testing.T) {
+	t.Parallel()
+
+	session := New("todo-delete-revision")
+	if err := session.AddTodo(TodoItem{ID: "a", Content: "a"}); err != nil {
+		t.Fatalf("AddTodo(a) error = %v", err)
+	}
+	if err := session.DeleteTodo("a", 2); err == nil || !errors.Is(err, ErrRevisionConflict) {
+		t.Fatalf("DeleteTodo(a,2) error = %v, want revision conflict", err)
+	}
+	if err := session.DeleteTodo("a", 1); err != nil {
+		t.Fatalf("DeleteTodo(a,1) error = %v", err)
 	}
 }
 
@@ -309,7 +324,7 @@ func TestSessionNilReceiverErrors(t *testing.T) {
 	if err := session.UpdateTodo("a", TodoPatch{}, 0); err == nil {
 		t.Fatalf("UpdateTodo nil receiver should fail")
 	}
-	if err := session.DeleteTodo("a"); err == nil {
+	if err := session.DeleteTodo("a", 0); err == nil {
 		t.Fatalf("DeleteTodo nil receiver should fail")
 	}
 }

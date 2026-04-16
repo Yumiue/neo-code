@@ -194,7 +194,7 @@ func TestRuntimeSessionMutatorMethods(t *testing.T) {
 		t.Fatalf("FailTodo() not applied, got %+v", failed)
 	}
 
-	if err := mutator.DeleteTodo("c"); err != nil {
+	if err := mutator.DeleteTodo("c", failed.Revision); err != nil {
 		t.Fatalf("DeleteTodo(c) error = %v", err)
 	}
 	if _, ok := mutator.FindTodo("c"); ok {
@@ -232,6 +232,9 @@ func TestRuntimeSessionMutatorErrorPaths(t *testing.T) {
 		err := mutator.AddTodo(agentsession.TodoItem{ID: "a", Content: "task"})
 		if err == nil || err.Error() != "disk failed" {
 			t.Fatalf("AddTodo() err = %v, want disk failed", err)
+		}
+		if len(state.session.Todos) != 0 {
+			t.Fatalf("state should remain unchanged on save error, got %+v", state.session.Todos)
 		}
 	})
 

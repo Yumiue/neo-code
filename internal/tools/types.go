@@ -28,7 +28,7 @@ type SessionMutator interface {
 	AddTodo(item agentsession.TodoItem) error
 	UpdateTodo(id string, patch agentsession.TodoPatch, expectedRevision int64) error
 	SetTodoStatus(id string, status agentsession.TodoStatus, expectedRevision int64) error
-	DeleteTodo(id string) error
+	DeleteTodo(id string, expectedRevision int64) error
 	ClaimTodo(id string, ownerType string, ownerID string, expectedRevision int64) error
 	CompleteTodo(id string, artifacts []string, expectedRevision int64) error
 	FailTodo(id string, reason string, expectedRevision int64) error
