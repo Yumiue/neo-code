@@ -649,6 +649,100 @@ func TestNetworkServerStreamsReceiveGatewayEventNotification(t *testing.T) {
 	}
 }
 
+func TestNetworkServerObservabilityEndpointsAuth(t *testing.T) {
+	server := newTestNetworkServer(t, NetworkServerOptions{
+		Authenticator: staticTokenAuthenticator{token: "gateway-token"},
+	})
+	testContext, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- server.Serve(testContext, nil)
+	}()
+	t.Cleanup(func() {
+		_ = server.Close(context.Background())
+		select {
+		case <-serveDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("network serve goroutine did not exit")
+		}
+	})
+
+	listenAddress := waitForNetworkAddress(t, server)
+
+	healthResponse, err := http.Get("http://" + listenAddress + "/healthz")
+	if err != nil {
+		t.Fatalf("get /healthz: %v", err)
+	}
+	defer healthResponse.Body.Close()
+	if healthResponse.StatusCode != http.StatusOK {
+		t.Fatalf("/healthz status = %d, want %d", healthResponse.StatusCode, http.StatusOK)
+	}
+
+	metricsResponse, err := http.Get("http://" + listenAddress + "/metrics")
+	if err != nil {
+		t.Fatalf("get /metrics: %v", err)
+	}
+	defer metricsResponse.Body.Close()
+	if metricsResponse.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("/metrics status = %d, want %d", metricsResponse.StatusCode, http.StatusUnauthorized)
+	}
+
+	authorizedMetricsRequest, err := http.NewRequest(http.MethodGet, "http://"+listenAddress+"/metrics", nil)
+	if err != nil {
+		t.Fatalf("new /metrics request: %v", err)
+	}
+	authorizedMetricsRequest.Header.Set("Authorization", "Bearer gateway-token")
+	authorizedMetricsResponse, err := http.DefaultClient.Do(authorizedMetricsRequest)
+	if err != nil {
+		t.Fatalf("authorized get /metrics: %v", err)
+	}
+	defer authorizedMetricsResponse.Body.Close()
+	if authorizedMetricsResponse.StatusCode != http.StatusOK {
+		t.Fatalf("authorized /metrics status = %d, want %d", authorizedMetricsResponse.StatusCode, http.StatusOK)
+	}
+
+	authorizedJSONMetricsRequest, err := http.NewRequest(http.MethodGet, "http://"+listenAddress+"/metrics.json", nil)
+	if err != nil {
+		t.Fatalf("new /metrics.json request: %v", err)
+	}
+	authorizedJSONMetricsRequest.Header.Set("Authorization", "Bearer gateway-token")
+	authorizedJSONMetricsResponse, err := http.DefaultClient.Do(authorizedJSONMetricsRequest)
+	if err != nil {
+		t.Fatalf("authorized get /metrics.json: %v", err)
+	}
+	defer authorizedJSONMetricsResponse.Body.Close()
+	if authorizedJSONMetricsResponse.StatusCode != http.StatusOK {
+		t.Fatalf("authorized /metrics.json status = %d, want %d", authorizedJSONMetricsResponse.StatusCode, http.StatusOK)
+	}
+}
+
+func TestWithCORSCustomAllowOrigins(t *testing.T) {
+	server := &NetworkServer{
+		allowedOrigins: []string{"http://custom.local"},
+	}
+	handler := server.withCORS(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(http.StatusOK)
+	}))
+
+	allowedRequest := httptest.NewRequest(http.MethodGet, "/rpc", nil)
+	allowedRequest.Header.Set("Origin", "http://custom.local:3000")
+	allowedRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(allowedRecorder, allowedRequest)
+	if allowedRecorder.Code != http.StatusOK {
+		t.Fatalf("allowed status = %d, want %d", allowedRecorder.Code, http.StatusOK)
+	}
+
+	rejectedRequest := httptest.NewRequest(http.MethodGet, "/rpc", nil)
+	rejectedRequest.Header.Set("Origin", "http://localhost:3000")
+	rejectedRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(rejectedRecorder, rejectedRequest)
+	if rejectedRecorder.Code != http.StatusForbidden {
+		t.Fatalf("rejected status = %d, want %d", rejectedRecorder.Code, http.StatusForbidden)
+	}
+}
+
 // newTestNetworkServer 创建默认测试网络服务实例，统一收敛测试参数。
 func newTestNetworkServer(t *testing.T, overrides NetworkServerOptions) *NetworkServer {
 	t.Helper()
@@ -854,6 +948,14 @@ type noFlushResponseWriter struct {
 	header http.Header
 	status int
 	body   strings.Builder
+}
+
+type staticTokenAuthenticator struct {
+	token string
+}
+
+func (a staticTokenAuthenticator) ValidateToken(token string) bool {
+	return strings.TrimSpace(token) != "" && strings.TrimSpace(token) == strings.TrimSpace(a.token)
 }
 
 func (w *noFlushResponseWriter) Header() http.Header {

@@ -30,6 +30,11 @@ func validateRequestFrame(frame MessageFrame) *FrameError {
 	}
 
 	switch frame.Action {
+	case FrameActionAuthenticate:
+		if frame.Payload == nil {
+			return NewMissingRequiredFieldError("payload")
+		}
+		return nil
 	case FrameActionPing:
 		return nil
 	case FrameActionBindStream:
@@ -180,7 +185,8 @@ func isValidFrameType(frameType FrameType) bool {
 // isValidFrameAction 判断动作是否属于协议定义集合。
 func isValidFrameAction(action FrameAction) bool {
 	switch action {
-	case FrameActionPing,
+	case FrameActionAuthenticate,
+		FrameActionPing,
 		FrameActionBindStream,
 		FrameActionWakeOpenURL,
 		FrameActionRun,
