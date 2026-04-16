@@ -69,3 +69,74 @@ func TestRenderPartsFallbackForUnknownImageSource(t *testing.T) {
 		t.Fatalf("RenderDisplayParts() fallback = %q, want %q", got, "[Image]")
 	}
 }
+
+func TestRenderCompactPromptPartsImageFallbackBranches(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		parts []providertypes.ContentPart
+		want  string
+	}{
+		{
+			name: "nil image payload",
+			parts: []providertypes.ContentPart{{
+				Kind:  providertypes.ContentPartImage,
+				Image: nil,
+			}},
+			want: "[Image]",
+		},
+		{
+			name: "remote image with empty url",
+			parts: []providertypes.ContentPart{{
+				Kind: providertypes.ContentPartImage,
+				Image: &providertypes.ImagePart{
+					SourceType: providertypes.ImageSourceRemote,
+					URL:        "  ",
+				},
+			}},
+			want: "[Image]",
+		},
+		{
+			name: "session asset without asset payload",
+			parts: []providertypes.ContentPart{{
+				Kind: providertypes.ContentPartImage,
+				Image: &providertypes.ImagePart{
+					SourceType: providertypes.ImageSourceSessionAsset,
+					Asset:      nil,
+				},
+			}},
+			want: "[Image]",
+		},
+		{
+			name: "session asset without id",
+			parts: []providertypes.ContentPart{{
+				Kind: providertypes.ContentPartImage,
+				Image: &providertypes.ImagePart{
+					SourceType: providertypes.ImageSourceSessionAsset,
+					Asset:      &providertypes.AssetRef{ID: " ", MimeType: "image/png"},
+				},
+			}},
+			want: "[Image]",
+		},
+		{
+			name: "session asset without mime",
+			parts: []providertypes.ContentPart{{
+				Kind: providertypes.ContentPartImage,
+				Image: &providertypes.ImagePart{
+					SourceType: providertypes.ImageSourceSessionAsset,
+					Asset:      &providertypes.AssetRef{ID: "asset-3", MimeType: ""},
+				},
+			}},
+			want: "[Image:session_asset] asset-3",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := RenderCompactPromptParts(tc.parts); got != tc.want {
+				t.Fatalf("RenderCompactPromptParts() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

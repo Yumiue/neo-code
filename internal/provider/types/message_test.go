@@ -52,3 +52,33 @@ func TestMessageIsEmpty(t *testing.T) {
 		})
 	}
 }
+
+func TestMessageValidate(t *testing.T) {
+	t.Run("valid message", func(t *testing.T) {
+		msg := Message{
+			Role: "user",
+			Parts: []ContentPart{
+				NewTextPart("hello"),
+				NewRemoteImagePart("https://example.com/image.png"),
+			},
+		}
+		if err := msg.Validate(); err != nil {
+			t.Fatalf("Validate() error = %v", err)
+		}
+	})
+
+	t.Run("invalid parts", func(t *testing.T) {
+		msg := Message{
+			Role: "user",
+			Parts: []ContentPart{{
+				Kind: ContentPartImage,
+				Image: &ImagePart{
+					SourceType: ImageSourceType("unsupported"),
+				},
+			}},
+		}
+		if err := msg.Validate(); err == nil {
+			t.Fatalf("expected Validate() to fail for unsupported image source")
+		}
+	})
+}

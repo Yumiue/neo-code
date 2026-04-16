@@ -2365,7 +2365,7 @@ func TestActivateSelectedSession(t *testing.T) {
 			Title:   "Active Session",
 			Workdir: app.state.CurrentWorkdir,
 			Messages: []providertypes.Message{
-				{Role: roleUser, Content: "hello"},
+				{Role: roleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
 			},
 		},
 	}
@@ -2906,7 +2906,7 @@ func TestUpdateKeyToggleQuitCancelAndPickerClose(t *testing.T) {
 }
 
 func TestUpdatePickerEnterInvalidSelectionsAndSessionActivationError(t *testing.T) {
-	app, _ := newTestApp(t)
+	app, runtime := newTestApp(t)
 
 	app.providerPicker.SetItems([]list.Item{sessionItem{Summary: agentsession.Summary{ID: "s1"}}})
 	app.openPicker(pickerProvider, statusChooseProvider, &app.providerPicker, "")
@@ -2925,6 +2925,7 @@ func TestUpdatePickerEnterInvalidSelectionsAndSessionActivationError(t *testing.
 	}
 
 	app.sessionPicker.SetItems([]list.Item{sessionItem{Summary: agentsession.Summary{ID: "missing", Title: "missing"}}})
+	runtime.loadSessionErr = errors.New("load failed")
 	app.openPicker(pickerSession, statusChooseSession, &app.sessionPicker, "")
 	model, cmd = app.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
 	app = model.(App)
