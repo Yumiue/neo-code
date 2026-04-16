@@ -29,6 +29,68 @@ func (t *Tool) Description() string {
 
 // Schema 返回 todo_write 工具参数 schema。
 func (t *Tool) Schema() map[string]any {
+	todoItemSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"id": map[string]any{
+				"type": "string",
+			},
+			"content": map[string]any{
+				"type": "string",
+			},
+			"title": map[string]any{
+				"type":        "string",
+				"description": "Legacy alias of content; content is preferred.",
+			},
+			"status": map[string]any{
+				"type": "string",
+			},
+			"dependencies": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "string",
+				},
+			},
+			"priority": map[string]any{
+				"type": "integer",
+			},
+			"owner_type": map[string]any{
+				"type": "string",
+			},
+			"owner_id": map[string]any{
+				"type": "string",
+			},
+			"acceptance": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "string",
+				},
+			},
+			"artifacts": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "string",
+				},
+			},
+			"failure_reason": map[string]any{
+				"type": "string",
+			},
+			"retry_count": map[string]any{
+				"type": "integer",
+			},
+			"retry_limit": map[string]any{
+				"type": "integer",
+			},
+			"next_retry_at": map[string]any{
+				"type": "string",
+			},
+			"revision": map[string]any{
+				"type": "integer",
+			},
+		},
+		"required": []string{"id"},
+	}
+
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -46,10 +108,24 @@ func (t *Tool) Schema() map[string]any {
 				},
 			},
 			"items": map[string]any{
-				"type": "array",
+				"type":  "array",
+				"items": todoItemSchema,
 			},
 			"item": map[string]any{
-				"type": "object",
+				"allOf": []any{
+					todoItemSchema,
+					map[string]any{
+						"type": "object",
+						"anyOf": []any{
+							map[string]any{
+								"required": []string{"content"},
+							},
+							map[string]any{
+								"required": []string{"title"},
+							},
+						},
+					},
+				},
 			},
 			"id": map[string]any{
 				"type": "string",
@@ -77,6 +153,40 @@ func (t *Tool) Schema() map[string]any {
 			},
 		},
 		"required": []string{"action"},
+		"oneOf": []any{
+			map[string]any{
+				"properties": map[string]any{"action": map[string]any{"const": actionPlan}},
+				"required":   []string{"action", "items"},
+			},
+			map[string]any{
+				"properties": map[string]any{"action": map[string]any{"const": actionAdd}},
+				"required":   []string{"action", "item"},
+			},
+			map[string]any{
+				"properties": map[string]any{"action": map[string]any{"const": actionUpdate}},
+				"required":   []string{"action", "id", "patch"},
+			},
+			map[string]any{
+				"properties": map[string]any{"action": map[string]any{"const": actionSetStatus}},
+				"required":   []string{"action", "id", "status"},
+			},
+			map[string]any{
+				"properties": map[string]any{"action": map[string]any{"const": actionRemove}},
+				"required":   []string{"action", "id"},
+			},
+			map[string]any{
+				"properties": map[string]any{"action": map[string]any{"const": actionClaim}},
+				"required":   []string{"action", "id", "owner_type", "owner_id"},
+			},
+			map[string]any{
+				"properties": map[string]any{"action": map[string]any{"const": actionComplete}},
+				"required":   []string{"action", "id"},
+			},
+			map[string]any{
+				"properties": map[string]any{"action": map[string]any{"const": actionFail}},
+				"required":   []string{"action", "id"},
+			},
+		},
 	}
 }
 

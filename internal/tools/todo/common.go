@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
@@ -54,6 +55,11 @@ type writeInput struct {
 	Reason           string                  `json:"reason,omitempty"`
 }
 
+type legacyWriteInput struct {
+	Items []json.RawMessage `json:"items,omitempty"`
+	Item  json.RawMessage   `json:"item,omitempty"`
+}
+
 type todoPatchInput struct {
 	Content       *string                  `json:"content,omitempty"`
 	Status        *agentsession.TodoStatus `json:"status,omitempty"`
@@ -64,6 +70,9 @@ type todoPatchInput struct {
 	Acceptance    *[]string                `json:"acceptance,omitempty"`
 	Artifacts     *[]string                `json:"artifacts,omitempty"`
 	FailureReason *string                  `json:"failure_reason,omitempty"`
+	RetryCount    *int                     `json:"retry_count,omitempty"`
+	RetryLimit    *int                     `json:"retry_limit,omitempty"`
+	NextRetryAt   *time.Time               `json:"next_retry_at,omitempty"`
 }
 
 func (p *todoPatchInput) toSessionPatch() agentsession.TodoPatch {
@@ -80,7 +89,29 @@ func (p *todoPatchInput) toSessionPatch() agentsession.TodoPatch {
 		Acceptance:    p.Acceptance,
 		Artifacts:     p.Artifacts,
 		FailureReason: p.FailureReason,
+		RetryCount:    p.RetryCount,
+		RetryLimit:    p.RetryLimit,
+		NextRetryAt:   p.NextRetryAt,
 	}
+}
+
+// todoWireItem 表示 todo_write 入参中的单个 todo 项，并兼容 legacy title 字段。
+type todoWireItem struct {
+	ID            string                  `json:"id,omitempty"`
+	Content       string                  `json:"content,omitempty"`
+	Title         string                  `json:"title,omitempty"`
+	Status        agentsession.TodoStatus `json:"status,omitempty"`
+	Dependencies  []string                `json:"dependencies,omitempty"`
+	Priority      int                     `json:"priority,omitempty"`
+	OwnerType     string                  `json:"owner_type,omitempty"`
+	OwnerID       string                  `json:"owner_id,omitempty"`
+	Acceptance    []string                `json:"acceptance,omitempty"`
+	Artifacts     []string                `json:"artifacts,omitempty"`
+	FailureReason string                  `json:"failure_reason,omitempty"`
+	RetryCount    int                     `json:"retry_count,omitempty"`
+	RetryLimit    int                     `json:"retry_limit,omitempty"`
+	NextRetryAt   time.Time               `json:"next_retry_at,omitempty"`
+	Revision      int64                   `json:"revision,omitempty"`
 }
 
 func parseInput(raw []byte) (writeInput, error) {
@@ -96,6 +127,9 @@ func parseInput(raw []byte) (writeInput, error) {
 	if err := json.Unmarshal(raw, &input); err != nil {
 		return writeInput{}, fmt.Errorf("todo_write: parse arguments: %w", err)
 	}
+	if err := applyLegacyTitleCompat(raw, &input); err != nil {
+		return writeInput{}, err
+	}
 	input.Action = strings.ToLower(strings.TrimSpace(input.Action))
 	input.ID = strings.TrimSpace(input.ID)
 	input.OwnerType = strings.TrimSpace(input.OwnerType)
@@ -105,6 +139,75 @@ func parseInput(raw []byte) (writeInput, error) {
 		return writeInput{}, err
 	}
 	return input, nil
+}
+
+// applyLegacyTitleCompat 兼容旧参数里的 title 字段，统一映射到 content。
+func applyLegacyTitleCompat(raw []byte, input *writeInput) error {
+	if input == nil {
+		return fmt.Errorf("%w: invalid input payload", errTodoInvalidArguments)
+	}
+
+	var legacy legacyWriteInput
+	if err := json.Unmarshal(raw, &legacy); err != nil {
+		return fmt.Errorf("todo_write: parse arguments: %w", err)
+	}
+
+	if len(legacy.Items) > 0 {
+		items, err := decodeLegacyItems(legacy.Items)
+		if err != nil {
+			return err
+		}
+		input.Items = items
+	}
+	if len(legacy.Item) > 0 && string(legacy.Item) != "null" {
+		item, err := decodeLegacyItem(legacy.Item)
+		if err != nil {
+			return err
+		}
+		input.Item = &item
+	}
+	return nil
+}
+
+// decodeLegacyItems 解码 items 数组并处理 title/content 兼容映射。
+func decodeLegacyItems(rawItems []json.RawMessage) ([]agentsession.TodoItem, error) {
+	items := make([]agentsession.TodoItem, 0, len(rawItems))
+	for _, rawItem := range rawItems {
+		item, err := decodeLegacyItem(rawItem)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+// decodeLegacyItem 解码单个 todo 项并将 legacy title 字段映射到 content。
+func decodeLegacyItem(rawItem json.RawMessage) (agentsession.TodoItem, error) {
+	var wire todoWireItem
+	if err := json.Unmarshal(rawItem, &wire); err != nil {
+		return agentsession.TodoItem{}, fmt.Errorf("todo_write: parse arguments: %w", err)
+	}
+	content := strings.TrimSpace(wire.Content)
+	if content == "" {
+		content = strings.TrimSpace(wire.Title)
+	}
+	return agentsession.TodoItem{
+		ID:            wire.ID,
+		Content:       content,
+		Status:        wire.Status,
+		Dependencies:  wire.Dependencies,
+		Priority:      wire.Priority,
+		OwnerType:     wire.OwnerType,
+		OwnerID:       wire.OwnerID,
+		Acceptance:    wire.Acceptance,
+		Artifacts:     wire.Artifacts,
+		FailureReason: wire.FailureReason,
+		RetryCount:    wire.RetryCount,
+		RetryLimit:    wire.RetryLimit,
+		NextRetryAt:   wire.NextRetryAt,
+		Revision:      wire.Revision,
+	}, nil
 }
 
 // validateInputLimits 校验 todo_write 入参的字符串与数组规模，避免放大 token/内存占用。

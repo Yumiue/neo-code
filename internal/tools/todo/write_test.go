@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
@@ -182,6 +183,19 @@ func TestToolMetadataMethods(t *testing.T) {
 	if schema["type"] != "object" {
 		t.Fatalf("Schema() type = %+v", schema["type"])
 	}
+	if _, ok := schema["oneOf"].([]any); !ok {
+		t.Fatalf("Schema() oneOf should exist for action-specific requirements")
+	}
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("Schema() properties should be map, got %T", schema["properties"])
+	}
+	if _, ok := properties["item"]; !ok {
+		t.Fatalf("Schema() should include item property")
+	}
+	if _, ok := properties["items"]; !ok {
+		t.Fatalf("Schema() should include items property")
+	}
 }
 
 func TestToolExecuteActionSequence(t *testing.T) {
@@ -348,6 +362,22 @@ func TestParseInput(t *testing.T) {
 		t.Fatalf("parseInput() got %+v", input)
 	}
 
+	input, err = parseInput([]byte(`{"action":"add","item":{"id":"task-1","title":"legacy-title"}}`))
+	if err != nil {
+		t.Fatalf("parseInput() legacy item title error = %v", err)
+	}
+	if input.Item == nil || input.Item.Content != "legacy-title" {
+		t.Fatalf("parseInput() legacy item title mapping failed, got %+v", input.Item)
+	}
+
+	input, err = parseInput([]byte(`{"action":"plan","items":[{"id":"task-1","title":"legacy-1"},{"id":"task-2","content":"new-2"}]}`))
+	if err != nil {
+		t.Fatalf("parseInput() legacy items title error = %v", err)
+	}
+	if len(input.Items) != 2 || input.Items[0].Content != "legacy-1" || input.Items[1].Content != "new-2" {
+		t.Fatalf("parseInput() legacy items mapping failed, got %+v", input.Items)
+	}
+
 	_, err = parseInput([]byte(`{`))
 	if err == nil {
 		t.Fatalf("parseInput() expected error for invalid json")
@@ -390,6 +420,9 @@ func TestTodoPatchInputToSessionPatch(t *testing.T) {
 	acceptance := []string{"done"}
 	artifacts := []string{"out.txt"}
 	reason := "failed"
+	retryCount := 2
+	retryLimit := 4
+	nextRetryAt := time.Now().Add(2 * time.Minute).UTC()
 
 	input := &todoPatchInput{
 		Content:       &content,
@@ -401,6 +434,9 @@ func TestTodoPatchInputToSessionPatch(t *testing.T) {
 		Acceptance:    &acceptance,
 		Artifacts:     &artifacts,
 		FailureReason: &reason,
+		RetryCount:    &retryCount,
+		RetryLimit:    &retryLimit,
+		NextRetryAt:   &nextRetryAt,
 	}
 	patch := input.toSessionPatch()
 
@@ -415,6 +451,15 @@ func TestTodoPatchInputToSessionPatch(t *testing.T) {
 	emptyPatch := (*todoPatchInput)(nil).toSessionPatch()
 	if encoded, err := json.Marshal(emptyPatch); err != nil || len(encoded) == 0 {
 		t.Fatalf("nil patch conversion should still be serializable, err=%v", err)
+	}
+	if patch.RetryCount == nil || *patch.RetryCount != retryCount {
+		t.Fatalf("RetryCount patch mismatch: %+v", patch.RetryCount)
+	}
+	if patch.RetryLimit == nil || *patch.RetryLimit != retryLimit {
+		t.Fatalf("RetryLimit patch mismatch: %+v", patch.RetryLimit)
+	}
+	if patch.NextRetryAt == nil || !patch.NextRetryAt.Equal(nextRetryAt) {
+		t.Fatalf("NextRetryAt patch mismatch: %+v", patch.NextRetryAt)
 	}
 }
 
