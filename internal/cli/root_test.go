@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -785,6 +786,60 @@ func TestURLDispatchSubcommandDefaultRunnerSuccess(t *testing.T) {
 	}
 }
 
+func TestURLDispatchSubcommandDefaultRunnerPassesAuthToken(t *testing.T) {
+	originalRunner := runURLDispatchCommand
+	originalDispatch := dispatchURLThroughIPC
+	originalLoadAuthToken := loadAuthToken
+	originalExitProcess := exitProcess
+	originalPreload := runGlobalPreload
+	t.Cleanup(func() { runURLDispatchCommand = originalRunner })
+	t.Cleanup(func() { dispatchURLThroughIPC = originalDispatch })
+	t.Cleanup(func() { loadAuthToken = originalLoadAuthToken })
+	t.Cleanup(func() { exitProcess = originalExitProcess })
+	t.Cleanup(func() { runGlobalPreload = originalPreload })
+	runGlobalPreload = func(context.Context) error { return nil }
+	exitProcess = func(code int) {
+		t.Fatalf("unexpected exit with code %d", code)
+	}
+
+	runURLDispatchCommand = defaultURLDispatchCommandRunner
+	loadAuthToken = func(path string) (string, error) {
+		if path != "/tmp/auth.json" {
+			t.Fatalf("token path = %q, want %q", path, "/tmp/auth.json")
+		}
+		return "auth-token", nil
+	}
+
+	receivedToken := ""
+	dispatchURLThroughIPC = func(_ context.Context, request urlscheme.DispatchRequest) (urlscheme.DispatchResult, error) {
+		receivedToken = request.AuthToken
+		return urlscheme.DispatchResult{
+			ListenAddress: "/tmp/gateway.sock",
+			Response: gateway.MessageFrame{
+				Type:      gateway.FrameTypeAck,
+				Action:    gateway.FrameActionWakeOpenURL,
+				RequestID: "wake-1",
+				Payload: map[string]any{
+					"message": "wake intent accepted",
+				},
+			},
+		}, nil
+	}
+
+	command := NewRootCommand()
+	command.SetArgs([]string{
+		"url-dispatch",
+		"--url", "neocode://review?path=README.md",
+		"--token-file", "/tmp/auth.json",
+	})
+	if err := command.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
+	}
+	if receivedToken != "auth-token" {
+		t.Fatalf("received token = %q, want %q", receivedToken, "auth-token")
+	}
+}
+
 func TestURLDispatchSubcommandDefaultRunnerSuccessOutputFailure(t *testing.T) {
 	originalRunner := runURLDispatchCommand
 	originalDispatch := dispatchURLThroughIPC
@@ -1001,6 +1056,16 @@ func TestWriteURLDispatchErrorOutput(t *testing.T) {
 			t.Fatalf("output = %q, want contains internal_error", buffer.String())
 		}
 	})
+}
+
+func TestLoadGatewayAuthTokenFallback(t *testing.T) {
+	token, err := loadGatewayAuthToken(filepath.Join(t.TempDir(), "missing-auth.json"))
+	if err != nil {
+		t.Fatalf("loadGatewayAuthToken() error = %v", err)
+	}
+	if token != "" {
+		t.Fatalf("token = %q, want empty token for missing file", token)
+	}
 }
 
 type quitModel struct{}
