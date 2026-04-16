@@ -72,6 +72,45 @@ func TestValidateLoopbackListenAddressParseFailure(t *testing.T) {
 	}
 }
 
+func TestValidateLoopbackListenAddressHostLookup(t *testing.T) {
+	originalLookup := lookupHostIPsFn
+	t.Cleanup(func() {
+		lookupHostIPsFn = originalLookup
+	})
+
+	t.Run("hostname resolves to loopback addresses", func(t *testing.T) {
+		lookupHostIPsFn = func(host string) ([]net.IP, error) {
+			return []net.IP{
+				net.ParseIP("127.0.0.1"),
+				net.ParseIP("::1"),
+			}, nil
+		}
+		if err := validateLoopbackListenAddress("localhost:8080"); err != nil {
+			t.Fatalf("expected loopback hostname to pass, got %v", err)
+		}
+	})
+
+	t.Run("hostname resolves to non-loopback address", func(t *testing.T) {
+		lookupHostIPsFn = func(host string) ([]net.IP, error) {
+			return []net.IP{net.ParseIP("192.168.1.10")}, nil
+		}
+		err := validateLoopbackListenAddress("localhost:8080")
+		if err == nil || !strings.Contains(err.Error(), "host must be loopback") {
+			t.Fatalf("expected non-loopback hostname rejection, got %v", err)
+		}
+	})
+
+	t.Run("hostname lookup failed", func(t *testing.T) {
+		lookupHostIPsFn = func(host string) ([]net.IP, error) {
+			return nil, errors.New("lookup failed")
+		}
+		err := validateLoopbackListenAddress("localhost:8080")
+		if err == nil || !strings.Contains(err.Error(), "host must resolve to loopback addresses") {
+			t.Fatalf("expected lookup failure rejection, got %v", err)
+		}
+	})
+}
+
 func TestNetworkServerServeErrorBranches(t *testing.T) {
 	t.Run("listen error", func(t *testing.T) {
 		server, err := NewNetworkServer(NetworkServerOptions{

@@ -70,6 +70,8 @@ go run ./cmd/neocode gateway --http-listen 127.0.0.1:8080
 安全限制：为防止跨站攻击，网关网络面默认开启严格的 Origin 校验。当前仅允许
 `http://localhost`、`http://127.0.0.1`、`http://[::1]` 以及 `app://` 前缀来源连入；
 非允许来源的跨域调用会被拦截并返回 `403`。
+注：上述白名单机制仅针对携带 `Origin` 头的浏览器跨站请求生效。若请求不携带 `Origin` 头
+（例如 `cURL`、Postman 或本地后端脚本直连），网关默认放行。
 
 URL Scheme 派发骨架命令（EPIC-GW-02A）：
 

@@ -255,9 +255,6 @@ func TestDefaultGatewayCommandRunnerSuccess(t *testing.T) {
 	if !server.closeCalled {
 		t.Fatal("expected server Close to be called")
 	}
-	if !networkServer.serveCalled {
-		t.Fatal("expected network server Serve to be called")
-	}
 	if !networkServer.closeCalled {
 		t.Fatal("expected network server Close to be called")
 	}
@@ -316,6 +313,43 @@ func TestDefaultGatewayCommandRunnerReturnsServeError(t *testing.T) {
 	}
 	if !server.closeCalled {
 		t.Fatal("expected server Close to be called")
+	}
+	if !networkServer.closeCalled {
+		t.Fatal("expected network server Close to be called")
+	}
+}
+
+func TestDefaultGatewayCommandRunnerDegradesWhenNetworkServeFails(t *testing.T) {
+	originalNewGatewayServer := newGatewayServer
+	originalNewGatewayNetwork := newGatewayNetwork
+	t.Cleanup(func() { newGatewayServer = originalNewGatewayServer })
+	t.Cleanup(func() { newGatewayNetwork = originalNewGatewayNetwork })
+
+	ipcServer := &stubGatewayServer{listenAddress: "stub://gateway"}
+	newGatewayServer = func(options gateway.ServerOptions) (gatewayServer, error) {
+		return ipcServer, nil
+	}
+	networkServer := &stubGatewayServer{
+		listenAddress: "127.0.0.1:8080",
+		serveErr:      errors.New("bind: address already in use"),
+	}
+	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gatewayNetworkServer, error) {
+		return networkServer, nil
+	}
+
+	err := defaultGatewayCommandRunner(context.Background(), gatewayCommandOptions{
+		ListenAddress: "stub://gateway",
+		HTTPAddress:   "127.0.0.1:8080",
+		LogLevel:      "info",
+	})
+	if err != nil {
+		t.Fatalf("expected graceful degradation on network serve error, got %v", err)
+	}
+	if !ipcServer.serveCalled {
+		t.Fatal("expected ipc server Serve to be called")
+	}
+	if !ipcServer.closeCalled {
+		t.Fatal("expected ipc server Close to be called")
 	}
 	if !networkServer.closeCalled {
 		t.Fatal("expected network server Close to be called")

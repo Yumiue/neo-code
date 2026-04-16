@@ -148,26 +148,18 @@ func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOpti
 	logger.Printf("gateway ipc listen address: %s", ipcServer.ListenAddress())
 	logger.Printf("gateway network listen address: %s", networkServer.ListenAddress())
 
-	serveContext, cancel := context.WithCancel(signalContext)
-	defer cancel()
-
-	serveErrorChannel := make(chan error, 2)
 	go func() {
-		serveErrorChannel <- ipcServer.Serve(serveContext, nil)
-	}()
-	go func() {
-		serveErrorChannel <- networkServer.Serve(serveContext, nil)
-	}()
-
-	var firstError error
-	for index := 0; index < 2; index++ {
-		serveError := <-serveErrorChannel
-		if serveError != nil && firstError == nil {
-			firstError = serveError
-			cancel()
+		serveErr := networkServer.Serve(signalContext, nil)
+		if serveErr != nil && signalContext.Err() == nil {
+			logger.Printf(
+				"warning: HTTP server failed to start on %s (port in use?), but IPC server is still running: %v",
+				networkServer.ListenAddress(),
+				serveErr,
+			)
 		}
-	}
-	return firstError
+	}()
+
+	return ipcServer.Serve(signalContext, nil)
 }
 
 // defaultNewGatewayServer 创建默认网关服务实例，供命令层启动流程调用。

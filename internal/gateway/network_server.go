@@ -40,6 +40,7 @@ const (
 
 var (
 	resolveNetworkListenAddressFn = ResolveNetworkListenAddress
+	lookupHostIPsFn               = net.LookupIP
 	dispatchRPCRequestFn          = dispatchRPCRequest
 )
 
@@ -160,13 +161,22 @@ func validateLoopbackListenAddress(address string) error {
 	if normalizedHost == "" {
 		return fmt.Errorf("invalid --http-listen %q: host must be loopback", address)
 	}
-	if strings.EqualFold(normalizedHost, "localhost") {
+	if ip := net.ParseIP(normalizedHost); ip != nil {
+		if !ip.IsLoopback() {
+			return fmt.Errorf("invalid --http-listen %q: host must be loopback", address)
+		}
 		return nil
 	}
 
-	ip := net.ParseIP(normalizedHost)
-	if ip == nil || !ip.IsLoopback() {
-		return fmt.Errorf("invalid --http-listen %q: host must be loopback", address)
+	resolvedHostIPs, lookupErr := lookupHostIPsFn(normalizedHost)
+	if lookupErr != nil || len(resolvedHostIPs) == 0 {
+		return fmt.Errorf("invalid --http-listen %q: host must resolve to loopback addresses", address)
+	}
+
+	for _, resolvedIP := range resolvedHostIPs {
+		if resolvedIP == nil || !resolvedIP.IsLoopback() {
+			return fmt.Errorf("invalid --http-listen %q: host must be loopback", address)
+		}
 	}
 	return nil
 }
