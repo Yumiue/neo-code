@@ -338,13 +338,6 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				return a, tea.Batch(cmds...)
 			}
 
-			// 如果不是立即执行的命令，再执行常规的输入重置
-			a.input.Reset()
-			a.state.InputText = ""
-			a.applyComponentLayout(true)
-			a.refreshCommandMenu()
-			a.resetPasteHeuristics()
-
 			switch strings.ToLower(input) {
 			case slashCommandHelp:
 				a.refreshHelpPicker()
@@ -417,6 +410,13 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				a.clearImageAttachments()
 				return a, tea.Batch(cmds...)
 			}
+
+			// 如果不是立即执行的命令，再执行常规的输入重置
+			a.input.Reset()
+			a.state.InputText = ""
+			a.applyComponentLayout(true)
+			a.refreshCommandMenu()
+			a.resetPasteHeuristics()
 
 			a.clearActivities()
 			a.clearRunProgress()

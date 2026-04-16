@@ -1108,6 +1108,52 @@ func TestUpdateSendWithUnsupportedImageInput(t *testing.T) {
 	if app.state.StatusText != "Model does not support images" {
 		t.Fatalf("unexpected status text: %q", app.state.StatusText)
 	}
+	if app.input.Value() != "hello" {
+		t.Fatalf("expected input to be preserved when send is blocked, got %q", app.input.Value())
+	}
+	if app.state.InputText != "hello" {
+		t.Fatalf("expected state input text to be preserved, got %q", app.state.InputText)
+	}
+}
+
+func TestUpdateSendWithImageAttachmentsWithoutSessionAssets(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.pendingImageAttachments = []pendingImageAttachment{
+		{Name: "a.png", MimeType: "image/png", Path: "/tmp/a.png", Size: 1},
+	}
+	app.providerSvc = stubProviderService{
+		providers: []configstate.ProviderOption{{ID: app.state.CurrentProvider, Name: app.state.CurrentProvider}},
+		models: []providertypes.ModelDescriptor{{
+			ID:   app.state.CurrentModel,
+			Name: app.state.CurrentModel,
+			CapabilityHints: providertypes.ModelCapabilityHints{
+				ImageInput: providertypes.ModelCapabilityStateSupported,
+			},
+		}},
+	}
+	app.input.SetValue("hello")
+	app.state.InputText = "hello"
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+	if app.state.IsAgentRunning {
+		t.Fatalf("expected send to be blocked when session assets are unavailable")
+	}
+	if app.hasImageAttachments() {
+		t.Fatalf("expected pending image attachments to be cleared when storage is unavailable")
+	}
+	if app.state.StatusText != "Image attachments need session asset support" {
+		t.Fatalf("unexpected status text: %q", app.state.StatusText)
+	}
+	if app.input.Value() != "hello" {
+		t.Fatalf("expected input to be preserved when send is blocked, got %q", app.input.Value())
+	}
+	if app.state.InputText != "hello" {
+		t.Fatalf("expected state input text to be preserved, got %q", app.state.InputText)
+	}
 }
 
 func TestUpdatePickerSessionEnterActivatesSelectedSession(t *testing.T) {

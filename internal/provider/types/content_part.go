@@ -2,6 +2,7 @@ package types
 
 import (
 	"errors"
+	"strings"
 )
 
 // ContentPartKind defines the type of a content part.
@@ -93,7 +94,7 @@ func ValidateParts(parts []ContentPart) error {
 
 			switch image.SourceType {
 			case ImageSourceRemote:
-				if image.URL == "" {
+				if strings.TrimSpace(image.URL) == "" {
 					return errors.New("remote image part must contain url")
 				}
 			case ImageSourceSessionAsset:

@@ -61,6 +61,11 @@ func TestValidateParts(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:    "remote image blank url",
+			parts:   []ContentPart{{Kind: ContentPartImage, Image: &ImagePart{SourceType: ImageSourceRemote, URL: "   "}}},
+			wantErr: true,
+		},
+		{
 			name:    "image missing payload",
 			parts:   []ContentPart{{Kind: ContentPartImage}},
 			wantErr: true,
