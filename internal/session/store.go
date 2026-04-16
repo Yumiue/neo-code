@@ -22,8 +22,6 @@ const sessionsDirName = "sessions"
 const (
 	sessionFileName = "session.json"
 	assetsDirName   = "assets"
-	// maxSessionAssetWriteBytes 定义会话附件写入上限（20 MiB）。
-	maxSessionAssetWriteBytes int64 = 20 * 1024 * 1024
 )
 
 var storageIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
@@ -274,15 +272,15 @@ func (s *JSONStore) SaveAsset(ctx context.Context, sessionID string, r io.Reader
 		return AssetMeta{}, fmt.Errorf("session: create temp asset: %w", err)
 	}
 
-	written, copyErr := io.Copy(f, io.LimitReader(r, maxSessionAssetWriteBytes+1))
+	written, copyErr := io.Copy(f, io.LimitReader(r, providertypes.MaxSessionAssetBytes+1))
 	closeErr := f.Close()
 	if copyErr != nil {
 		_ = os.Remove(temp)
 		return AssetMeta{}, fmt.Errorf("session: write temp asset: %w", copyErr)
 	}
-	if written > maxSessionAssetWriteBytes {
+	if written > providertypes.MaxSessionAssetBytes {
 		_ = os.Remove(temp)
-		return AssetMeta{}, fmt.Errorf("session: asset size exceeds %d bytes", maxSessionAssetWriteBytes)
+		return AssetMeta{}, fmt.Errorf("session: asset size exceeds %d bytes", providertypes.MaxSessionAssetBytes)
 	}
 	if closeErr != nil {
 		_ = os.Remove(temp)
@@ -340,7 +338,7 @@ func (s *JSONStore) Open(ctx context.Context, sessionID string, assetID string) 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	meta, err := s.Stat(ctx, sessionID, assetID)
+	meta, err := s.statUnlocked(sessionID, assetID)
 	if err != nil {
 		return nil, AssetMeta{}, err
 	}
@@ -367,6 +365,11 @@ func (s *JSONStore) Stat(ctx context.Context, sessionID string, assetID string) 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	return s.statUnlocked(sessionID, assetID)
+}
+
+// statUnlocked 在调用方已持有读锁时读取附件元数据，避免重复加锁导致死锁风险。
+func (s *JSONStore) statUnlocked(sessionID string, assetID string) (AssetMeta, error) {
 	data, err := os.ReadFile(s.assetMetaPath(sessionID, assetID))
 	if err != nil {
 		return AssetMeta{}, err

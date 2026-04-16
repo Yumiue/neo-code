@@ -56,6 +56,9 @@ func decodeStoredAssetMeta(data []byte) (AssetMeta, error) {
 	if normalizedMime == "" {
 		return AssetMeta{}, fmt.Errorf("session: asset meta mime_type is empty")
 	}
+	if !strings.HasPrefix(normalizedMime, "image/") {
+		return AssetMeta{}, fmt.Errorf("session: unsupported asset mime type %q", stored.MimeType)
+	}
 	return AssetMeta{
 		ID:       stored.ID,
 		MimeType: normalizedMime,

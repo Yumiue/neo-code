@@ -191,12 +191,16 @@ func resolveSessionAssetDataURL(ctx context.Context, assetReader providertypes.S
 	if resolvedMime == "" {
 		resolvedMime = strings.TrimSpace(asset.MimeType)
 	}
-	if resolvedMime == "" {
+	normalizedMime := strings.ToLower(resolvedMime)
+	if normalizedMime == "" {
 		return "", fmt.Errorf("session_asset %q missing mime type", asset.ID)
+	}
+	if !strings.HasPrefix(normalizedMime, "image/") {
+		return "", fmt.Errorf("session_asset %q has unsupported mime type %q", asset.ID, resolvedMime)
 	}
 
 	encoded := base64.StdEncoding.EncodeToString(data)
-	return fmt.Sprintf("data:%s;base64,%s", resolvedMime, encoded), nil
+	return fmt.Sprintf("data:%s;base64,%s", normalizedMime, encoded), nil
 }
 
 // ParseError 解析 HTTP 错误响应并包装为 ProviderError。

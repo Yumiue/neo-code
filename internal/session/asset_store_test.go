@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	providertypes "neo-code/internal/provider/types"
 )
 
 func TestJSONStoreSaveAssetOpenAndStat(t *testing.T) {
@@ -112,10 +114,19 @@ func TestJSONStoreSaveAssetRejectsOversizedPayload(t *testing.T) {
 	t.Parallel()
 
 	store := NewJSONStore(t.TempDir(), t.TempDir())
-	oversized := bytes.NewReader(make([]byte, maxSessionAssetWriteBytes+1))
+	oversized := bytes.NewReader(make([]byte, providertypes.MaxSessionAssetBytes+1))
 
 	if _, err := store.SaveAsset(context.Background(), "session_oversize", oversized, "image/png"); err == nil ||
 		!strings.Contains(err.Error(), "asset size exceeds") {
 		t.Fatalf("expected oversized payload rejection, got %v", err)
+	}
+}
+
+func TestDecodeStoredAssetMetaRejectsNonImageMIME(t *testing.T) {
+	t.Parallel()
+
+	_, err := decodeStoredAssetMeta([]byte(`{"id":"asset_ok","mime_type":"text/plain","size":1}`))
+	if err == nil || !strings.Contains(err.Error(), "unsupported asset mime type") {
+		t.Fatalf("expected non-image mime rejection, got %v", err)
 	}
 }

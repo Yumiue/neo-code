@@ -201,6 +201,40 @@ func TestNewAndBuildRequest(t *testing.T) {
 		_, err = ToOpenAIMessage(context.Background(), providertypes.Message{
 			Role: providertypes.RoleUser,
 			Parts: []providertypes.ContentPart{
+				providertypes.NewSessionAssetImagePart("asset-unsupported", "image/png"),
+			},
+		}, stubSessionAssetReader{
+			assets: map[string]stubSessionAsset{
+				"asset-unsupported": {
+					data: []byte("data"),
+					mime: "application/octet-stream",
+				},
+			},
+		})
+		if err == nil || !strings.Contains(err.Error(), "unsupported mime type") {
+			t.Fatalf("expected unsupported mime type error, got %v", err)
+		}
+
+		_, err = ToOpenAIMessage(context.Background(), providertypes.Message{
+			Role: providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{
+				providertypes.NewSessionAssetImagePart("asset-missing-mime", ""),
+			},
+		}, stubSessionAssetReader{
+			assets: map[string]stubSessionAsset{
+				"asset-missing-mime": {
+					data: []byte("data"),
+					mime: "   ",
+				},
+			},
+		})
+		if err == nil || !strings.Contains(err.Error(), "missing mime type") {
+			t.Fatalf("expected missing mime type error, got %v", err)
+		}
+
+		_, err = ToOpenAIMessage(context.Background(), providertypes.Message{
+			Role: providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{
 				providertypes.NewSessionAssetImagePart("asset-big", "image/png"),
 			},
 		}, stubSessionAssetReader{
