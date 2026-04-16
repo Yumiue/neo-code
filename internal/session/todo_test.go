@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestTodoStatusValidAndTransition(t *testing.T) {
@@ -194,9 +195,12 @@ func TestSessionClaimCompleteFail(t *testing.T) {
 		t.Fatalf("AddTodo(base) error = %v", err)
 	}
 	if err := session.AddTodo(TodoItem{
-		ID:           "task",
-		Content:      "task",
-		Dependencies: []string{"base"},
+		ID:            "task",
+		Content:       "task",
+		Dependencies:  []string{"base"},
+		FailureReason: "previous failure",
+		RetryCount:    2,
+		NextRetryAt:   time.Now().Add(2 * time.Minute),
 	}); err != nil {
 		t.Fatalf("AddTodo(task) error = %v", err)
 	}
@@ -208,6 +212,17 @@ func TestSessionClaimCompleteFail(t *testing.T) {
 	if task.OwnerType != TodoOwnerTypeSubAgent || task.OwnerID != "worker-1" {
 		t.Fatalf("unexpected owner after claim: %+v", task)
 	}
+	if task.FailureReason != "" || !task.NextRetryAt.IsZero() {
+		t.Fatalf("claim should clear failure/next_retry_at, got %+v", task)
+	}
+	retryCount := 5
+	if err := session.UpdateTodo("task", TodoPatch{RetryCount: &retryCount}, task.Revision); err != nil {
+		t.Fatalf("UpdateTodo(retry_count) error = %v", err)
+	}
+	task, _ = session.FindTodo("task")
+	if task.RetryCount != 5 {
+		t.Fatalf("retry_count = %d, want 5", task.RetryCount)
+	}
 
 	if err := session.FailTodo("task", "compile failed", task.Revision); err != nil {
 		t.Fatalf("FailTodo error = %v", err)
@@ -215,6 +230,9 @@ func TestSessionClaimCompleteFail(t *testing.T) {
 	task, _ = session.FindTodo("task")
 	if task.Status != TodoStatusFailed || task.FailureReason != "compile failed" {
 		t.Fatalf("unexpected fail state: %+v", task)
+	}
+	if !task.NextRetryAt.IsZero() {
+		t.Fatalf("FailTodo should clear next_retry_at, got %+v", task)
 	}
 
 	if err := session.SetTodoStatus("task", TodoStatusInProgress, task.Revision); err == nil || !errors.Is(err, ErrInvalidTransition) {
@@ -381,6 +399,9 @@ func TestApplyTodoPatchCoverage(t *testing.T) {
 	acceptance := []string{"ok"}
 	artifacts := []string{"a.txt"}
 	reason := "boom"
+	retryCount := 1
+	retryLimit := 3
+	nextRetryAt := time.Now().Add(3 * time.Minute).UTC()
 	status := TodoStatusInProgress
 	patch := TodoPatch{
 		Content:       &content,
@@ -391,6 +412,9 @@ func TestApplyTodoPatchCoverage(t *testing.T) {
 		Acceptance:    &acceptance,
 		Artifacts:     &artifacts,
 		FailureReason: &reason,
+		RetryCount:    &retryCount,
+		RetryLimit:    &retryLimit,
+		NextRetryAt:   &nextRetryAt,
 		Status:        &status,
 	}
 
@@ -406,6 +430,12 @@ func TestApplyTodoPatchCoverage(t *testing.T) {
 	}
 	if next.FailureReason != "" {
 		t.Fatalf("non-failed status should clear failure reason, got %q", next.FailureReason)
+	}
+	if next.RetryCount != 1 || next.RetryLimit != 3 {
+		t.Fatalf("retry fields not applied, got %+v", next)
+	}
+	if !next.NextRetryAt.IsZero() {
+		t.Fatalf("in_progress should clear next_retry_at, got %+v", next)
 	}
 
 	invalidStatus := TodoStatus("paused")
