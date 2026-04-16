@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 
 # 配置仓库信息
-$Repo = "pionxe/neo-code"
+$Repo = "1024XEngineer/neo-code"
 $ProjectName = "neo-code"
 $BinaryName = "neocode.exe"
 
