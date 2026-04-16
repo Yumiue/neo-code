@@ -2581,6 +2581,107 @@ func TestUpdateLocalAndWorkspaceCommandResultBranches(t *testing.T) {
 	}
 }
 
+func TestUpdateCompactFinishedAndRefreshMessagesError(t *testing.T) {
+	app, runtime := newTestApp(t)
+	app.state.ActiveSessionID = "session-error"
+	runtime.loadSessionErr = errors.New("load session failed")
+
+	model, _ := app.Update(compactFinishedMsg{Err: errors.New("compact failed")})
+	app = model.(App)
+	if app.state.IsCompacting {
+		t.Fatalf("expected compacting state to be cleared")
+	}
+	if app.state.ExecutionError != "load session failed" {
+		t.Fatalf("expected refresh message error to win, got %q", app.state.ExecutionError)
+	}
+	if len(app.activeMessages) == 0 || app.activeMessages[len(app.activeMessages)-1].Role != roleError {
+		t.Fatalf("expected inline error message appended")
+	}
+}
+
+func TestUpdateLocalCommandProviderChangedRefreshErrors(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.providerSvc = errorProviderService{err: errors.New("refresh providers failed")}
+
+	model, _ := app.Update(localCommandResultMsg{
+		Notice:          "ok",
+		ProviderChanged: true,
+	})
+	app = model.(App)
+	if app.state.ExecutionError != "refresh providers failed" {
+		t.Fatalf("expected provider refresh error, got %q", app.state.ExecutionError)
+	}
+	if len(app.activities) == 0 {
+		t.Fatalf("expected failure activity")
+	}
+}
+
+func TestUpdateKeyToggleQuitCancelAndPickerClose(t *testing.T) {
+	app, runtime := newTestApp(t)
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyCtrlQ})
+	app = model.(App)
+	if !app.state.ShowHelp {
+		t.Fatalf("expected help to toggle on")
+	}
+
+	app.state.IsAgentRunning = true
+	model, _ = app.Update(tea.KeyMsg{Type: tea.KeyCtrlW})
+	app = model.(App)
+	if !runtime.cancelInvoked {
+		t.Fatalf("expected cancel to be invoked")
+	}
+	if app.state.StatusText != statusCanceling {
+		t.Fatalf("expected canceling status, got %q", app.state.StatusText)
+	}
+
+	app.openHelpPicker()
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	app = model.(App)
+	if cmd != nil {
+		t.Fatalf("expected nil cmd when closing active picker")
+	}
+	if app.state.ActivePicker != pickerNone {
+		t.Fatalf("expected picker to close on focus input key")
+	}
+
+	model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	if model == nil || cmd == nil {
+		t.Fatalf("expected quit command")
+	}
+}
+
+func TestUpdatePickerEnterInvalidSelectionsAndSessionActivationError(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	app.providerPicker.SetItems([]list.Item{sessionItem{Summary: agentsession.Summary{ID: "s1"}}})
+	app.openPicker(pickerProvider, statusChooseProvider, &app.providerPicker, "")
+	model, cmd := app.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(App)
+	if cmd != nil {
+		t.Fatalf("expected nil cmd when provider picker item type is invalid")
+	}
+
+	app.modelPicker.SetItems([]list.Item{sessionItem{Summary: agentsession.Summary{ID: "s1"}}})
+	app.openPicker(pickerModel, statusChooseModel, &app.modelPicker, "")
+	model, cmd = app.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(App)
+	if cmd != nil {
+		t.Fatalf("expected nil cmd when model picker item type is invalid")
+	}
+
+	app.sessionPicker.SetItems([]list.Item{sessionItem{Summary: agentsession.Summary{ID: "missing", Title: "missing"}}})
+	app.openPicker(pickerSession, statusChooseSession, &app.sessionPicker, "")
+	model, cmd = app.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(App)
+	if cmd != nil {
+		t.Fatalf("expected nil cmd for session picker enter")
+	}
+	if app.state.ExecutionError == "" {
+		t.Fatalf("expected session activation error to be recorded")
+	}
+}
+
 func TestUpdateInputPanelSlashAndWorkspaceBranches(t *testing.T) {
 	app, _ := newTestApp(t)
 

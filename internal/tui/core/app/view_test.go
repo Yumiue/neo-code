@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -8,10 +9,19 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/lipgloss"
 
+	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 	agentsession "neo-code/internal/session"
 	tuistate "neo-code/internal/tui/state"
 )
+
+type stubMarkdownRenderer struct {
+	render func(content string, width int) (string, error)
+}
+
+func (s stubMarkdownRenderer) Render(content string, width int) (string, error) {
+	return s.render(content, width)
+}
 
 func TestRenderPickerHelpMode(t *testing.T) {
 	app, _ := newTestApp(t)
@@ -64,6 +74,13 @@ func TestRenderPickerProviderAndFileMode(t *testing.T) {
 	fileView := app.renderPicker(48, 14)
 	if !strings.Contains(fileView, filePickerTitle) {
 		t.Fatalf("expected file picker title")
+	}
+
+	app.startProviderAddForm()
+	app.state.ActivePicker = pickerProviderAdd
+	providerAddView := app.renderPicker(48, 14)
+	if !strings.Contains(providerAddView, providerAddTitle) {
+		t.Fatalf("expected provider add title")
 	}
 }
 
@@ -325,6 +342,33 @@ func TestViewNormalIncludesHeaderAndBody(t *testing.T) {
 	}
 }
 
+func TestViewAddsSpacerWhenDocIsTallerThanContent(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 100
+	app.height = 60
+
+	view := app.View()
+	if strings.TrimSpace(view) == "" {
+		t.Fatalf("expected non-empty view")
+	}
+}
+
+func TestRenderHeaderFallbackAndTrim(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.state.IsAgentRunning = true
+	app.state.StatusText = "custom-running-status"
+	header := app.renderHeader(20)
+	if strings.TrimSpace(header) == "" {
+		t.Fatalf("expected non-empty header")
+	}
+
+	app.state.CurrentModel = strings.Repeat("very-long-model-name-", 4)
+	header = app.renderHeader(16)
+	if strings.TrimSpace(header) == "" {
+		t.Fatalf("expected trimmed header output")
+	}
+}
+
 func TestRenderPanelAndActivityPreview(t *testing.T) {
 	app, _ := newTestApp(t)
 	panel := app.renderPanel("Title", "Sub", "Body", 60, 8, true)
@@ -339,6 +383,15 @@ func TestRenderPanelAndActivityPreview(t *testing.T) {
 	withActivity := app.renderActivityPreview(60)
 	if !strings.Contains(withActivity, activityTitle) {
 		t.Fatalf("expected activity panel title, got %q", withActivity)
+	}
+
+	app.commandMenu.SetItems([]list.Item{
+		commandMenuItem{title: "/help", description: "show help"},
+	})
+	app.commandMenuMeta = tuistate.CommandMenuMeta{Title: commandMenuTitle}
+	withMenu := app.renderWaterfall(80, 24)
+	if !strings.Contains(withMenu, commandMenuTitle) {
+		t.Fatalf("expected command menu to be rendered")
 	}
 }
 
@@ -362,6 +415,96 @@ func TestRenderMessageContentWithCopyBranches(t *testing.T) {
 	}
 	if bindings[0].ID != 3 || !strings.Contains(bindings[0].Code, "fmt.Println") {
 		t.Fatalf("unexpected binding: %+v", bindings[0])
+	}
+
+	app, _ = newTestApp(t)
+	app.markdownRenderer = stubMarkdownRenderer{
+		render: func(content string, width int) (string, error) {
+			return "", errors.New("render failed")
+		},
+	}
+	rendered, bindings = app.renderMessageContentWithCopy("plain text", 60, app.styles.messageBody, 1)
+	if len(bindings) != 0 || strings.TrimSpace(rendered) == "" {
+		t.Fatalf("expected empty message fallback when markdown render fails")
+	}
+}
+
+func TestRenderMessageContentWithCopyCodeFallbackAndEmptySegments(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.markdownRenderer = stubMarkdownRenderer{
+		render: func(content string, width int) (string, error) {
+			if strings.HasPrefix(strings.TrimSpace(content), "```") {
+				return "", errors.New("code render failed")
+			}
+			return "ok", nil
+		},
+	}
+	content := " \n```go\nfmt.Println(\"x\")\n```\n"
+	rendered, bindings := app.renderMessageContentWithCopy(content, 60, app.styles.messageBody, 7)
+	if strings.TrimSpace(rendered) == "" {
+		t.Fatalf("expected rendered output")
+	}
+	if len(bindings) != 1 || bindings[0].ID != 7 {
+		t.Fatalf("expected one binding with id 7, got %+v", bindings)
+	}
+}
+
+func TestRenderMessageBlockWithCopyExtraBranches(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	eventBlock, _ := app.renderMessageBlockWithCopy(providertypes.Message{Role: roleEvent, Content: "event"}, 50, 1)
+	if !strings.Contains(eventBlock, "event") {
+		t.Fatalf("expected event block")
+	}
+
+	toolBlock, bindings := app.renderMessageBlockWithCopy(providertypes.Message{Role: roleTool, Content: "tool"}, 50, 1)
+	if toolBlock != "" || bindings != nil {
+		t.Fatalf("expected tool role to be skipped")
+	}
+
+	assistantBlock, _ := app.renderMessageBlockWithCopy(providertypes.Message{
+		Role: roleAssistant,
+		ToolCalls: []providertypes.ToolCall{
+			{Name: "bash"},
+		},
+	}, 50, 1)
+	assistantPlain := copyCodeANSIPattern.ReplaceAllString(assistantBlock, "")
+	if !strings.Contains(assistantPlain, "bash") {
+		t.Fatalf("expected tool calls summary in assistant block")
+	}
+
+	userBlock, _ := app.renderMessageBlockWithCopy(providertypes.Message{
+		Role:    roleUser,
+		Content: "hello",
+	}, 10, 1)
+	if strings.TrimSpace(userBlock) == "" {
+		t.Fatalf("expected user message block")
+	}
+}
+
+func TestRenderProviderAddFormNoFormAndGeminiField(t *testing.T) {
+	app, _ := newTestApp(t)
+	if got := app.renderProviderAddForm(); got != "No form active" {
+		t.Fatalf("unexpected no-form output: %q", got)
+	}
+
+	app.startProviderAddForm()
+	app.providerAddForm.Driver = provider.DriverGemini
+	app.providerAddForm.DeploymentMode = "vertex"
+	form := app.renderProviderAddForm()
+	if !strings.Contains(form, "Deployment Mode") {
+		t.Fatalf("expected deployment mode field for gemini")
+	}
+}
+
+func TestRenderCommandMenuEmptyBody(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.commandMenu.SetItems([]list.Item{
+		commandMenuItem{title: "/help", description: "show help"},
+	})
+	app.state.ActivePicker = pickerHelp
+	if got := app.renderCommandMenu(50); got != "" {
+		t.Fatalf("expected empty menu while picker is active")
 	}
 }
 

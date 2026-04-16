@@ -197,6 +197,96 @@ func TestEncodeEnvValue(t *testing.T) {
 	}
 }
 
+func TestEnvFilePathFallbackToDefaultBaseDir(t *testing.T) {
+	got := EnvFilePath("   ")
+	if got != filepath.Join(defaultBaseDir(), envFileName) {
+		t.Fatalf("EnvFilePath(blank) = %q", got)
+	}
+}
+
+func TestPersistEnvVarErrorPaths(t *testing.T) {
+	t.Run("base dir is file", func(t *testing.T) {
+		tempRoot := t.TempDir()
+		fileBase := filepath.Join(tempRoot, "not-a-dir")
+		if err := os.WriteFile(fileBase, []byte("x"), 0o600); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+		if err := PersistEnvVar(fileBase, "KEY", "value"); err == nil {
+			t.Fatal("expected mkdir error")
+		}
+	})
+
+	t.Run("read env file failed", func(t *testing.T) {
+		baseDir := t.TempDir()
+		envPath := EnvFilePath(baseDir)
+		if err := os.MkdirAll(envPath, 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := PersistEnvVar(baseDir, "KEY", "value"); err == nil {
+			t.Fatal("expected read error when env path is a directory")
+		}
+	})
+
+	t.Run("write env file failed", func(t *testing.T) {
+		baseDir := t.TempDir()
+		envPath := EnvFilePath(baseDir)
+		if err := os.WriteFile(envPath, []byte("KEY=old\n"), 0o400); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+		if err := PersistEnvVar(baseDir, "KEY", "new"); err == nil {
+			t.Fatal("expected write error")
+		}
+	})
+}
+
+func TestLoadPersistedEnvErrorPaths(t *testing.T) {
+	t.Run("read env file failed", func(t *testing.T) {
+		baseDir := t.TempDir()
+		envPath := EnvFilePath(baseDir)
+		if err := os.MkdirAll(envPath, 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := LoadPersistedEnv(baseDir); err == nil {
+			t.Fatal("expected read error when env path is a directory")
+		}
+	})
+
+	t.Run("setenv failed on invalid key", func(t *testing.T) {
+		baseDir := t.TempDir()
+		envPath := EnvFilePath(baseDir)
+		if err := os.WriteFile(envPath, []byte("BAD\x00KEY=value\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+		if err := LoadPersistedEnv(baseDir); err == nil {
+			t.Fatal("expected setenv error")
+		}
+	})
+}
+
+func TestRemovePersistedEnvVarErrorPaths(t *testing.T) {
+	t.Run("read env file failed", func(t *testing.T) {
+		baseDir := t.TempDir()
+		envPath := EnvFilePath(baseDir)
+		if err := os.MkdirAll(envPath, 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := RemovePersistedEnvVar(baseDir, "KEY"); err == nil {
+			t.Fatal("expected read error")
+		}
+	})
+
+	t.Run("write env file failed", func(t *testing.T) {
+		baseDir := t.TempDir()
+		envPath := EnvFilePath(baseDir)
+		if err := os.WriteFile(envPath, []byte("KEY=value\n"), 0o400); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+		if err := RemovePersistedEnvVar(baseDir, "KEY"); err == nil {
+			t.Fatal("expected write error")
+		}
+	})
+}
+
 func captureEnv(t *testing.T, key string) func() {
 	t.Helper()
 	value, exists := os.LookupEnv(key)

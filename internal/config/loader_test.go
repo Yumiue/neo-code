@@ -1042,6 +1042,102 @@ func TestDeleteCustomProviderRemovesProviderDir(t *testing.T) {
 	}
 }
 
+func TestLoadCustomProvidersReadDirAndStatErrors(t *testing.T) {
+	t.Run("providers dir read error", func(t *testing.T) {
+		baseDir := t.TempDir()
+		providersPath := filepath.Join(baseDir, providersDirName)
+		if err := os.WriteFile(providersPath, []byte("file"), 0o600); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+
+		if _, err := loadCustomProviders(baseDir); err == nil {
+			t.Fatal("expected read providers dir error")
+		}
+	})
+
+	t.Run("provider yaml stat error", func(t *testing.T) {
+		baseDir := t.TempDir()
+		providerDir := filepath.Join(baseDir, providersDirName, "blocked")
+		if err := os.MkdirAll(providerDir, 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := os.Chmod(providerDir, 0o000); err != nil {
+			t.Fatalf("Chmod() error = %v", err)
+		}
+		defer func() { _ = os.Chmod(providerDir, 0o755) }()
+
+		if _, err := loadCustomProviders(baseDir); err == nil {
+			t.Fatal("expected stat error")
+		}
+	})
+}
+
+func TestLoadCustomProviderReadErrors(t *testing.T) {
+	t.Run("missing provider yaml", func(t *testing.T) {
+		providerDir := t.TempDir()
+		if _, err := loadCustomProvider(providerDir); err == nil {
+			t.Fatal("expected missing provider yaml error")
+		}
+	})
+
+	t.Run("provider yaml read error", func(t *testing.T) {
+		providerDir := t.TempDir()
+		providerPath := filepath.Join(providerDir, customProviderConfigName)
+		if err := os.MkdirAll(providerPath, 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if _, err := loadCustomProvider(providerDir); err == nil {
+			t.Fatal("expected provider yaml read error")
+		}
+	})
+}
+
+func TestSaveCustomProviderFileSystemErrors(t *testing.T) {
+	t.Run("mkdir provider dir failed", func(t *testing.T) {
+		root := t.TempDir()
+		baseDir := filepath.Join(root, "base-file")
+		if err := os.WriteFile(baseDir, []byte("x"), 0o600); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+
+		err := SaveCustomProvider(
+			baseDir,
+			"team-gateway",
+			provider.DriverOpenAICompat,
+			"https://llm.example.com/v1",
+			"TEAM_GATEWAY_API_KEY",
+			provider.OpenAICompatibleAPIStyleChatCompletions,
+			"",
+			"",
+		)
+		if err == nil {
+			t.Fatal("expected create provider dir error")
+		}
+	})
+
+	t.Run("write provider yaml failed", func(t *testing.T) {
+		baseDir := t.TempDir()
+		providerDir := filepath.Join(baseDir, providersDirName, "team-gateway")
+		if err := os.MkdirAll(filepath.Join(providerDir, customProviderConfigName), 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+
+		err := SaveCustomProvider(
+			baseDir,
+			"team-gateway",
+			provider.DriverOpenAICompat,
+			"https://llm.example.com/v1",
+			"TEAM_GATEWAY_API_KEY",
+			provider.OpenAICompatibleAPIStyleChatCompletions,
+			"",
+			"",
+		)
+		if err == nil {
+			t.Fatal("expected write provider error")
+		}
+	})
+}
+
 func TestLoaderLoadsUnknownCustomProviderDriverUsingTopLevelBaseURL(t *testing.T) {
 	t.Parallel()
 
