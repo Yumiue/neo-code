@@ -215,6 +215,9 @@ func TestJSONStoreErrors(t *testing.T) {
 	if _, err := store.ListSummaries(cancelledCtx); err == nil {
 		t.Fatalf("expected cancelled list to fail")
 	}
+	if _, err := store.Load(context.Background(), "   "); err == nil || !strings.Contains(err.Error(), "session id is empty") {
+		t.Fatalf("expected empty session id load error, got %v", err)
+	}
 }
 
 func TestJSONStoreCorruptedSessionBehaviors(t *testing.T) {
@@ -553,7 +556,11 @@ func TestJSONStoreListSummariesSkipsUnreadableAndMalformedEntries(t *testing.T) 
 	}
 
 	mustWriteSessionFile(t, sessionFilePathForTest(baseDir, workspaceRoot, "malformed"), "{malformed")
-	mustWriteSessionFile(t, sessionFilePathForTest(baseDir, workspaceRoot, "empty-id"), `{"id":"   ","title":"x"}`)
+	mustWriteSessionFile(
+		t,
+		sessionFilePathForTest(baseDir, workspaceRoot, "empty-id"),
+		`{"schema_version":2,"id":"   ","title":"x","created_at":"2026-04-13T00:00:00Z","updated_at":"2026-04-13T00:00:00Z","task_state":{"goal":"","progress":[],"open_items":[],"next_step":"","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[],"last_updated_at":"2026-04-13T00:00:00Z"}}`,
+	)
 	mustWriteSessionFile(
 		t,
 		sessionFilePathForTest(baseDir, workspaceRoot, "missing-task-state-summary"),
@@ -566,6 +573,111 @@ func TestJSONStoreListSummariesSkipsUnreadableAndMalformedEntries(t *testing.T) 
 	}
 	if len(summaries) != 1 || summaries[0].ID != valid.ID {
 		t.Fatalf("expected only valid summary, got %+v", summaries)
+	}
+}
+
+func TestJSONStoreSaveRejectsInvalidSchemaAndID(t *testing.T) {
+	t.Parallel()
+
+	store := NewJSONStore(t.TempDir(), t.TempDir())
+
+	err := store.Save(context.Background(), &Session{
+		SchemaVersion: CurrentSchemaVersion + 1,
+		ID:            "session-invalid-schema",
+		Title:         "Invalid Schema",
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported schema_version") {
+		t.Fatalf("expected schema version error, got %v", err)
+	}
+
+	err = store.Save(context.Background(), &Session{
+		SchemaVersion: CurrentSchemaVersion,
+		ID:            "bad/session",
+		Title:         "Invalid ID",
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported characters") {
+		t.Fatalf("expected invalid id error, got %v", err)
+	}
+}
+
+func TestJSONStoreSaveCreateSessionDirFailure(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	workspaceRoot := t.TempDir()
+	store := NewJSONStore(baseDir, workspaceRoot)
+	sessionID := "session-dir-failed"
+
+	sessionDirPath := filepath.Join(sessionDirectory(baseDir, workspaceRoot), sessionID)
+	if err := os.MkdirAll(filepath.Dir(sessionDirPath), 0o755); err != nil {
+		t.Fatalf("mkdir session parent: %v", err)
+	}
+	if err := os.WriteFile(sessionDirPath, []byte("blocked"), 0o644); err != nil {
+		t.Fatalf("write session dir blocker: %v", err)
+	}
+
+	err := store.Save(context.Background(), &Session{
+		SchemaVersion: CurrentSchemaVersion,
+		ID:            sessionID,
+		Title:         "Blocked SessionDir",
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "create session dir") {
+		t.Fatalf("expected create session dir error, got %v", err)
+	}
+}
+
+func TestDecodeStoredSessionAndSummarySchemaValidation(t *testing.T) {
+	t.Parallel()
+
+	_, err := decodeStoredSession([]byte(`{
+  "schema_version": 999,
+  "id": "decode-invalid-schema",
+  "title": "x",
+  "created_at": "2026-04-13T08:00:00Z",
+  "updated_at": "2026-04-13T08:00:00Z",
+  "task_state": {
+    "goal": "",
+    "progress": [],
+    "open_items": [],
+    "next_step": "",
+    "blockers": [],
+    "key_artifacts": [],
+    "decisions": [],
+    "user_constraints": [],
+    "last_updated_at": "2026-04-13T08:00:00Z"
+  },
+  "messages": []
+}`))
+	if err == nil || !strings.Contains(err.Error(), "unsupported schema_version") {
+		t.Fatalf("expected decodeStoredSession schema error, got %v", err)
+	}
+
+	_, err = decodeStoredSummary([]byte(`{
+  "schema_version": 999,
+  "id": "summary-invalid-schema",
+  "title": "Summary",
+  "created_at": "2026-04-13T08:00:00Z",
+  "updated_at": "2026-04-13T08:00:00Z",
+  "task_state": {
+    "goal": "",
+    "progress": [],
+    "open_items": [],
+    "next_step": "",
+    "blockers": [],
+    "key_artifacts": [],
+    "decisions": [],
+    "user_constraints": [],
+    "last_updated_at": "2026-04-13T08:00:00Z"
+  }
+}`))
+	if err == nil || !strings.Contains(err.Error(), "unsupported schema_version") {
+		t.Fatalf("expected decodeStoredSummary schema error, got %v", err)
 	}
 }
 

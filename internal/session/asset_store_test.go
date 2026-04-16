@@ -3,8 +3,10 @@ package session
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -129,4 +131,70 @@ func TestDecodeStoredAssetMetaRejectsNonImageMIME(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "unsupported asset mime type") {
 		t.Fatalf("expected non-image mime rejection, got %v", err)
 	}
+}
+
+func TestDecodeAndEncodeStoredAssetMetaValidation(t *testing.T) {
+	t.Parallel()
+
+	if _, err := decodeStoredAssetMeta([]byte(`{`)); err == nil || !strings.Contains(err.Error(), "decode asset meta") {
+		t.Fatalf("expected decode error, got %v", err)
+	}
+	if _, err := decodeStoredAssetMeta([]byte(`{"id":"bad/asset","mime_type":"image/png","size":1}`)); err == nil ||
+		!strings.Contains(err.Error(), "unsupported characters") {
+		t.Fatalf("expected invalid asset id error, got %v", err)
+	}
+	if _, err := decodeStoredAssetMeta([]byte(`{"id":"asset_ok","mime_type":"   ","size":1}`)); err == nil ||
+		!strings.Contains(err.Error(), "mime_type is empty") {
+		t.Fatalf("expected empty mime_type error, got %v", err)
+	}
+
+	if _, err := encodeStoredAssetMeta(AssetMeta{ID: "bad/asset", MimeType: "image/png", Size: 1}); err == nil ||
+		!strings.Contains(err.Error(), "unsupported characters") {
+		t.Fatalf("expected invalid asset id encode error, got %v", err)
+	}
+	if _, err := encodeStoredAssetMeta(AssetMeta{ID: "asset_ok", MimeType: "   ", Size: 1}); err == nil ||
+		!strings.Contains(err.Error(), "asset mime type is empty") {
+		t.Fatalf("expected empty mime encode error, got %v", err)
+	}
+}
+
+func TestJSONStoreSaveAssetFailurePaths(t *testing.T) {
+	t.Parallel()
+
+	t.Run("create assets dir failed", func(t *testing.T) {
+		t.Parallel()
+
+		baseDir := t.TempDir()
+		workspaceRoot := t.TempDir()
+		store := NewJSONStore(baseDir, workspaceRoot)
+
+		assetsDir := store.assetsDir("session_assets_dir_fail")
+		if err := os.MkdirAll(filepath.Dir(assetsDir), 0o755); err != nil {
+			t.Fatalf("mkdir parent: %v", err)
+		}
+		if err := os.WriteFile(assetsDir, []byte("blocked"), 0o644); err != nil {
+			t.Fatalf("write blocker file: %v", err)
+		}
+
+		if _, err := store.SaveAsset(context.Background(), "session_assets_dir_fail", strings.NewReader("x"), "image/png"); err == nil ||
+			!strings.Contains(err.Error(), "create assets dir") {
+			t.Fatalf("expected create assets dir error, got %v", err)
+		}
+	})
+
+	t.Run("copy temp asset failed", func(t *testing.T) {
+		t.Parallel()
+
+		store := NewJSONStore(t.TempDir(), t.TempDir())
+		if _, err := store.SaveAsset(context.Background(), "session_copy_fail", failingReader{}, "image/png"); err == nil ||
+			!strings.Contains(err.Error(), "write temp asset") {
+			t.Fatalf("expected write temp asset error, got %v", err)
+		}
+	})
+}
+
+type failingReader struct{}
+
+func (failingReader) Read(_ []byte) (int, error) {
+	return 0, errors.New("read failure")
 }

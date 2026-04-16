@@ -37,6 +37,16 @@ func TestNewAndBuildRequest(t *testing.T) {
 		if _, err := BuildRequest(context.Background(), testCfg("https://api.example.com/v1", "", "test-key"), providertypes.GenerateRequest{}); err == nil || !strings.Contains(err.Error(), "model is empty") {
 			t.Fatalf("expected model error, got %v", err)
 		}
+		if _, err := BuildRequest(context.Background(), testCfg("https://api.example.com/v1", "gpt-4.1", "test-key"), providertypes.GenerateRequest{
+			Messages: []providertypes.Message{
+				{
+					Role:  providertypes.RoleUser,
+					Parts: []providertypes.ContentPart{providertypes.NewSessionAssetImagePart("asset-without-reader", "image/png")},
+				},
+			},
+		}); err == nil || !strings.Contains(err.Error(), "session_asset reader is not configured") {
+			t.Fatalf("expected BuildRequest conversion error, got %v", err)
+		}
 
 		payload, err := BuildRequest(context.Background(), testCfg("https://api.example.com/v1", "gpt-4.1", "test-key"), providertypes.GenerateRequest{
 			Model:        "gpt-5.4",
@@ -175,6 +185,15 @@ func TestNewAndBuildRequest(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "session_asset reader is not configured") {
 			t.Fatalf("expected missing reader error, got %v", err)
 		}
+		_, err = ToOpenAIMessage(context.Background(), providertypes.Message{
+			Role: providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{
+				providertypes.NewSessionAssetImagePart("   ", "image/png"),
+			},
+		}, stubSessionAssetReader{})
+		if err == nil || !strings.Contains(err.Error(), "missing asset id") {
+			t.Fatalf("expected missing asset id error, got %v", err)
+		}
 
 		sessionAssetMsg, err := ToOpenAIMessage(context.Background(), providertypes.Message{
 			Role: providertypes.RoleUser,
@@ -288,6 +307,57 @@ func TestNewAndBuildRequest(t *testing.T) {
 			t.Fatalf("expected invalid parts error, got %v", err)
 		}
 	})
+}
+
+func TestResolveSessionAssetDataURLVariants(t *testing.T) {
+	t.Parallel()
+
+	if _, err := resolveSessionAssetDataURL(nil, stubSessionAssetReader{
+		assets: map[string]stubSessionAsset{
+			"asset-nil-ctx": {data: []byte("x"), mime: "image/png"},
+		},
+	}, &providertypes.AssetRef{ID: "asset-nil-ctx", MimeType: "image/png"}); err != nil {
+		t.Fatalf("expected nil context to fallback to background, got %v", err)
+	}
+
+	if _, err := resolveSessionAssetDataURL(context.Background(), stubSessionAssetReader{
+		openFunc: func(ctx context.Context, assetID string) (io.ReadCloser, string, error) {
+			_ = ctx
+			_ = assetID
+			return nil, "", errors.New("open failed")
+		},
+	}, &providertypes.AssetRef{ID: "asset-open-error", MimeType: "image/png"}); err == nil || !strings.Contains(err.Error(), "open session_asset") {
+		t.Fatalf("expected wrapped open error, got %v", err)
+	}
+
+	if _, err := resolveSessionAssetDataURL(context.Background(), stubSessionAssetReader{
+		openFunc: func(ctx context.Context, assetID string) (io.ReadCloser, string, error) {
+			_ = ctx
+			_ = assetID
+			return &failingReadCloser{err: errors.New("read failed")}, "image/png", nil
+		},
+	}, &providertypes.AssetRef{ID: "asset-read-error", MimeType: "image/png"}); err == nil || !strings.Contains(err.Error(), "read session_asset") {
+		t.Fatalf("expected wrapped read error, got %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	if _, err := resolveSessionAssetDataURL(ctx, stubSessionAssetReader{
+		openFunc: func(openCtx context.Context, assetID string) (io.ReadCloser, string, error) {
+			_ = openCtx
+			_ = assetID
+			return &cancelOnReadCloser{cancel: cancel}, "image/png", nil
+		},
+	}, &providertypes.AssetRef{ID: "asset-cancel-after-read", MimeType: "image/png"}); err == nil || !strings.Contains(err.Error(), "context canceled") {
+		t.Fatalf("expected canceled context after read, got %v", err)
+	}
+
+	if _, err := resolveSessionAssetDataURL(context.Background(), stubSessionAssetReader{
+		assets: map[string]stubSessionAsset{
+			"asset-empty": {data: []byte{}, mime: "image/png"},
+		},
+	}, &providertypes.AssetRef{ID: "asset-empty", MimeType: "image/png"}); err == nil || !strings.Contains(err.Error(), "is empty") {
+		t.Fatalf("expected empty asset error, got %v", err)
+	}
 }
 
 func TestParseErrorVariants(t *testing.T) {
@@ -863,6 +933,23 @@ type cancelAfterDoneReader struct {
 	err     error
 	read    bool
 }
+
+type cancelOnReadCloser struct {
+	cancel func()
+	read   bool
+}
+
+func (r *cancelOnReadCloser) Read(p []byte) (int, error) {
+	if r.read {
+		return 0, io.EOF
+	}
+	r.read = true
+	copy(p, []byte("img"))
+	r.cancel()
+	return len("img"), nil
+}
+
+func (r *cancelOnReadCloser) Close() error { return nil }
 
 func (r *cancelAfterDoneReader) Read(p []byte) (int, error) {
 	if !r.read {
