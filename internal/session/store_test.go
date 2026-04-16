@@ -64,7 +64,7 @@ func TestJSONStoreSaveLoadAndListSummaries(t *testing.T) {
 	if loaded.Workdir != older.Workdir {
 		t.Fatalf("expected persisted workdir %q, got %q", older.Workdir, loaded.Workdir)
 	}
-	if len(loaded.Messages) != 2 || providertypes.ExtractTextForProjection(loaded.Messages[1].Parts) != "world" {
+	if len(loaded.Messages) != 2 || renderPartsForTest(loaded.Messages[1].Parts) != "world" {
 		t.Fatalf("unexpected loaded messages: %+v", loaded.Messages)
 	}
 
@@ -684,8 +684,8 @@ func TestJSONStoreSaveRoundTripsMetadataOnlyToolMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load saved session: %v", err)
 	}
-	if providertypes.ExtractTextForProjection(loaded.Messages[2].Parts) != "" {
-		t.Fatalf("expected empty content to round-trip, got %q", providertypes.ExtractTextForProjection(loaded.Messages[2].Parts))
+	if renderPartsForTest(loaded.Messages[2].Parts) != "" {
+		t.Fatalf("expected empty content to round-trip, got %q", renderPartsForTest(loaded.Messages[2].Parts))
 	}
 	if loaded.Messages[2].ToolMetadata["tool_name"] != "filesystem_read_file" ||
 		loaded.Messages[2].ToolMetadata["path"] != "README.md" {

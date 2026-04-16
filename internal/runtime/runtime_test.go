@@ -231,9 +231,9 @@ func (p *scriptedProvider) Generate(ctx context.Context, req providertypes.Gener
 				return ctx.Err()
 			}
 		}
-		if providertypes.ExtractTextForProjection(response.Message.Parts) != "" {
+		if renderPartsForTest(response.Message.Parts) != "" {
 			select {
-			case events <- providertypes.NewTextDeltaStreamEvent(providertypes.ExtractTextForProjection(response.Message.Parts)):
+			case events <- providertypes.NewTextDeltaStreamEvent(renderPartsForTest(response.Message.Parts)):
 			case <-ctx.Done():
 				return ctx.Err()
 			}
@@ -476,7 +476,7 @@ func TestServiceRun(t *testing.T) {
 				if scripted.requests[0].SystemPrompt != "custom system prompt" {
 					t.Fatalf("expected system prompt from context builder, got %q", scripted.requests[0].SystemPrompt)
 				}
-				if len(scripted.requests[0].Messages) != 1 || providertypes.ExtractTextForProjection(scripted.requests[0].Messages[0].Parts) != "trimmed history" {
+				if len(scripted.requests[0].Messages) != 1 || renderPartsForTest(scripted.requests[0].Messages[0].Parts) != "trimmed history" {
 					t.Fatalf("expected messages from context builder, got %+v", scripted.requests[0].Messages)
 				}
 			},
@@ -530,10 +530,10 @@ func TestServiceRun(t *testing.T) {
 				for _, message := range second.Messages {
 					if message.Role == "tool" &&
 						message.ToolCallID == "call-1" &&
-						strings.Contains(providertypes.ExtractTextForProjection(message.Parts), "tool result") &&
-						strings.Contains(providertypes.ExtractTextForProjection(message.Parts), "tool: filesystem_edit") &&
-						strings.Contains(providertypes.ExtractTextForProjection(message.Parts), "status: ok") &&
-						strings.Contains(providertypes.ExtractTextForProjection(message.Parts), "content:\ntool output") {
+						strings.Contains(renderPartsForTest(message.Parts), "tool result") &&
+						strings.Contains(renderPartsForTest(message.Parts), "tool: filesystem_edit") &&
+						strings.Contains(renderPartsForTest(message.Parts), "status: ok") &&
+						strings.Contains(renderPartsForTest(message.Parts), "content:\ntool output") {
 						foundToolResult = true
 						break
 					}
@@ -543,7 +543,7 @@ func TestServiceRun(t *testing.T) {
 				}
 
 				session := onlySession(t, store)
-				if session.Messages[2].Role != providertypes.RoleTool || providertypes.ExtractTextForProjection(session.Messages[2].Parts) != "tool output" {
+				if session.Messages[2].Role != providertypes.RoleTool || renderPartsForTest(session.Messages[2].Parts) != "tool output" {
 					t.Fatalf("expected persisted tool message to keep raw content, got %+v", session.Messages[2])
 				}
 				if session.Messages[2].ToolMetadata["tool_name"] != "filesystem_edit" {
@@ -597,12 +597,12 @@ func TestServiceRun(t *testing.T) {
 				for _, message := range second.Messages {
 					if message.Role == providertypes.RoleTool &&
 						message.ToolCallID == "call-1" &&
-						strings.Contains(providertypes.ExtractTextForProjection(message.Parts), "tool result") &&
-						strings.Contains(providertypes.ExtractTextForProjection(message.Parts), "tool: filesystem_read_file") &&
-						strings.Contains(providertypes.ExtractTextForProjection(message.Parts), "meta.path: README.md") {
+						strings.Contains(renderPartsForTest(message.Parts), "tool result") &&
+						strings.Contains(renderPartsForTest(message.Parts), "tool: filesystem_read_file") &&
+						strings.Contains(renderPartsForTest(message.Parts), "meta.path: README.md") {
 						foundToolResult = true
-						if strings.Contains(providertypes.ExtractTextForProjection(message.Parts), "content:\n") {
-							t.Fatalf("expected metadata-only projection to omit content section, got %q", providertypes.ExtractTextForProjection(message.Parts))
+						if strings.Contains(renderPartsForTest(message.Parts), "content:\n") {
+							t.Fatalf("expected metadata-only projection to omit content section, got %q", renderPartsForTest(message.Parts))
 						}
 						break
 					}
@@ -612,7 +612,7 @@ func TestServiceRun(t *testing.T) {
 				}
 
 				session := onlySession(t, store)
-				if session.Messages[2].Role != providertypes.RoleTool || providertypes.ExtractTextForProjection(session.Messages[2].Parts) != "" {
+				if session.Messages[2].Role != providertypes.RoleTool || renderPartsForTest(session.Messages[2].Parts) != "" {
 					t.Fatalf("expected persisted tool message to keep empty raw content, got %+v", session.Messages[2])
 				}
 				if session.Messages[2].ToolMetadata["tool_name"] != "filesystem_read_file" ||
@@ -1072,7 +1072,7 @@ func TestServiceRunDelegatesToContextBuilder(t *testing.T) {
 	if builder.lastInput.TaskState.Goal != "Finish task state rollout" {
 		t.Fatalf("expected session task state to be forwarded to builder, got %+v", builder.lastInput.TaskState)
 	}
-	if len(builder.lastInput.Messages) != 1 || providertypes.ExtractTextForProjection(builder.lastInput.Messages[0].Parts) != "hello" {
+	if len(builder.lastInput.Messages) != 1 || renderPartsForTest(builder.lastInput.Messages[0].Parts) != "hello" {
 		t.Fatalf("expected persisted session messages to be forwarded, got %+v", builder.lastInput.Messages)
 	}
 	if len(scripted.requests) != 1 {
@@ -1081,7 +1081,7 @@ func TestServiceRunDelegatesToContextBuilder(t *testing.T) {
 	if scripted.requests[0].SystemPrompt != "delegated prompt" {
 		t.Fatalf("expected delegated prompt, got %q", scripted.requests[0].SystemPrompt)
 	}
-	if len(scripted.requests[0].Messages) != 1 || providertypes.ExtractTextForProjection(scripted.requests[0].Messages[0].Parts) != "delegated message" {
+	if len(scripted.requests[0].Messages) != 1 || renderPartsForTest(scripted.requests[0].Messages[0].Parts) != "delegated message" {
 		t.Fatalf("expected delegated messages, got %+v", scripted.requests[0].Messages)
 	}
 }
@@ -1213,7 +1213,7 @@ func TestServiceRunDefaultBuilderUsesToolManagerMicroCompactPolicies(t *testing.
 	if len(scripted.requests) != 1 {
 		t.Fatalf("expected 1 provider request, got %d", len(scripted.requests))
 	}
-	if got := providertypes.ExtractTextForProjection(scripted.requests[0].Messages[2].Parts); got != "preserved result" {
+	if got := renderPartsForTest(scripted.requests[0].Messages[2].Parts); got != "preserved result" {
 		t.Fatalf("expected preserved tool result to remain visible, got %q", got)
 	}
 }
@@ -1276,7 +1276,7 @@ func TestServiceRunDefaultBuilderUsesGenericToolManagerMicroCompactPolicies(t *t
 	if len(scripted.requests) != 1 {
 		t.Fatalf("expected 1 provider request, got %d", len(scripted.requests))
 	}
-	if got := providertypes.ExtractTextForProjection(scripted.requests[0].Messages[2].Parts); got != "preserved result" {
+	if got := renderPartsForTest(scripted.requests[0].Messages[2].Parts); got != "preserved result" {
 		t.Fatalf("expected preserved tool result to remain visible, got %q", got)
 	}
 }
@@ -1332,7 +1332,7 @@ func TestServiceRunFailurePreservesExistingSessionProviderAndModel(t *testing.T)
 	if saved.Model != "openai-original-model" {
 		t.Fatalf("expected model to remain %q, got %q", "openai-original-model", saved.Model)
 	}
-	if len(saved.Messages) != 2 || providertypes.ExtractTextForProjection(saved.Messages[1].Parts) != "continue" {
+	if len(saved.Messages) != 2 || renderPartsForTest(saved.Messages[1].Parts) != "continue" {
 		t.Fatalf("expected failed run to append only user message, got %+v", saved.Messages)
 	}
 }
@@ -1387,7 +1387,7 @@ func TestServiceRunUsesToolManager(t *testing.T) {
 	foundToolMessage := false
 	for _, message := range session.Messages {
 		if message.Role == providertypes.RoleTool &&
-			providertypes.ExtractTextForProjection(message.Parts) == "tool manager output" &&
+			renderPartsForTest(message.Parts) == "tool manager output" &&
 			message.ToolMetadata["tool_name"] == "filesystem_edit" &&
 			message.ToolMetadata["path"] == "main.go" {
 			foundToolMessage = true
@@ -1787,7 +1787,7 @@ func TestServiceRunErrorPaths(t *testing.T) {
 				if got := len(session.Messages); got != 20 {
 					t.Fatalf("expected 20 persisted messages after 9 tool cycles and final answer, got %d", got)
 				}
-				if providertypes.ExtractTextForProjection(session.Messages[len(session.Messages)-1].Parts) != "done after many cycles" {
+				if renderPartsForTest(session.Messages[len(session.Messages)-1].Parts) != "done after many cycles" {
 					t.Fatalf("expected final assistant reply to be persisted, got %+v", session.Messages[len(session.Messages)-1])
 				}
 			},
@@ -1868,8 +1868,8 @@ func TestServiceRunErrorPaths(t *testing.T) {
 				if len(session.Messages) != 2 {
 					t.Fatalf("expected user + assistant messages, got %d", len(session.Messages))
 				}
-				if providertypes.ExtractTextForProjection(session.Messages[1].Parts) != "recovered" {
-					t.Fatalf("expected assistant content %q, got %q", "recovered", providertypes.ExtractTextForProjection(session.Messages[1].Parts))
+				if renderPartsForTest(session.Messages[1].Parts) != "recovered" {
+					t.Fatalf("expected assistant content %q, got %q", "recovered", renderPartsForTest(session.Messages[1].Parts))
 				}
 			},
 		},
@@ -2420,7 +2420,7 @@ func TestServiceCompactManualAppliesAndPersists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load compacted session: %v", err)
 	}
-	if len(saved.Messages) != 2 || !strings.Contains(providertypes.ExtractTextForProjection(saved.Messages[0].Parts), "compact_summary") {
+	if len(saved.Messages) != 2 || !strings.Contains(renderPartsForTest(saved.Messages[0].Parts), "compact_summary") {
 		t.Fatalf("expected persisted compacted messages, got %+v", saved.Messages)
 	}
 
@@ -2459,7 +2459,7 @@ func TestServiceCompactManualFailureReturnsError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load original session: %v", err)
 	}
-	if len(saved.Messages) != 3 || providertypes.ExtractTextForProjection(saved.Messages[2].Parts) != "before" {
+	if len(saved.Messages) != 3 || renderPartsForTest(saved.Messages[2].Parts) != "before" {
 		t.Fatalf("expected original session untouched, got %+v", saved.Messages)
 	}
 
@@ -2660,7 +2660,7 @@ func TestServiceManualCompactThenRunContinuesToolRound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load session: %v", err)
 	}
-	if len(saved.Messages) < 6 || !strings.Contains(providertypes.ExtractTextForProjection(saved.Messages[0].Parts), "compact_summary") {
+	if len(saved.Messages) < 6 || !strings.Contains(renderPartsForTest(saved.Messages[0].Parts), "compact_summary") {
 		t.Fatalf("expected compacted history + new tool round, got %+v", saved.Messages)
 	}
 
@@ -3651,10 +3651,10 @@ func TestServiceRunAutoCompactsAndResetsSessionTokens(t *testing.T) {
 	if len(scripted.requests[0].Messages) != 2 {
 		t.Fatalf("expected rebuilt compacted context to be sent, got %+v", scripted.requests[0].Messages)
 	}
-	if providertypes.ExtractTextForProjection(scripted.requests[0].Messages[0].Parts) != "[compact_summary]\ndone:\n- archived\n\nin_progress:\n- continue" {
+	if renderPartsForTest(scripted.requests[0].Messages[0].Parts) != "[compact_summary]\ndone:\n- archived\n\nin_progress:\n- continue" {
 		t.Fatalf("expected first provider request to use compact summary, got %+v", scripted.requests[0].Messages)
 	}
-	if providertypes.ExtractTextForProjection(scripted.requests[0].Messages[1].Parts) != "latest answer" {
+	if renderPartsForTest(scripted.requests[0].Messages[1].Parts) != "latest answer" {
 		t.Fatalf("expected first provider request to use compacted latest answer, got %+v", scripted.requests[0].Messages)
 	}
 
@@ -3930,8 +3930,8 @@ func TestServiceRunReactivelyCompactsOnContextTooLong(t *testing.T) {
 	if len(saved.Messages) != 3 {
 		t.Fatalf("expected compacted transcript plus final assistant reply, got %+v", saved.Messages)
 	}
-	if providertypes.ExtractTextForProjection(saved.Messages[2].Parts) != "recovered" {
-		t.Fatalf("expected final assistant reply %q, got %q", "recovered", providertypes.ExtractTextForProjection(saved.Messages[2].Parts))
+	if renderPartsForTest(saved.Messages[2].Parts) != "recovered" {
+		t.Fatalf("expected final assistant reply %q, got %q", "recovered", renderPartsForTest(saved.Messages[2].Parts))
 	}
 
 	events := collectRuntimeEvents(service.Events())

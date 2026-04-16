@@ -170,7 +170,7 @@ func renderCompactPromptMessages(messages []providertypes.Message) string {
 			builder.WriteString(renderCompactPromptToolCall(call))
 		}
 
-		content := strings.TrimSpace(providertypes.ExtractTextForProjection(message.Parts))
+		content := strings.TrimSpace(renderCompactPromptParts(message.Parts))
 		if content != "" {
 			builder.WriteString("\ncontent:")
 			builder.WriteString(renderCompactPromptContent(content))

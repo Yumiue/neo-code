@@ -285,7 +285,7 @@ func isCompactSummaryMessage(message providertypes.Message) bool {
 	if message.Role != providertypes.RoleAssistant {
 		return false
 	}
-	return strings.HasPrefix(strings.TrimSpace(providertypes.ExtractTextForProjection(message.Parts)), "[compact_summary]")
+	return strings.HasPrefix(strings.TrimSpace(renderTranscriptParts(message.Parts)), "[compact_summary]")
 }
 
 // validateGeneratedTaskState 确保 compact 生成结果真正建立了 durable task state，避免“摘要成功但状态为空”。

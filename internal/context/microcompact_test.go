@@ -50,17 +50,17 @@ func TestMicroCompactMessagesClearsOlderCompactableToolResults(t *testing.T) {
 	if len(got) != len(messages) {
 		t.Fatalf("expected message count to stay unchanged, got %d want %d", len(got), len(messages))
 	}
-	if providertypes.ExtractTextForProjection(got[2].Parts) != microCompactClearedMessage {
-		t.Fatalf("expected oldest compactable tool result to be cleared, got %q", providertypes.ExtractTextForProjection(got[2].Parts))
+	if renderDisplayParts(got[2].Parts) != microCompactClearedMessage {
+		t.Fatalf("expected oldest compactable tool result to be cleared, got %q", renderDisplayParts(got[2].Parts))
 	}
-	if providertypes.ExtractTextForProjection(got[4].Parts) != "recent bash result" {
-		t.Fatalf("expected recent compactable tool result to be retained, got %q", providertypes.ExtractTextForProjection(got[4].Parts))
+	if renderDisplayParts(got[4].Parts) != "recent bash result" {
+		t.Fatalf("expected recent compactable tool result to be retained, got %q", renderDisplayParts(got[4].Parts))
 	}
-	if providertypes.ExtractTextForProjection(got[6].Parts) != "latest webfetch result" {
-		t.Fatalf("expected latest compactable tool result to be retained, got %q", providertypes.ExtractTextForProjection(got[6].Parts))
+	if renderDisplayParts(got[6].Parts) != "latest webfetch result" {
+		t.Fatalf("expected latest compactable tool result to be retained, got %q", renderDisplayParts(got[6].Parts))
 	}
-	if providertypes.ExtractTextForProjection(messages[2].Parts) != "old read result" {
-		t.Fatalf("expected original slice to remain unchanged, got %q", providertypes.ExtractTextForProjection(messages[2].Parts))
+	if renderDisplayParts(messages[2].Parts) != "old read result" {
+		t.Fatalf("expected original slice to remain unchanged, got %q", renderDisplayParts(messages[2].Parts))
 	}
 }
 
@@ -122,17 +122,17 @@ func TestMicroCompactMessagesKeepsProtectedTailUntouched(t *testing.T) {
 	}
 
 	got := microCompactMessages(messages)
-	if providertypes.ExtractTextForProjection(got[2].Parts) != microCompactClearedMessage {
-		t.Fatalf("expected old tool result before protected tail to be cleared, got %q", providertypes.ExtractTextForProjection(got[2].Parts))
+	if renderDisplayParts(got[2].Parts) != microCompactClearedMessage {
+		t.Fatalf("expected old tool result before protected tail to be cleared, got %q", renderDisplayParts(got[2].Parts))
 	}
-	if providertypes.ExtractTextForProjection(got[4].Parts) != "recent read result" {
-		t.Fatalf("expected recent tool result before protected tail to remain, got %q", providertypes.ExtractTextForProjection(got[4].Parts))
+	if renderDisplayParts(got[4].Parts) != "recent read result" {
+		t.Fatalf("expected recent tool result before protected tail to remain, got %q", renderDisplayParts(got[4].Parts))
 	}
-	if providertypes.ExtractTextForProjection(got[6].Parts) != "recent bash result" {
-		t.Fatalf("expected second recent tool result before protected tail to remain, got %q", providertypes.ExtractTextForProjection(got[6].Parts))
+	if renderDisplayParts(got[6].Parts) != "recent bash result" {
+		t.Fatalf("expected second recent tool result before protected tail to remain, got %q", renderDisplayParts(got[6].Parts))
 	}
-	if providertypes.ExtractTextForProjection(got[9].Parts) != "tail bash result" {
-		t.Fatalf("expected protected tail tool result to remain, got %q", providertypes.ExtractTextForProjection(got[9].Parts))
+	if renderDisplayParts(got[9].Parts) != "tail bash result" {
+		t.Fatalf("expected protected tail tool result to remain, got %q", renderDisplayParts(got[9].Parts))
 	}
 }
 
@@ -174,20 +174,20 @@ func TestMicroCompactMessagesKeepsPreservedToolsErrorsAndOrphans(t *testing.T) {
 	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{
 		"custom_tool": tools.MicroCompactPolicyPreserveHistory,
 	}, 0)
-	if providertypes.ExtractTextForProjection(got[1].Parts) != "custom result" {
-		t.Fatalf("expected preserved tool result to remain, got %q", providertypes.ExtractTextForProjection(got[1].Parts))
+	if renderDisplayParts(got[1].Parts) != "custom result" {
+		t.Fatalf("expected preserved tool result to remain, got %q", renderDisplayParts(got[1].Parts))
 	}
-	if providertypes.ExtractTextForProjection(got[3].Parts) != "edit failed" {
-		t.Fatalf("expected error tool result to remain, got %q", providertypes.ExtractTextForProjection(got[3].Parts))
+	if renderDisplayParts(got[3].Parts) != "edit failed" {
+		t.Fatalf("expected error tool result to remain, got %q", renderDisplayParts(got[3].Parts))
 	}
-	if providertypes.ExtractTextForProjection(got[4].Parts) != "orphan result" {
-		t.Fatalf("expected orphan tool result to remain, got %q", providertypes.ExtractTextForProjection(got[4].Parts))
+	if renderDisplayParts(got[4].Parts) != "orphan result" {
+		t.Fatalf("expected orphan tool result to remain, got %q", renderDisplayParts(got[4].Parts))
 	}
-	if providertypes.ExtractTextForProjection(got[6].Parts) != microCompactClearedMessage {
-		t.Fatalf("expected already cleared content to remain unchanged, got %q", providertypes.ExtractTextForProjection(got[6].Parts))
+	if renderDisplayParts(got[6].Parts) != microCompactClearedMessage {
+		t.Fatalf("expected already cleared content to remain unchanged, got %q", renderDisplayParts(got[6].Parts))
 	}
-	if providertypes.ExtractTextForProjection(got[8].Parts) != "" {
-		t.Fatalf("expected empty tool result to remain empty, got %q", providertypes.ExtractTextForProjection(got[8].Parts))
+	if renderDisplayParts(got[8].Parts) != "" {
+		t.Fatalf("expected empty tool result to remain empty, got %q", renderDisplayParts(got[8].Parts))
 	}
 }
 
@@ -226,11 +226,11 @@ func TestMicroCompactMessagesClearsOnlyNonPreservedResultsInMixedToolSpan(t *tes
 	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{
 		"custom_tool": tools.MicroCompactPolicyPreserveHistory,
 	}, 0)
-	if providertypes.ExtractTextForProjection(got[2].Parts) != microCompactClearedMessage {
-		t.Fatalf("expected default compactable tool result to be cleared, got %q", providertypes.ExtractTextForProjection(got[2].Parts))
+	if renderDisplayParts(got[2].Parts) != microCompactClearedMessage {
+		t.Fatalf("expected default compactable tool result to be cleared, got %q", renderDisplayParts(got[2].Parts))
 	}
-	if providertypes.ExtractTextForProjection(got[3].Parts) != "custom result" {
-		t.Fatalf("expected preserved tool result in mixed span to remain, got %q", providertypes.ExtractTextForProjection(got[3].Parts))
+	if renderDisplayParts(got[3].Parts) != "custom result" {
+		t.Fatalf("expected preserved tool result in mixed span to remain, got %q", renderDisplayParts(got[3].Parts))
 	}
 	if len(got[1].ToolCalls) != 2 {
 		t.Fatalf("expected assistant tool call metadata to remain intact, got %+v", got[1].ToolCalls)
@@ -267,8 +267,8 @@ func TestMicroCompactMessagesTreatsNewToolsAsCompactableByDefault(t *testing.T) 
 	}
 
 	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{}, 0)
-	if providertypes.ExtractTextForProjection(got[2].Parts) != microCompactClearedMessage {
-		t.Fatalf("expected new tool result to be compacted by default, got %q", providertypes.ExtractTextForProjection(got[2].Parts))
+	if renderDisplayParts(got[2].Parts) != microCompactClearedMessage {
+		t.Fatalf("expected new tool result to be compacted by default, got %q", renderDisplayParts(got[2].Parts))
 	}
 }
 
@@ -317,20 +317,20 @@ func TestMicroCompactMessagesSkipsEmptyRecentSpansWhenCountingRetainedBudget(t *
 	}
 
 	got := microCompactMessages(messages)
-	if providertypes.ExtractTextForProjection(got[2].Parts) != microCompactClearedMessage {
-		t.Fatalf("expected oldest valid tool result to be cleared, got %q", providertypes.ExtractTextForProjection(got[2].Parts))
+	if renderDisplayParts(got[2].Parts) != microCompactClearedMessage {
+		t.Fatalf("expected oldest valid tool result to be cleared, got %q", renderDisplayParts(got[2].Parts))
 	}
-	if providertypes.ExtractTextForProjection(got[4].Parts) != "middle grep result" {
-		t.Fatalf("expected middle valid tool result to remain, got %q", providertypes.ExtractTextForProjection(got[4].Parts))
+	if renderDisplayParts(got[4].Parts) != "middle grep result" {
+		t.Fatalf("expected middle valid tool result to remain, got %q", renderDisplayParts(got[4].Parts))
 	}
-	if providertypes.ExtractTextForProjection(got[6].Parts) != "near edit result" {
-		t.Fatalf("expected nearer valid tool result to remain, got %q", providertypes.ExtractTextForProjection(got[6].Parts))
+	if renderDisplayParts(got[6].Parts) != "near edit result" {
+		t.Fatalf("expected nearer valid tool result to remain, got %q", renderDisplayParts(got[6].Parts))
 	}
-	if providertypes.ExtractTextForProjection(got[8].Parts) != "" {
-		t.Fatalf("expected error/empty tool result to remain unchanged, got %q", providertypes.ExtractTextForProjection(got[8].Parts))
+	if renderDisplayParts(got[8].Parts) != "" {
+		t.Fatalf("expected error/empty tool result to remain unchanged, got %q", renderDisplayParts(got[8].Parts))
 	}
-	if providertypes.ExtractTextForProjection(got[10].Parts) != "" {
-		t.Fatalf("expected empty recent tool result to remain unchanged, got %q", providertypes.ExtractTextForProjection(got[10].Parts))
+	if renderDisplayParts(got[10].Parts) != "" {
+		t.Fatalf("expected empty recent tool result to remain unchanged, got %q", renderDisplayParts(got[10].Parts))
 	}
 }
 
@@ -342,7 +342,7 @@ func TestMicroCompactMessagesSkipsToolMessagesWhenCompactableIDsMissing(t *testi
 	}
 
 	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{}, 0)
-	if providertypes.ExtractTextForProjection(got[0].Parts) != "orphan result" {
-		t.Fatalf("expected orphan tool result to remain, got %q", providertypes.ExtractTextForProjection(got[0].Parts))
+	if renderDisplayParts(got[0].Parts) != "orphan result" {
+		t.Fatalf("expected orphan tool result to remain, got %q", renderDisplayParts(got[0].Parts))
 	}
 }

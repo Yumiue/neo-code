@@ -131,7 +131,7 @@ func (s *stubRuntime) SetSessionWorkdir(ctx context.Context, sessionID string, w
 }
 
 func messageText(message providertypes.Message) string {
-	return providertypes.ExtractTextForProjection(message.Parts)
+	return renderMessagePartsForDisplay(message.Parts)
 }
 
 func newDefaultAppConfig() *config.Config {

@@ -39,19 +39,19 @@ func TestProjectToolMessagesForModelSkipsMessagesThatCannotBeProjected(t *testin
 	}
 
 	projected := ProjectToolMessagesForModel(cloneContextMessages(messages))
-	if providertypes.ExtractTextForProjection(projected[0].Parts) != "user" {
+	if renderDisplayParts(projected[0].Parts) != "user" {
 		t.Fatalf("non-tool message should remain unchanged, got %+v", projected[0])
 	}
-	if providertypes.ExtractTextForProjection(projected[1].Parts) != "tool output" || projected[1].ToolMetadata != nil {
+	if renderDisplayParts(projected[1].Parts) != "tool output" || projected[1].ToolMetadata != nil {
 		t.Fatalf("tool without projection metadata should remain unchanged, got %+v", projected[1])
 	}
-	if !strings.Contains(providertypes.ExtractTextForProjection(projected[2].Parts), "tool result") || projected[2].ToolMetadata != nil {
+	if !strings.Contains(renderDisplayParts(projected[2].Parts), "tool result") || projected[2].ToolMetadata != nil {
 		t.Fatalf("metadata-only tool message should be projected, got %+v", projected[2])
 	}
-	if providertypes.ExtractTextForProjection(projected[3].Parts) != microCompactClearedMessage || projected[3].ToolMetadata == nil {
+	if renderDisplayParts(projected[3].Parts) != microCompactClearedMessage || projected[3].ToolMetadata == nil {
 		t.Fatalf("cleared tool content should not be projected, got %+v", projected[3])
 	}
-	if !strings.Contains(providertypes.ExtractTextForProjection(projected[4].Parts), "tool result") || projected[4].ToolMetadata != nil {
+	if !strings.Contains(renderDisplayParts(projected[4].Parts), "tool result") || projected[4].ToolMetadata != nil {
 		t.Fatalf("valid tool message should be projected, got %+v", projected[4])
 	}
 }
@@ -121,21 +121,21 @@ func TestBuildRecentMessagesForModelKeepsOnlyRecentValidAnchors(t *testing.T) {
 	if recent[0].Role != providertypes.RoleAssistant || len(recent[0].ToolCalls) != 1 {
 		t.Fatalf("expected valid tool span to remain, got %+v", recent[0])
 	}
-	if recent[1].Role != providertypes.RoleTool || !strings.Contains(providertypes.ExtractTextForProjection(recent[1].Parts), "tool result") {
+	if recent[1].Role != providertypes.RoleTool || !strings.Contains(renderDisplayParts(recent[1].Parts), "tool result") {
 		t.Fatalf("expected tool message to be projected, got %+v", recent[1])
 	}
-	if strings.Contains(providertypes.ExtractTextForProjection(recent[1].Parts), "content:\nREADME body") {
+	if strings.Contains(renderDisplayParts(recent[1].Parts), "content:\nREADME body") {
 		t.Fatalf("expected tool payload to be minimized, got %+v", recent[1])
 	}
-	if !strings.Contains(providertypes.ExtractTextForProjection(recent[1].Parts), "content_excerpt:") {
+	if !strings.Contains(renderDisplayParts(recent[1].Parts), "content_excerpt:") {
 		t.Fatalf("expected tool payload excerpt marker, got %+v", recent[1])
 	}
-	if providertypes.ExtractTextForProjection(recent[2].Parts) != "latest-user" {
+	if renderDisplayParts(recent[2].Parts) != "latest-user" {
 		t.Fatalf("expected latest user anchor to remain, got %+v", recent[2])
 	}
 
 	recent[1].Parts = []providertypes.ContentPart{providertypes.NewTextPart("changed")}
-	if providertypes.ExtractTextForProjection(original[2].Parts) != "README body" {
+	if renderDisplayParts(original[2].Parts) != "README body" {
 		t.Fatalf("expected original messages to remain unchanged, got %+v", original[2])
 	}
 }
@@ -171,7 +171,7 @@ func TestBuildRecentMessagesForModelRespectsAbsoluteMessageBudget(t *testing.T) 
 	if len(recent) != 2 {
 		t.Fatalf("len(recent) = %d, want 2", len(recent))
 	}
-	if providertypes.ExtractTextForProjection(recent[0].Parts) != "old-user" || providertypes.ExtractTextForProjection(recent[1].Parts) != "latest-user" {
+	if renderDisplayParts(recent[0].Parts) != "old-user" || renderDisplayParts(recent[1].Parts) != "latest-user" {
 		t.Fatalf("expected oversized tool span to be skipped, got %+v", recent)
 	}
 }

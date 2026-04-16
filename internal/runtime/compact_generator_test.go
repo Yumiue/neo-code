@@ -92,7 +92,7 @@ func TestCompactSummaryGeneratorBuildsProviderRequestWithoutTools(t *testing.T) 
 	if len(req.Messages) != 1 || req.Messages[0].Role != providertypes.RoleUser {
 		t.Fatalf("expected a single user prompt, got %+v", req.Messages)
 	}
-	promptText := providertypes.ExtractTextForProjection(req.Messages[0].Parts)
+	promptText := renderPartsForTest(req.Messages[0].Parts)
 	if !strings.Contains(promptText, "<archived_source_material>") {
 		t.Fatalf("expected archived material boundary, got %q", promptText)
 	}

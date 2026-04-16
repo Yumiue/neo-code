@@ -144,7 +144,7 @@ func isInjectableToolMessage(message providertypes.Message) bool {
 	if message.Role != providertypes.RoleTool {
 		return false
 	}
-	content := strings.TrimSpace(providertypes.ExtractTextForProjection(message.Parts))
+	content := strings.TrimSpace(renderDisplayParts(message.Parts))
 	if content == microCompactClearedMessage {
 		return false
 	}
@@ -173,7 +173,7 @@ func sanitizeRecentWindowToolMessages(messages []providertypes.Message) []provid
 		if message.Role != providertypes.RoleTool {
 			continue
 		}
-		messages[index].Parts = []providertypes.ContentPart{providertypes.NewTextPart(sanitizeProjectedToolContent(providertypes.ExtractTextForProjection(message.Parts)))}
+		messages[index].Parts = []providertypes.ContentPart{providertypes.NewTextPart(sanitizeProjectedToolContent(renderTranscriptParts(message.Parts)))}
 	}
 	return messages
 }

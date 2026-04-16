@@ -48,7 +48,7 @@ func TestAutoExtractorDebounceMergesRequests(t *testing.T) {
 	svc := newAutoExtractorTestService(t)
 	extractor := &stubMemoExtractor{
 		extractFn: func(ctx context.Context, messages []providertypes.Message) ([]Entry, error) {
-			last := providertypes.ExtractTextForProjection(messages[len(messages)-1].Parts)
+			last := renderMemoParts(messages[len(messages)-1].Parts)
 			return []Entry{{Type: TypeProject, Title: last, Content: last, Source: SourceAutoExtract}}, nil
 		},
 	}
@@ -88,14 +88,14 @@ func TestAutoExtractorTrailingRun(t *testing.T) {
 
 	extractor := &stubMemoExtractor{
 		extractFn: func(ctx context.Context, messages []providertypes.Message) ([]Entry, error) {
-			switch providertypes.ExtractTextForProjection(messages[len(messages)-1].Parts) {
+			switch renderMemoParts(messages[len(messages)-1].Parts) {
 			case "first":
 				firstStarted <- struct{}{}
 				<-releaseFirst
 			case "second":
 				secondStarted <- struct{}{}
 			}
-			last := providertypes.ExtractTextForProjection(messages[len(messages)-1].Parts)
+			last := renderMemoParts(messages[len(messages)-1].Parts)
 			return []Entry{{Type: TypeProject, Title: last, Content: last, Source: SourceAutoExtract}}, nil
 		},
 	}

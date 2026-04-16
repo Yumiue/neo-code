@@ -227,11 +227,11 @@ func TestLLMExtractorExtractUsesRecentNonToolMessages(t *testing.T) {
 			t.Fatalf("unexpected tool message in extraction context: %#v", message)
 		}
 	}
-	if providertypes.ExtractTextForProjection(generator.messages[0].Parts) != "user-c" ||
-		providertypes.ExtractTextForProjection(generator.messages[9].Parts) != "user-l" {
+	if renderMemoParts(generator.messages[0].Parts) != "user-c" ||
+		renderMemoParts(generator.messages[9].Parts) != "user-l" {
 		t.Fatalf("unexpected recent window: first=%q last=%q",
-			providertypes.ExtractTextForProjection(generator.messages[0].Parts),
-			providertypes.ExtractTextForProjection(generator.messages[9].Parts))
+			renderMemoParts(generator.messages[0].Parts),
+			renderMemoParts(generator.messages[9].Parts))
 	}
 }
 
@@ -294,7 +294,7 @@ func TestLLMExtractorExtractKeepsProjectedToolCallSpan(t *testing.T) {
 	if toolMessage.Role != providertypes.RoleTool {
 		t.Fatalf("expected projected tool message, got %#v", toolMessage)
 	}
-	toolText := providertypes.ExtractTextForProjection(toolMessage.Parts)
+	toolText := renderMemoParts(toolMessage.Parts)
 	if !strings.Contains(toolText, "tool result") || !strings.Contains(toolText, "tool: filesystem_read_file") {
 		t.Fatalf("expected projected tool text, got %q", toolText)
 	}
@@ -331,7 +331,7 @@ func TestLLMExtractorExtractKeepsMetadataOnlyToolCallSpan(t *testing.T) {
 	if toolMessage.Role != providertypes.RoleTool {
 		t.Fatalf("expected projected tool message, got %#v", toolMessage)
 	}
-	toolText := providertypes.ExtractTextForProjection(toolMessage.Parts)
+	toolText := renderMemoParts(toolMessage.Parts)
 	if !strings.Contains(toolText, "tool result") ||
 		!strings.Contains(toolText, "tool: filesystem_read_file") ||
 		!strings.Contains(toolText, "meta.path: README.md") {
@@ -408,5 +408,23 @@ func TestExtractJSONArrayErrors(t *testing.T) {
 	}
 	if _, err := extractJSONArray(`[{"a":"x"}`); err == nil || !strings.Contains(err.Error(), "incomplete") {
 		t.Fatalf("expected incomplete array error, got %v", err)
+	}
+}
+
+func TestLLMExtractorExtractImageOnlyUserMessageTriggersGenerator(t *testing.T) {
+	generator := &stubTextGenerator{response: `[]`}
+	extractor := NewLLMExtractor(generator)
+
+	entries, err := extractor.Extract(context.Background(), []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewRemoteImagePart("https://example.com/pic.png")}},
+	})
+	if err != nil {
+		t.Fatalf("Extract() error = %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("len(entries) = %d, want 0", len(entries))
+	}
+	if generator.calls != 1 {
+		t.Fatalf("Generate() calls = %d, want 1", generator.calls)
 	}
 }

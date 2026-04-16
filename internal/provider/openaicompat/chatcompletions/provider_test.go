@@ -611,6 +611,48 @@ func TestGenerateVariants(t *testing.T) {
 		}
 	})
 
+	t.Run("does not retry without tools on 400", func(t *testing.T) {
+		t.Parallel()
+
+		var reqCount int
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			reqCount++
+			var payload Request
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			if reqCount == 1 {
+				if len(payload.Tools) == 0 {
+					t.Fatalf("first request should include tools")
+				}
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"error":{"message":"schema rejected"}}`))
+				return
+			}
+			t.Fatalf("unexpected retry request without explicit retry policy")
+		}))
+		defer server.Close()
+
+		p, err := New(testCfg(server.URL, "gpt-4.1", "test-key"), server.Client())
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+		events := make(chan providertypes.StreamEvent, 4)
+		err = p.Generate(context.Background(), providertypes.GenerateRequest{
+			Messages: []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
+			Tools:    []providertypes.ToolSpec{{Name: "read_file", Description: "read", Schema: map[string]any{"type": "object"}}},
+		}, events)
+		if err == nil || !strings.Contains(err.Error(), "schema rejected") {
+			t.Fatalf("Generate() expected original 400 error, got %v", err)
+		}
+		if reqCount != 1 {
+			t.Fatalf("expected one request without tool-stripping retry, got %d", reqCount)
+		}
+		if drained := drain(events); len(drained) != 0 {
+			t.Fatalf("expected no stream events after 400, got %+v", drained)
+		}
+	})
+
 	t.Run("success", func(t *testing.T) {
 		t.Parallel()
 

@@ -56,3 +56,22 @@ func TestRetainedStartForKeepRecentMessagesHonorsProtectedTail(t *testing.T) {
 		t.Fatalf("expected protected tail start 2, got %d", start)
 	}
 }
+
+func TestBuildMessageSpansTreatsImageOnlyUserMessageAsExplicitInput(t *testing.T) {
+	t.Parallel()
+
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("old")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("ack")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewRemoteImagePart("https://example.com/image.png")}},
+	}
+
+	spans := BuildMessageSpans(messages)
+	protectedStart, ok := ProtectedTailStart(spans)
+	if !ok {
+		t.Fatalf("expected protected tail for image-only user message")
+	}
+	if protectedStart != 2 {
+		t.Fatalf("expected protected tail start 2, got %d", protectedStart)
+	}
+}

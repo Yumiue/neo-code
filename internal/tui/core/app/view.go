@@ -223,11 +223,11 @@ func (a App) renderPanel(title string, subtitle string, body string, width int, 
 func (a App) renderMessageBlockWithCopy(message providertypes.Message, width int, startCopyID int) (string, []copyCodeButtonBinding) {
 	switch message.Role {
 	case roleEvent:
-		return a.styles.inlineNotice.Width(width).Render("  > " + wrapPlain(providertypes.ExtractTextForProjection(message.Parts), max(16, width-6))), nil
+		return a.styles.inlineNotice.Width(width).Render("  > " + wrapPlain(renderMessagePartsForDisplay(message.Parts), max(16, width-6))), nil
 	case roleError:
-		return a.styles.inlineError.Width(width).Render("  ! " + wrapPlain(providertypes.ExtractTextForProjection(message.Parts), max(16, width-6))), nil
+		return a.styles.inlineError.Width(width).Render("  ! " + wrapPlain(renderMessagePartsForDisplay(message.Parts), max(16, width-6))), nil
 	case roleSystem:
-		return a.styles.inlineSystem.Width(width).Render("  - " + wrapPlain(providertypes.ExtractTextForProjection(message.Parts), max(16, width-6))), nil
+		return a.styles.inlineSystem.Width(width).Render("  - " + wrapPlain(renderMessagePartsForDisplay(message.Parts), max(16, width-6))), nil
 	}
 
 	maxMessageWidth := tuiutils.Clamp(int(float64(width)*0.84), 24, width)
@@ -245,7 +245,7 @@ func (a App) renderMessageBlockWithCopy(message providertypes.Message, width int
 		return "", nil
 	}
 
-	content := strings.TrimSpace(providertypes.ExtractTextForProjection(message.Parts))
+	content := strings.TrimSpace(renderMessagePartsForDisplay(message.Parts))
 	if content == "" && len(message.ToolCalls) > 0 {
 		names := make([]string, 0, len(message.ToolCalls))
 		for _, call := range message.ToolCalls {

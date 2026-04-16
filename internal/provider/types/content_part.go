@@ -2,7 +2,6 @@ package types
 
 import (
 	"errors"
-	"strings"
 )
 
 // ContentPartKind defines the type of a content part.
@@ -121,18 +120,4 @@ func CloneParts(parts []ContentPart) []ContentPart {
 		res[i] = clone
 	}
 	return res
-}
-
-// ExtractTextForProjection extracts pure text from parts for legacy compatibility.
-// TODO(Phase 4): Migrate to proper Part rendering.
-func ExtractTextForProjection(parts []ContentPart) string {
-	var builder strings.Builder
-	for _, part := range parts {
-		if part.Kind == ContentPartText {
-			builder.WriteString(part.Text)
-		} else if part.Kind == ContentPartImage {
-			builder.WriteString("[Image]")
-		}
-	}
-	return builder.String()
 }

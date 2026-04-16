@@ -112,7 +112,7 @@ func TestManualCompactKeepRecentRetainsRecentMessagesAndWholeToolBlock(t *testin
 		t.Fatalf("expected summary role assistant, got %q", result.Messages[0].Role)
 	}
 	for _, section := range []string{"done:", "in_progress:", "decisions:", "code_changes:", "constraints:"} {
-		summaryText := providertypes.ExtractTextForProjection(result.Messages[0].Parts)
+		summaryText := renderTranscriptParts(result.Messages[0].Parts)
 		if !strings.Contains(summaryText, section) {
 			t.Fatalf("expected summary to include section %q, got %q", section, summaryText)
 		}
@@ -184,7 +184,7 @@ func TestManualCompactPassesCurrentTaskStateAndFiltersOldDisplaySummary(t *testi
 	if len(generator.calls[0].ArchivedMessages) != 2 {
 		t.Fatalf("expected old display summary filtered from archived messages, got %+v", generator.calls[0].ArchivedMessages)
 	}
-	if strings.HasPrefix(strings.TrimSpace(providertypes.ExtractTextForProjection(generator.calls[0].ArchivedMessages[0].Parts)), "[compact_summary]") {
+	if strings.HasPrefix(strings.TrimSpace(renderTranscriptParts(generator.calls[0].ArchivedMessages[0].Parts)), "[compact_summary]") {
 		t.Fatalf("expected compact summary message to be filtered, got %+v", generator.calls[0].ArchivedMessages)
 	}
 }
@@ -348,7 +348,7 @@ func TestManualCompactKeepRecentProtectsLatestExplicitUserInstruction(t *testing
 	if len(generator.calls[0].ArchivedMessages) != 2 || len(generator.calls[0].RetainedMessages) != 7 {
 		t.Fatalf("expected protected tail to start at latest user instruction, got %+v", generator.calls[0])
 	}
-	if result.Messages[1].Role != providertypes.RoleUser || providertypes.ExtractTextForProjection(result.Messages[1].Parts) != "latest explicit instruction" {
+	if result.Messages[1].Role != providertypes.RoleUser || renderTranscriptParts(result.Messages[1].Parts) != "latest explicit instruction" {
 		t.Fatalf("expected retained latest explicit instruction, got %+v", result.Messages[1])
 	}
 }

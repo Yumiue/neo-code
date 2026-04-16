@@ -447,10 +447,27 @@ func validateUserInputParts(parts []providertypes.ContentPart) error {
 	if err := providertypes.ValidateParts(parts); err != nil {
 		return fmt.Errorf("runtime: invalid input parts: %w", err)
 	}
-	if strings.TrimSpace(providertypes.ExtractTextForProjection(parts)) == "" {
+	if !hasUserInputParts(parts) {
 		return errors.New("runtime: input content is empty")
 	}
 	return nil
+}
+
+// hasUserInputParts 判断用户输入是否包含可执行语义，图片输入也应被视为有效请求。
+func hasUserInputParts(parts []providertypes.ContentPart) bool {
+	for _, part := range parts {
+		switch part.Kind {
+		case providertypes.ContentPartText:
+			if strings.TrimSpace(part.Text) != "" {
+				return true
+			}
+		case providertypes.ContentPartImage:
+			if part.Image != nil {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // sessionTitleFromParts extracts a sensible title from the input parts.

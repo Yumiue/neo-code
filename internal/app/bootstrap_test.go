@@ -1121,7 +1121,7 @@ func TestRuntimeMemoExtractorFuncSchedule(t *testing.T) {
 		if sessionID != "session-1" {
 			t.Fatalf("unexpected session id %q", sessionID)
 		}
-		if len(messages) != 1 || providertypes.ExtractTextForProjection(messages[0].Parts) != "hi" {
+		if len(messages) != 1 || renderPartsForTest(messages[0].Parts) != "hi" {
 			t.Fatalf("unexpected messages %+v", messages)
 		}
 	})
@@ -1144,7 +1144,7 @@ func TestTextGenAdapterGenerate(t *testing.T) {
 		if prompt != "prompt" {
 			t.Fatalf("unexpected prompt %q", prompt)
 		}
-		if len(msgs) != 1 || providertypes.ExtractTextForProjection(msgs[0].Parts) != "msg" {
+		if len(msgs) != 1 || renderPartsForTest(msgs[0].Parts) != "msg" {
 			t.Fatalf("unexpected messages %+v", msgs)
 		}
 		return "ok", nil

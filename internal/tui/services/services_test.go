@@ -97,7 +97,7 @@ func TestRunAgentCmd(t *testing.T) {
 	runner := &stubRunner{err: errors.New("boom")}
 	input := agentruntime.UserInput{SessionID: "s1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}, Workdir: "D:/"}
 	msg := RunAgentCmd(runner, input, func(err error) tea.Msg { return err })()
-	if runner.lastInput.SessionID != "s1" || providertypes.ExtractTextForProjection(runner.lastInput.Parts) != "hello" {
+	if runner.lastInput.SessionID != "s1" || renderPartsForTest(runner.lastInput.Parts) != "hello" {
 		t.Fatalf("unexpected runner input: %+v", runner.lastInput)
 	}
 	if err, ok := msg.(error); !ok || err == nil || err.Error() != "boom" {

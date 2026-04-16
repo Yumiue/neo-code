@@ -60,7 +60,7 @@ func TestCompactionPlannerFullReplaceProtectsLatestExplicitUserInstruction(t *te
 	if len(plan.Archived) != 2 || len(plan.Retained) != 2 {
 		t.Fatalf("unexpected full_replace plan: %+v", plan)
 	}
-	if plan.Retained[0].Role != providertypes.RoleUser || providertypes.ExtractTextForProjection(plan.Retained[0].Parts) != "latest instruction" {
+	if plan.Retained[0].Role != providertypes.RoleUser || renderTranscriptParts(plan.Retained[0].Parts) != "latest instruction" {
 		t.Fatalf("expected latest explicit user instruction to stay retained, got %+v", plan.Retained)
 	}
 }

@@ -33,7 +33,7 @@ func TestCloneProviderMessageHandlesEmptyCollections(t *testing.T) {
 	t.Parallel()
 
 	cloned := cloneProviderMessage(providertypes.Message{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}})
-	if cloned.Role != providertypes.RoleUser || providertypes.ExtractTextForProjection(cloned.Parts) != "hi" {
+	if cloned.Role != providertypes.RoleUser || renderMemoParts(cloned.Parts) != "hi" {
 		t.Fatalf("unexpected cloned message %+v", cloned)
 	}
 	if cloned.ToolCalls != nil {

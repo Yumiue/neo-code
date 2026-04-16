@@ -150,6 +150,6 @@ func shouldClearToolMessage(message providertypes.Message, compactableIDs map[st
 		return false
 	}
 
-	content := strings.TrimSpace(providertypes.ExtractTextForProjection(message.Parts))
+	content := strings.TrimSpace(renderDisplayParts(message.Parts))
 	return content != "" && content != microCompactClearedMessage
 }

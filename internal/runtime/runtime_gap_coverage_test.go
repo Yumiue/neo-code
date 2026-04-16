@@ -102,7 +102,7 @@ func TestRunCompactForSessionSaveErrorPolicyBranches(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected strict mode save error")
 	}
-	if providertypes.ExtractTextForProjection(strictSession.Messages[0].Parts) != "before" {
+	if renderPartsForTest(strictSession.Messages[0].Parts) != "before" {
 		t.Fatalf("expected strict mode to rollback messages, got %+v", strictSession.Messages)
 	}
 	if strictSession.TaskState.Goal != "before-goal" {
@@ -123,7 +123,7 @@ func TestRunCompactForSessionSaveErrorPolicyBranches(t *testing.T) {
 	if bestEffortResult.Applied {
 		t.Fatalf("expected empty compact result on best effort save failure")
 	}
-	if providertypes.ExtractTextForProjection(bestEffortSession.Messages[0].Parts) != "before" {
+	if renderPartsForTest(bestEffortSession.Messages[0].Parts) != "before" {
 		t.Fatalf("expected best effort rollback messages, got %+v", bestEffortSession.Messages)
 	}
 	if bestEffortSession.TaskState.Goal != "before-goal" {

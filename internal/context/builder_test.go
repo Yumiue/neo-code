@@ -202,7 +202,7 @@ func TestDefaultBuilderBuildUsesSpanTrimPolicyWhenTrimPolicyIsUnset(t *testing.T
 	if len(got.Messages) != maxRetainedMessageSpans {
 		t.Fatalf("expected %d retained messages, got %d", maxRetainedMessageSpans, len(got.Messages))
 	}
-	if providertypes.ExtractTextForProjection(got.Messages[0].Parts) != "u-2" {
+	if renderDisplayParts(got.Messages[0].Parts) != "u-2" {
 		t.Fatalf("expected oldest messages to be trimmed, got first message %+v", got.Messages[0])
 	}
 }
@@ -268,14 +268,14 @@ func TestDefaultBuilderBuildAppliesMicroCompactAfterTrim(t *testing.T) {
 	if len(got.Messages) != len(messages) {
 		t.Fatalf("expected builder output to keep message count, got %d want %d", len(got.Messages), len(messages))
 	}
-	if providertypes.ExtractTextForProjection(got.Messages[2].Parts) != microCompactClearedMessage {
-		t.Fatalf("expected builder output to clear older tool result, got %q", providertypes.ExtractTextForProjection(got.Messages[2].Parts))
+	if renderDisplayParts(got.Messages[2].Parts) != microCompactClearedMessage {
+		t.Fatalf("expected builder output to clear older tool result, got %q", renderDisplayParts(got.Messages[2].Parts))
 	}
-	if providertypes.ExtractTextForProjection(got.Messages[4].Parts) != "recent bash result" {
-		t.Fatalf("expected recent tool result to stay visible, got %q", providertypes.ExtractTextForProjection(got.Messages[4].Parts))
+	if renderDisplayParts(got.Messages[4].Parts) != "recent bash result" {
+		t.Fatalf("expected recent tool result to stay visible, got %q", renderDisplayParts(got.Messages[4].Parts))
 	}
-	if providertypes.ExtractTextForProjection(got.Messages[6].Parts) != "latest webfetch result" {
-		t.Fatalf("expected latest tool result to stay visible, got %q", providertypes.ExtractTextForProjection(got.Messages[6].Parts))
+	if renderDisplayParts(got.Messages[6].Parts) != "latest webfetch result" {
+		t.Fatalf("expected latest tool result to stay visible, got %q", renderDisplayParts(got.Messages[6].Parts))
 	}
 }
 
@@ -310,8 +310,8 @@ func TestDefaultBuilderBuildSkipsMicroCompactWithoutEstablishedTaskState(t *test
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	if providertypes.ExtractTextForProjection(got.Messages[2].Parts) != "old read result" {
-		t.Fatalf("expected old tool result to remain visible without task state, got %q", providertypes.ExtractTextForProjection(got.Messages[2].Parts))
+	if renderDisplayParts(got.Messages[2].Parts) != "old read result" {
+		t.Fatalf("expected old tool result to remain visible without task state, got %q", renderDisplayParts(got.Messages[2].Parts))
 	}
 }
 
@@ -410,8 +410,8 @@ func TestDefaultBuilderBuildHonorsToolMicroCompactPolicies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	if providertypes.ExtractTextForProjection(got.Messages[2].Parts) != "old custom result" {
-		t.Fatalf("expected preserved tool result to remain, got %q", providertypes.ExtractTextForProjection(got.Messages[2].Parts))
+	if renderDisplayParts(got.Messages[2].Parts) != "old custom result" {
+		t.Fatalf("expected preserved tool result to remain, got %q", renderDisplayParts(got.Messages[2].Parts))
 	}
 }
 
@@ -452,8 +452,8 @@ func TestNewBuilderWithToolPoliciesUsesProvidedPolicySource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	if providertypes.ExtractTextForProjection(got.Messages[2].Parts) != "old custom result" {
-		t.Fatalf("expected preserved tool result to remain, got %q", providertypes.ExtractTextForProjection(got.Messages[2].Parts))
+	if renderDisplayParts(got.Messages[2].Parts) != "old custom result" {
+		t.Fatalf("expected preserved tool result to remain, got %q", renderDisplayParts(got.Messages[2].Parts))
 	}
 }
 
@@ -521,7 +521,7 @@ func TestTrimMessagesProtectsLatestExplicitUserInstructionTail(t *testing.T) {
 	)
 
 	trimmed := trimMessages(messages, retainedSpans)
-	if trimmed[0].Role != providertypes.RoleUser || providertypes.ExtractTextForProjection(trimmed[0].Parts) != "latest explicit instruction" {
+	if trimmed[0].Role != providertypes.RoleUser || renderDisplayParts(trimmed[0].Parts) != "latest explicit instruction" {
 		t.Fatalf("expected protected tail to keep latest explicit user instruction, got %+v", trimmed[0])
 	}
 	if len(trimmed) != 12 {
@@ -561,7 +561,7 @@ func TestTrimMessagesUsesSharedSpanModel(t *testing.T) {
 	trimmed := trimMessages(messages, retainedSpans)
 
 	start := spans[len(spans)-retainedSpans].Start
-	if len(trimmed) == 0 || providertypes.ExtractTextForProjection(trimmed[0].Parts) != providertypes.ExtractTextForProjection(messages[start].Parts) {
+	if len(trimmed) == 0 || renderDisplayParts(trimmed[0].Parts) != renderDisplayParts(messages[start].Parts) {
 		t.Fatalf("expected trim to start from shared span boundary %d, got %+v", start, trimmed)
 	}
 	if trimmed[0].Role != providertypes.RoleAssistant || len(trimmed[0].ToolCalls) != 1 {
@@ -640,7 +640,7 @@ func TestTrimMessagesBoundaries(t *testing.T) {
 			wantLen: maxRetainedMessageSpans + 1,
 			assert: func(t *testing.T, original []providertypes.Message, trimmed []providertypes.Message) {
 				t.Helper()
-				if providertypes.ExtractTextForProjection(trimmed[0].Parts) != "u-2" {
+				if renderDisplayParts(trimmed[0].Parts) != "u-2" {
 					t.Fatalf("expected oldest spans to be removed, got first message %+v", trimmed[0])
 				}
 				if trimmed[len(trimmed)-1].Role != "tool" {
@@ -800,7 +800,7 @@ func TestProjectToolMessagesForModelKeepsBuilderProjectionBehavior(t *testing.T)
 	if len(projected) != 1 {
 		t.Fatalf("len(projected) = %d, want 1", len(projected))
 	}
-	projectedText := providertypes.ExtractTextForProjection(projected[0].Parts)
+	projectedText := renderDisplayParts(projected[0].Parts)
 	if !strings.Contains(projectedText, "tool result") || !strings.Contains(projectedText, "tool: filesystem_read_file") {
 		t.Fatalf("unexpected projected content: %q", projectedText)
 	}
@@ -844,7 +844,7 @@ func TestDefaultBuilderBuildProjectsMetadataOnlyToolResult(t *testing.T) {
 	if toolMessage.Role != providertypes.RoleTool {
 		t.Fatalf("expected tool message at index 2, got %+v", toolMessage)
 	}
-	toolMessageText := providertypes.ExtractTextForProjection(toolMessage.Parts)
+	toolMessageText := renderDisplayParts(toolMessage.Parts)
 	if !strings.Contains(toolMessageText, "tool result") ||
 		!strings.Contains(toolMessageText, "tool: filesystem_read_file") ||
 		!strings.Contains(toolMessageText, "meta.path: README.md") {
