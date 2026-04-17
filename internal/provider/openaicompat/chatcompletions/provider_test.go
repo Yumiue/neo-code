@@ -34,11 +34,21 @@ func TestNewAndBuildRequest(t *testing.T) {
 	t.Run("build request variants", func(t *testing.T) {
 		t.Parallel()
 
-		if _, err := BuildRequest(testCfg("https://api.example.com/v1", "", "test-key"), providertypes.GenerateRequest{}); err == nil || !strings.Contains(err.Error(), "model is empty") {
+		if _, err := BuildRequest(context.Background(), testCfg("https://api.example.com/v1", "", "test-key"), providertypes.GenerateRequest{}); err == nil || !strings.Contains(err.Error(), "model is empty") {
 			t.Fatalf("expected model error, got %v", err)
 		}
+		if _, err := BuildRequest(context.Background(), testCfg("https://api.example.com/v1", "gpt-4.1", "test-key"), providertypes.GenerateRequest{
+			Messages: []providertypes.Message{
+				{
+					Role:  providertypes.RoleUser,
+					Parts: []providertypes.ContentPart{providertypes.NewSessionAssetImagePart("asset-without-reader", "image/png")},
+				},
+			},
+		}); err == nil || !strings.Contains(err.Error(), "session_asset reader is not configured") {
+			t.Fatalf("expected BuildRequest conversion error, got %v", err)
+		}
 
-		payload, err := BuildRequest(testCfg("https://api.example.com/v1", "gpt-4.1", "test-key"), providertypes.GenerateRequest{
+		payload, err := BuildRequest(context.Background(), testCfg("https://api.example.com/v1", "gpt-4.1", "test-key"), providertypes.GenerateRequest{
 			Model:        "gpt-5.4",
 			SystemPrompt: "system",
 			Messages: []providertypes.Message{
@@ -61,7 +71,52 @@ func TestNewAndBuildRequest(t *testing.T) {
 			t.Fatalf("unexpected tools: %+v", payload.Tools)
 		}
 
-		fallback, err := BuildRequest(testCfg("https://api.example.com/v1", "gpt-4.1", "test-key"), providertypes.GenerateRequest{
+		withSessionAsset, err := BuildRequest(context.Background(), testCfg("https://api.example.com/v1", "gpt-4.1", "test-key"), providertypes.GenerateRequest{
+			Messages: []providertypes.Message{
+				{
+					Role: providertypes.RoleUser,
+					Parts: []providertypes.ContentPart{
+						providertypes.NewSessionAssetImagePart("asset-1", "image/png"),
+					},
+				},
+			},
+			SessionAssetReader: stubSessionAssetReader{
+				assets: map[string]stubSessionAsset{
+					"asset-1": {data: []byte("img"), mime: "image/png"},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("BuildRequest() session asset error = %v", err)
+		}
+		converted, ok := withSessionAsset.Messages[0].Content.([]MessageContentPart)
+		if !ok || len(converted) != 1 || !strings.HasPrefix(converted[0].ImageURL.URL, "data:image/png;base64,") {
+			t.Fatalf("unexpected session asset conversion: %+v", withSessionAsset.Messages[0].Content)
+		}
+
+		halfBudget := providertypes.MaxSessionAssetsTotalBytes / 2
+		overBudgetSize := int(halfBudget + 1)
+		if _, err := BuildRequest(context.Background(), testCfg("https://api.example.com/v1", "gpt-4.1", "test-key"), providertypes.GenerateRequest{
+			Messages: []providertypes.Message{
+				{
+					Role: providertypes.RoleUser,
+					Parts: []providertypes.ContentPart{
+						providertypes.NewSessionAssetImagePart("asset-1", "image/png"),
+						providertypes.NewSessionAssetImagePart("asset-2", "image/png"),
+					},
+				},
+			},
+			SessionAssetReader: stubSessionAssetReader{
+				assets: map[string]stubSessionAsset{
+					"asset-1": {data: make([]byte, overBudgetSize), mime: "image/png"},
+					"asset-2": {data: make([]byte, overBudgetSize), mime: "image/png"},
+				},
+			},
+		}); err == nil || !strings.Contains(err.Error(), "session_asset total exceeds") {
+			t.Fatalf("expected session_asset total budget error, got %v", err)
+		}
+
+		fallback, err := BuildRequest(context.Background(), testCfg("https://api.example.com/v1", "gpt-4.1", "test-key"), providertypes.GenerateRequest{
 			SystemPrompt: "   ",
 			Messages:     []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
 			Tools:        []providertypes.ToolSpec{},
@@ -77,7 +132,11 @@ func TestNewAndBuildRequest(t *testing.T) {
 	t.Run("message conversion", func(t *testing.T) {
 		t.Parallel()
 
-		user, err := ToOpenAIMessage(providertypes.Message{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}})
+		user, err := ToOpenAIMessage(
+			context.Background(),
+			providertypes.Message{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
+			nil,
+		)
 		if err != nil {
 			t.Fatalf("ToOpenAIMessage() user error = %v", err)
 		}
@@ -85,13 +144,13 @@ func TestNewAndBuildRequest(t *testing.T) {
 			t.Fatalf("unexpected user message: %+v", user)
 		}
 
-		multiText, err := ToOpenAIMessage(providertypes.Message{
+		multiText, err := ToOpenAIMessage(context.Background(), providertypes.Message{
 			Role: providertypes.RoleUser,
 			Parts: []providertypes.ContentPart{
 				providertypes.NewTextPart("hello "),
 				providertypes.NewTextPart("world"),
 			},
-		})
+		}, nil)
 		if err != nil {
 			t.Fatalf("ToOpenAIMessage() multiText error = %v", err)
 		}
@@ -99,12 +158,12 @@ func TestNewAndBuildRequest(t *testing.T) {
 			t.Fatalf("unexpected multiText content: %+v", multiText.Content)
 		}
 
-		assistant, err := ToOpenAIMessage(providertypes.Message{
+		assistant, err := ToOpenAIMessage(context.Background(), providertypes.Message{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call_1", Name: "read_file", Arguments: `{"path":"main.go"}`},
 			},
-		})
+		}, nil)
 		if err != nil {
 			t.Fatalf("ToOpenAIMessage() assistant error = %v", err)
 		}
@@ -112,7 +171,11 @@ func TestNewAndBuildRequest(t *testing.T) {
 			t.Fatalf("unexpected assistant message: %+v", assistant)
 		}
 
-		tool, err := ToOpenAIMessage(providertypes.Message{Role: providertypes.RoleTool, ToolCallID: "call_1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("result")}})
+		tool, err := ToOpenAIMessage(
+			context.Background(),
+			providertypes.Message{Role: providertypes.RoleTool, ToolCallID: "call_1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("result")}},
+			nil,
+		)
 		if err != nil {
 			t.Fatalf("ToOpenAIMessage() tool error = %v", err)
 		}
@@ -120,13 +183,13 @@ func TestNewAndBuildRequest(t *testing.T) {
 			t.Fatalf("unexpected tool message: %+v", tool)
 		}
 
-		multiModal, err := ToOpenAIMessage(providertypes.Message{
+		multiModal, err := ToOpenAIMessage(context.Background(), providertypes.Message{
 			Role: providertypes.RoleUser,
 			Parts: []providertypes.ContentPart{
 				providertypes.NewTextPart("look"),
 				providertypes.NewRemoteImagePart("https://example.com/img.png"),
 			},
-		})
+		}, nil)
 		if err != nil {
 			t.Fatalf("ToOpenAIMessage() multiModal error = %v", err)
 		}
@@ -135,36 +198,219 @@ func TestNewAndBuildRequest(t *testing.T) {
 			t.Fatalf("unexpected multiModal message: %+v", multiModal)
 		}
 
-		_, err = ToOpenAIMessage(providertypes.Message{
+		_, err = ToOpenAIMessage(context.Background(), providertypes.Message{
 			Role: providertypes.RoleUser,
 			Parts: []providertypes.ContentPart{
 				providertypes.NewSessionAssetImagePart("asset-1", "image/png"),
 			},
-		})
-		if err == nil || !strings.Contains(err.Error(), "session_asset image is not supported") {
-			t.Fatalf("expected session_asset error, got %v", err)
+		}, nil)
+		if err == nil || !strings.Contains(err.Error(), "session_asset reader is not configured") {
+			t.Fatalf("expected missing reader error, got %v", err)
+		}
+		_, err = ToOpenAIMessage(context.Background(), providertypes.Message{
+			Role: providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{
+				providertypes.NewSessionAssetImagePart("   ", "image/png"),
+			},
+		}, stubSessionAssetReader{})
+		if err == nil || !strings.Contains(err.Error(), "missing asset id") {
+			t.Fatalf("expected missing asset id error, got %v", err)
 		}
 
-		_, err = ToOpenAIMessage(providertypes.Message{
+		sessionAssetMsg, err := ToOpenAIMessage(context.Background(), providertypes.Message{
+			Role: providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{
+				providertypes.NewSessionAssetImagePart("asset-1", "image/png"),
+			},
+		}, stubSessionAssetReader{
+			assets: map[string]stubSessionAsset{
+				"asset-1": {
+					data: []byte("image-bytes"),
+					mime: "image/png",
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("ToOpenAIMessage() session asset error = %v", err)
+		}
+		sessionParts, ok := sessionAssetMsg.Content.([]MessageContentPart)
+		if !ok || len(sessionParts) != 1 || sessionParts[0].Type != "image_url" ||
+			!strings.HasPrefix(sessionParts[0].ImageURL.URL, "data:image/png;base64,") {
+			t.Fatalf("unexpected session asset message: %+v", sessionAssetMsg)
+		}
+
+		_, err = ToOpenAIMessage(context.Background(), providertypes.Message{
+			Role: providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{
+				providertypes.NewSessionAssetImagePart("asset-unsupported", "image/png"),
+			},
+		}, stubSessionAssetReader{
+			assets: map[string]stubSessionAsset{
+				"asset-unsupported": {
+					data: []byte("data"),
+					mime: "application/octet-stream",
+				},
+			},
+		})
+		if err == nil || !strings.Contains(err.Error(), "unsupported mime type") {
+			t.Fatalf("expected unsupported mime type error, got %v", err)
+		}
+
+		_, err = ToOpenAIMessage(context.Background(), providertypes.Message{
+			Role: providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{
+				providertypes.NewSessionAssetImagePart("asset-missing-mime", ""),
+			},
+		}, stubSessionAssetReader{
+			assets: map[string]stubSessionAsset{
+				"asset-missing-mime": {
+					data: []byte("data"),
+					mime: "   ",
+				},
+			},
+		})
+		if err == nil || !strings.Contains(err.Error(), "missing mime type") {
+			t.Fatalf("expected missing mime type error, got %v", err)
+		}
+
+		_, err = ToOpenAIMessage(context.Background(), providertypes.Message{
+			Role: providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{
+				providertypes.NewSessionAssetImagePart("asset-big", "image/png"),
+			},
+		}, stubSessionAssetReader{
+			assets: map[string]stubSessionAsset{
+				"asset-big": {
+					data: make([]byte, providertypes.MaxSessionAssetBytes+1),
+					mime: "image/png",
+				},
+			},
+		})
+		if err == nil || !strings.Contains(err.Error(), "exceeds") {
+			t.Fatalf("expected oversized session asset error, got %v", err)
+		}
+
+		canceledCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err = ToOpenAIMessage(canceledCtx, providertypes.Message{
+			Role: providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{
+				providertypes.NewSessionAssetImagePart("asset-cancel", "image/png"),
+			},
+		}, stubSessionAssetReader{
+			openFunc: func(ctx context.Context, assetID string) (io.ReadCloser, string, error) {
+				if !errors.Is(ctx.Err(), context.Canceled) {
+					t.Fatalf("expected canceled ctx in reader, asset=%s err=%v", assetID, ctx.Err())
+				}
+				return nil, "", ctx.Err()
+			},
+		})
+		if err == nil || !strings.Contains(err.Error(), "context canceled") {
+			t.Fatalf("expected context canceled error, got %v", err)
+		}
+
+		_, err = ToOpenAIMessage(context.Background(), providertypes.Message{
 			Role: providertypes.RoleUser,
 			Parts: []providertypes.ContentPart{
 				{Kind: providertypes.ContentPartImage, Image: &providertypes.ImagePart{SourceType: "unknown"}},
 			},
-		})
+		}, nil)
 		if err == nil || !strings.Contains(err.Error(), "unsupported source type") {
 			t.Fatalf("expected unsupported image error, got %v", err)
 		}
 
-		_, err = ToOpenAIMessage(providertypes.Message{
+		_, err = ToOpenAIMessage(context.Background(), providertypes.Message{
 			Role: providertypes.RoleUser,
 			Parts: []providertypes.ContentPart{
 				providertypes.NewRemoteImagePart(""),
 			},
-		})
+		}, nil)
 		if err == nil || !strings.Contains(err.Error(), "invalid message parts") {
 			t.Fatalf("expected invalid parts error, got %v", err)
 		}
 	})
+}
+
+func TestResolveSessionAssetDataURLVariants(t *testing.T) {
+	t.Parallel()
+
+	if _, _, err := resolveSessionAssetDataURL(context.Background(), stubSessionAssetReader{
+		assets: map[string]stubSessionAsset{
+			"asset-no-budget": {data: []byte("x"), mime: "image/png"},
+		},
+	}, &providertypes.AssetRef{ID: "asset-no-budget", MimeType: "image/png"}, 0); err == nil ||
+		!strings.Contains(err.Error(), "session_asset total exceeds") {
+		t.Fatalf("expected no budget error, got %v", err)
+	}
+
+	if _, _, err := resolveSessionAssetDataURL(nil, stubSessionAssetReader{
+		assets: map[string]stubSessionAsset{
+			"asset-nil-ctx": {data: []byte("x"), mime: "image/png"},
+		},
+	}, &providertypes.AssetRef{ID: "asset-nil-ctx", MimeType: "image/png"}, maxSessionAssetsTotalBytes); err != nil {
+		t.Fatalf("expected nil context to fallback to background, got %v", err)
+	}
+
+	if _, _, err := resolveSessionAssetDataURL(context.Background(), stubSessionAssetReader{
+		openFunc: func(ctx context.Context, assetID string) (io.ReadCloser, string, error) {
+			_ = ctx
+			_ = assetID
+			return nil, "", errors.New("open failed")
+		},
+	}, &providertypes.AssetRef{ID: "asset-open-error", MimeType: "image/png"}, maxSessionAssetsTotalBytes); err == nil || !strings.Contains(err.Error(), "open session_asset") {
+		t.Fatalf("expected wrapped open error, got %v", err)
+	}
+
+	if _, _, err := resolveSessionAssetDataURL(context.Background(), stubSessionAssetReader{
+		openFunc: func(ctx context.Context, assetID string) (io.ReadCloser, string, error) {
+			_ = ctx
+			_ = assetID
+			return &failingReadCloser{err: errors.New("read failed")}, "image/png", nil
+		},
+	}, &providertypes.AssetRef{ID: "asset-read-error", MimeType: "image/png"}, maxSessionAssetsTotalBytes); err == nil || !strings.Contains(err.Error(), "read session_asset") {
+		t.Fatalf("expected wrapped read error, got %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	if _, _, err := resolveSessionAssetDataURL(ctx, stubSessionAssetReader{
+		openFunc: func(openCtx context.Context, assetID string) (io.ReadCloser, string, error) {
+			_ = openCtx
+			_ = assetID
+			return &cancelOnReadCloser{cancel: cancel}, "image/png", nil
+		},
+	}, &providertypes.AssetRef{ID: "asset-cancel-after-read", MimeType: "image/png"}, maxSessionAssetsTotalBytes); err == nil || !strings.Contains(err.Error(), "context canceled") {
+		t.Fatalf("expected canceled context after read, got %v", err)
+	}
+
+	if _, _, err := resolveSessionAssetDataURL(context.Background(), stubSessionAssetReader{
+		assets: map[string]stubSessionAsset{
+			"asset-empty": {data: []byte{}, mime: "image/png"},
+		},
+	}, &providertypes.AssetRef{ID: "asset-empty", MimeType: "image/png"}, maxSessionAssetsTotalBytes); err == nil || !strings.Contains(err.Error(), "is empty") {
+		t.Fatalf("expected empty asset error, got %v", err)
+	}
+
+	if _, _, err := resolveSessionAssetDataURL(context.Background(), stubSessionAssetReader{
+		assets: map[string]stubSessionAsset{
+			"asset-over-total": {data: []byte("12345"), mime: "image/png"},
+		},
+	}, &providertypes.AssetRef{ID: "asset-over-total", MimeType: "image/png"}, 4); err == nil ||
+		!strings.Contains(err.Error(), "session_asset total exceeds") {
+		t.Fatalf("expected total budget error, got %v", err)
+	}
+
+	if _, _, err := toOpenAIMessageWithBudget(context.Background(), providertypes.Message{
+		Role: providertypes.RoleUser,
+		Parts: []providertypes.ContentPart{
+			providertypes.NewSessionAssetImagePart("asset-negative-budget", "image/png"),
+		},
+	}, stubSessionAssetReader{
+		assets: map[string]stubSessionAsset{
+			"asset-negative-budget": {data: []byte("x"), mime: "image/png"},
+		},
+	}, -1); err == nil || !strings.Contains(err.Error(), "session_asset total exceeds") {
+		t.Fatalf("expected negative budget to fail as no budget, got %v", err)
+	}
 }
 
 func TestParseErrorVariants(t *testing.T) {
@@ -741,6 +987,23 @@ type cancelAfterDoneReader struct {
 	read    bool
 }
 
+type cancelOnReadCloser struct {
+	cancel func()
+	read   bool
+}
+
+func (r *cancelOnReadCloser) Read(p []byte) (int, error) {
+	if r.read {
+		return 0, io.EOF
+	}
+	r.read = true
+	copy(p, []byte("img"))
+	r.cancel()
+	return len("img"), nil
+}
+
+func (r *cancelOnReadCloser) Close() error { return nil }
+
 func (r *cancelAfterDoneReader) Read(p []byte) (int, error) {
 	if !r.read {
 		r.read = true
@@ -748,4 +1011,30 @@ func (r *cancelAfterDoneReader) Read(p []byte) (int, error) {
 	}
 	r.cancel()
 	return 0, r.err
+}
+
+type stubSessionAsset struct {
+	data []byte
+	mime string
+	err  error
+}
+
+type stubSessionAssetReader struct {
+	assets   map[string]stubSessionAsset
+	openFunc func(ctx context.Context, assetID string) (io.ReadCloser, string, error)
+}
+
+func (r stubSessionAssetReader) Open(ctx context.Context, assetID string) (io.ReadCloser, string, error) {
+	if r.openFunc != nil {
+		return r.openFunc(ctx, assetID)
+	}
+	_ = ctx
+	asset, ok := r.assets[assetID]
+	if !ok {
+		return nil, "", errors.New("asset not found")
+	}
+	if asset.err != nil {
+		return nil, "", asset.err
+	}
+	return io.NopCloser(strings.NewReader(string(asset.data))), asset.mime, nil
 }

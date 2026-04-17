@@ -68,7 +68,7 @@ func TestJSONStoreSaveLoadAndListSummaries(t *testing.T) {
 		t.Fatalf("unexpected loaded messages: %+v", loaded.Messages)
 	}
 
-	rawPath := filepath.Join(sessionDirectory(baseDir, workspaceRoot), newer.ID+".json")
+	rawPath := sessionFilePathForTest(baseDir, workspaceRoot, newer.ID)
 	raw, err := os.ReadFile(rawPath)
 	if err != nil {
 		t.Fatalf("read saved session: %v", err)
@@ -77,7 +77,7 @@ func TestJSONStoreSaveLoadAndListSummaries(t *testing.T) {
 		t.Fatalf("expected persisted session file to include workdir, got:\n%s", string(raw))
 	}
 
-	mustWriteSessionFile(t, filepath.Join(sessionDirectory(baseDir, workspaceRoot), "invalid.json"), "{invalid")
+	mustWriteSessionFile(t, sessionFilePathForTest(baseDir, workspaceRoot, "invalid"), "{invalid")
 	if err := os.MkdirAll(filepath.Join(sessionDirectory(baseDir, workspaceRoot), "directory"), 0o755); err != nil {
 		t.Fatalf("mkdir stray directory: %v", err)
 	}
@@ -215,6 +215,9 @@ func TestJSONStoreErrors(t *testing.T) {
 	if _, err := store.ListSummaries(cancelledCtx); err == nil {
 		t.Fatalf("expected cancelled list to fail")
 	}
+	if _, err := store.Load(context.Background(), "   "); err == nil || !strings.Contains(err.Error(), "session id is empty") {
+		t.Fatalf("expected empty session id load error, got %v", err)
+	}
 }
 
 func TestJSONStoreCorruptedSessionBehaviors(t *testing.T) {
@@ -236,7 +239,7 @@ func TestJSONStoreCorruptedSessionBehaviors(t *testing.T) {
 		t.Fatalf("Save valid session: %v", err)
 	}
 
-	mustWriteSessionFile(t, filepath.Join(sessionDirectory(baseDir, workspaceRoot), "broken.json"), "{broken")
+	mustWriteSessionFile(t, sessionFilePathForTest(baseDir, workspaceRoot, "broken"), "{broken")
 
 	_, err := store.Load(context.Background(), "broken")
 	if err == nil || !strings.Contains(err.Error(), "decode session broken") {
@@ -280,7 +283,7 @@ func TestJSONStoreSaveReplaceFailureWhenTargetIsNonEmptyDirectory(t *testing.T) 
 	baseDir := t.TempDir()
 	workspaceRoot := t.TempDir()
 	store := NewJSONStore(baseDir, workspaceRoot)
-	targetDir := filepath.Join(sessionDirectory(baseDir, workspaceRoot), "blocked.json")
+	targetDir := sessionFilePathForTest(baseDir, workspaceRoot, "blocked")
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		t.Fatalf("mkdir target dir: %v", err)
 	}
@@ -295,7 +298,7 @@ func TestJSONStoreSaveReplaceFailureWhenTargetIsNonEmptyDirectory(t *testing.T) 
 		CreatedAt:     time.Now(),
 		UpdatedAt:     time.Now(),
 	})
-	if err == nil || !strings.Contains(err.Error(), "replace session file") {
+	if err == nil || !strings.Contains(err.Error(), "replace file") {
 		t.Fatalf("expected replace failure, got %v", err)
 	}
 }
@@ -334,18 +337,23 @@ func TestJSONStoreSaveOverwritesExistingSessionFile(t *testing.T) {
 
 func TestJSONStoreSaveWriteTempFailure(t *testing.T) {
 	t.Parallel()
+	if goruntime.GOOS == "windows" {
+		t.Skip("chmod write permission behavior is platform-specific on windows")
+	}
 
 	baseDir := t.TempDir()
 	workspaceRoot := t.TempDir()
 	store := NewJSONStore(baseDir, workspaceRoot)
-	sessionsPath := sessionDirectory(baseDir, workspaceRoot)
-	if err := os.MkdirAll(sessionsPath, 0o755); err != nil {
-		t.Fatalf("mkdir sessions path: %v", err)
+	sessionDir := filepath.Join(sessionDirectory(baseDir, workspaceRoot), "temp-blocked")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
 	}
-	tempDir := filepath.Join(sessionsPath, "temp-blocked.json.tmp")
-	if err := os.MkdirAll(tempDir, 0o755); err != nil {
-		t.Fatalf("mkdir temp dir: %v", err)
+	if err := os.Chmod(sessionDir, 0o555); err != nil {
+		t.Fatalf("chmod session dir readonly: %v", err)
 	}
+	t.Cleanup(func() {
+		_ = os.Chmod(sessionDir, 0o755)
+	})
 
 	err := store.Save(context.Background(), &Session{
 		SchemaVersion: CurrentSchemaVersion,
@@ -354,8 +362,19 @@ func TestJSONStoreSaveWriteTempFailure(t *testing.T) {
 		CreatedAt:     time.Now(),
 		UpdatedAt:     time.Now(),
 	})
-	if err == nil || !strings.Contains(err.Error(), "write temp session") {
+	if err == nil || !strings.Contains(err.Error(), "create temp file") {
 		t.Fatalf("expected temp write failure, got %v", err)
+	}
+}
+
+func TestEnsurePathWithinBaseRejectsEscapedPath(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	escaped := filepath.Join(baseDir, "..", "escaped", "session.json")
+
+	if err := ensurePathWithinBase(baseDir, escaped); err == nil || !strings.Contains(err.Error(), "escapes base dir") {
+		t.Fatalf("expected escaped path rejection, got %v", err)
 	}
 }
 
@@ -365,6 +384,15 @@ func TestJSONStoreLoadMissingFileReturnsError(t *testing.T) {
 	store := NewJSONStore(t.TempDir(), t.TempDir())
 	if _, err := store.Load(context.Background(), "missing"); err == nil {
 		t.Fatalf("expected missing file load to fail")
+	}
+}
+
+func TestJSONStoreLoadRejectsInvalidSessionID(t *testing.T) {
+	t.Parallel()
+
+	store := NewJSONStore(t.TempDir(), t.TempDir())
+	if _, err := store.Load(context.Background(), "bad/id"); err == nil || !strings.Contains(err.Error(), "unsupported characters") {
+		t.Fatalf("expected invalid session id error, got %v", err)
 	}
 }
 
@@ -488,7 +516,7 @@ func TestJSONStoreLoadDecodeErrorWithNonJSONPayload(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	store := NewJSONStore(baseDir, workspaceRoot)
 
-	mustWriteSessionFile(t, filepath.Join(sessionDirectory(baseDir, workspaceRoot), "decode-bad.json"), "{not-json")
+	mustWriteSessionFile(t, sessionFilePathForTest(baseDir, workspaceRoot, "decode-bad"), "{not-json")
 
 	_, err := store.Load(context.Background(), "decode-bad")
 	if err == nil || !strings.Contains(err.Error(), "decode session decode-bad") {
@@ -505,7 +533,7 @@ func TestJSONStoreLoadRejectsMissingSchemaVersion(t *testing.T) {
 
 	mustWriteSessionFile(
 		t,
-		filepath.Join(sessionDirectory(baseDir, workspaceRoot), "missing-schema.json"),
+		sessionFilePathForTest(baseDir, workspaceRoot, "missing-schema"),
 		`{"id":"missing-schema","title":"x","task_state":{"goal":"","progress":[],"open_items":[],"next_step":"","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[],"last_updated_at":"0001-01-01T00:00:00Z"},"messages":[]}`,
 	)
 
@@ -524,7 +552,7 @@ func TestJSONStoreLoadRejectsMissingTaskState(t *testing.T) {
 
 	mustWriteSessionFile(
 		t,
-		filepath.Join(sessionDirectory(baseDir, workspaceRoot), "missing-task-state.json"),
+		sessionFilePathForTest(baseDir, workspaceRoot, "missing-task-state"),
 		`{"schema_version":2,"id":"missing-task-state","title":"x","messages":[]}`,
 	)
 
@@ -552,11 +580,15 @@ func TestJSONStoreListSummariesSkipsUnreadableAndMalformedEntries(t *testing.T) 
 		t.Fatalf("save valid session: %v", err)
 	}
 
-	mustWriteSessionFile(t, filepath.Join(sessionDirectory(baseDir, workspaceRoot), "malformed.json"), "{malformed")
-	mustWriteSessionFile(t, filepath.Join(sessionDirectory(baseDir, workspaceRoot), "empty-id.json"), `{"id":"   ","title":"x"}`)
+	mustWriteSessionFile(t, sessionFilePathForTest(baseDir, workspaceRoot, "malformed"), "{malformed")
 	mustWriteSessionFile(
 		t,
-		filepath.Join(sessionDirectory(baseDir, workspaceRoot), "missing-task-state-summary.json"),
+		sessionFilePathForTest(baseDir, workspaceRoot, "empty-id"),
+		`{"schema_version":2,"id":"   ","title":"x","created_at":"2026-04-13T00:00:00Z","updated_at":"2026-04-13T00:00:00Z","task_state":{"goal":"","progress":[],"open_items":[],"next_step":"","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[],"last_updated_at":"2026-04-13T00:00:00Z"}}`,
+	)
+	mustWriteSessionFile(
+		t,
+		sessionFilePathForTest(baseDir, workspaceRoot, "missing-task-state-summary"),
 		`{"schema_version":2,"id":"missing-task-state-summary","title":"x","created_at":"2026-04-13T00:00:00Z","updated_at":"2026-04-13T00:00:00Z"}`,
 	)
 
@@ -566,6 +598,111 @@ func TestJSONStoreListSummariesSkipsUnreadableAndMalformedEntries(t *testing.T) 
 	}
 	if len(summaries) != 1 || summaries[0].ID != valid.ID {
 		t.Fatalf("expected only valid summary, got %+v", summaries)
+	}
+}
+
+func TestJSONStoreSaveRejectsInvalidSchemaAndID(t *testing.T) {
+	t.Parallel()
+
+	store := NewJSONStore(t.TempDir(), t.TempDir())
+
+	err := store.Save(context.Background(), &Session{
+		SchemaVersion: CurrentSchemaVersion + 1,
+		ID:            "session-invalid-schema",
+		Title:         "Invalid Schema",
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported schema_version") {
+		t.Fatalf("expected schema version error, got %v", err)
+	}
+
+	err = store.Save(context.Background(), &Session{
+		SchemaVersion: CurrentSchemaVersion,
+		ID:            "bad/session",
+		Title:         "Invalid ID",
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported characters") {
+		t.Fatalf("expected invalid id error, got %v", err)
+	}
+}
+
+func TestJSONStoreSaveCreateSessionDirFailure(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	workspaceRoot := t.TempDir()
+	store := NewJSONStore(baseDir, workspaceRoot)
+	sessionID := "session-dir-failed"
+
+	sessionDirPath := filepath.Join(sessionDirectory(baseDir, workspaceRoot), sessionID)
+	if err := os.MkdirAll(filepath.Dir(sessionDirPath), 0o755); err != nil {
+		t.Fatalf("mkdir session parent: %v", err)
+	}
+	if err := os.WriteFile(sessionDirPath, []byte("blocked"), 0o644); err != nil {
+		t.Fatalf("write session dir blocker: %v", err)
+	}
+
+	err := store.Save(context.Background(), &Session{
+		SchemaVersion: CurrentSchemaVersion,
+		ID:            sessionID,
+		Title:         "Blocked SessionDir",
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "create session dir") {
+		t.Fatalf("expected create session dir error, got %v", err)
+	}
+}
+
+func TestDecodeStoredSessionAndSummarySchemaValidation(t *testing.T) {
+	t.Parallel()
+
+	_, err := decodeStoredSession([]byte(`{
+  "schema_version": 999,
+  "id": "decode-invalid-schema",
+  "title": "x",
+  "created_at": "2026-04-13T08:00:00Z",
+  "updated_at": "2026-04-13T08:00:00Z",
+  "task_state": {
+    "goal": "",
+    "progress": [],
+    "open_items": [],
+    "next_step": "",
+    "blockers": [],
+    "key_artifacts": [],
+    "decisions": [],
+    "user_constraints": [],
+    "last_updated_at": "2026-04-13T08:00:00Z"
+  },
+  "messages": []
+}`))
+	if err == nil || !strings.Contains(err.Error(), "unsupported schema_version") {
+		t.Fatalf("expected decodeStoredSession schema error, got %v", err)
+	}
+
+	_, err = decodeStoredSummary([]byte(`{
+  "schema_version": 999,
+  "id": "summary-invalid-schema",
+  "title": "Summary",
+  "created_at": "2026-04-13T08:00:00Z",
+  "updated_at": "2026-04-13T08:00:00Z",
+  "task_state": {
+    "goal": "",
+    "progress": [],
+    "open_items": [],
+    "next_step": "",
+    "blockers": [],
+    "key_artifacts": [],
+    "decisions": [],
+    "user_constraints": [],
+    "last_updated_at": "2026-04-13T08:00:00Z"
+  }
+}`))
+	if err == nil || !strings.Contains(err.Error(), "unsupported schema_version") {
+		t.Fatalf("expected decodeStoredSummary schema error, got %v", err)
 	}
 }
 
@@ -610,7 +747,7 @@ func TestJSONStoreSavePersistsProviderModelAndMessages(t *testing.T) {
 		t.Fatalf("save session: %v", err)
 	}
 
-	rawPath := filepath.Join(sessionDirectory(baseDir, workspaceRoot), session.ID+".json")
+	rawPath := sessionFilePathForTest(baseDir, workspaceRoot, session.ID)
 	raw, err := os.ReadFile(rawPath)
 	if err != nil {
 		t.Fatalf("read raw file: %v", err)
@@ -803,7 +940,7 @@ func TestJSONStoreLoadClampsOversizedTaskState(t *testing.T) {
 	}, "\n")
 	mustWriteSessionFile(
 		t,
-		filepath.Join(sessionDirectory(baseDir, workspaceRoot), "task-state-clamp-load.json"),
+		sessionFilePathForTest(baseDir, workspaceRoot, "task-state-clamp-load"),
 		payload,
 	)
 
@@ -887,7 +1024,7 @@ func TestJSONStoreLoadAllowsMissingTodosField(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	store := NewJSONStore(baseDir, workspaceRoot)
 
-	mustWriteSessionFile(t, filepath.Join(sessionDirectory(baseDir, workspaceRoot), "no-todos.json"), strings.Join([]string{
+	mustWriteSessionFile(t, sessionFilePathForTest(baseDir, workspaceRoot, "no-todos"), strings.Join([]string{
 		`{`,
 		`  "schema_version": 2,`,
 		`  "id": "no-todos",`,
@@ -918,6 +1055,53 @@ func TestJSONStoreLoadAllowsMissingTodosField(t *testing.T) {
 	}
 }
 
+func TestJSONStoreLoadBackfillsTodoVersionWhenMissing(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	workspaceRoot := t.TempDir()
+	store := NewJSONStore(baseDir, workspaceRoot)
+
+	mustWriteSessionFile(t, sessionFilePathForTest(baseDir, workspaceRoot, "todos-no-version"), strings.Join([]string{
+		`{`,
+		`  "schema_version": 2,`,
+		`  "id": "todos-no-version",`,
+		`  "title": "Todos No Version",`,
+		`  "created_at": "2026-04-14T10:00:00Z",`,
+		`  "updated_at": "2026-04-14T10:05:00Z",`,
+		`  "task_state": {`,
+		`    "goal": "",`,
+		`    "progress": [],`,
+		`    "open_items": [],`,
+		`    "next_step": "",`,
+		`    "blockers": [],`,
+		`    "key_artifacts": [],`,
+		`    "decisions": [],`,
+		`    "user_constraints": [],`,
+		`    "last_updated_at": "2026-04-14T10:05:00Z"`,
+		`  },`,
+		`  "todos": [`,
+		`    {`,
+		`      "id": "todo-1",`,
+		`      "content": "todo item",`,
+		`      "status": "pending",`,
+		`      "created_at": "2026-04-14T10:00:00Z",`,
+		`      "updated_at": "2026-04-14T10:05:00Z"`,
+		`    }`,
+		`  ],`,
+		`  "messages": []`,
+		`}`,
+	}, "\n"))
+
+	loaded, err := store.Load(context.Background(), "todos-no-version")
+	if err != nil {
+		t.Fatalf("load session with todos and missing todo_version: %v", err)
+	}
+	if loaded.TodoVersion != CurrentTodoVersion {
+		t.Fatalf("expected todo version %d, got %d", CurrentTodoVersion, loaded.TodoVersion)
+	}
+}
+
 func TestJSONStoreSaveRejectsInvalidTodos(t *testing.T) {
 	t.Parallel()
 
@@ -941,6 +1125,76 @@ func TestJSONStoreSaveRejectsInvalidTodos(t *testing.T) {
 	}
 }
 
+func TestDecodeStoredSummaryRejectsMissingSchemaVersion(t *testing.T) {
+	t.Parallel()
+
+	_, err := decodeStoredSummary([]byte(`{"id":"summary-no-schema","task_state":{}}`))
+	if err == nil || !strings.Contains(err.Error(), "missing required field schema_version") {
+		t.Fatalf("expected missing schema_version error, got %v", err)
+	}
+}
+
+func TestCreateTempFileAndAtomicReplaceFailureBranches(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	missingDir := filepath.Join(baseDir, "missing", "dir")
+	if _, _, err := createTempFile(missingDir, "tmp-*.tmp", "create temp file"); err == nil ||
+		!strings.Contains(err.Error(), "create temp file") {
+		t.Fatalf("expected create temp file error for missing dir, got %v", err)
+	}
+
+	source := filepath.Join(baseDir, "source.tmp")
+	if err := os.WriteFile(source, []byte("payload"), 0o644); err != nil {
+		t.Fatalf("write source temp: %v", err)
+	}
+	blockerDir := filepath.Join(baseDir, "target")
+	if err := os.MkdirAll(filepath.Join(blockerDir, "child"), 0o755); err != nil {
+		t.Fatalf("mkdir blocker dir: %v", err)
+	}
+	if err := replaceFileWithTemp(source, blockerDir, "file"); err == nil || !strings.Contains(err.Error(), "replace file") {
+		t.Fatalf("expected replace failure for non-empty target dir, got %v", err)
+	}
+}
+
+func TestReplaceFileWithTempCommitFailure(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	target := filepath.Join(baseDir, "target.txt")
+	if err := replaceFileWithTemp(filepath.Join(baseDir, "missing.tmp"), target, "file"); err == nil ||
+		!strings.Contains(err.Error(), "commit file") {
+		t.Fatalf("expected commit failure when temp file missing, got %v", err)
+	}
+}
+
+func TestWriteFileAtomicallyCreateTempFailure(t *testing.T) {
+	t.Parallel()
+
+	target := filepath.Join(t.TempDir(), "missing", "nested", "session.json")
+	err := writeFileAtomically(target, "session-*.tmp", []byte("data"), 0o644)
+	if err == nil || !strings.Contains(err.Error(), "create temp file") {
+		t.Fatalf("expected create temp file error, got %v", err)
+	}
+}
+
+func TestJSONStoreRejectsInvalidBasePathDuringAssetAndSessionResolve(t *testing.T) {
+	t.Parallel()
+
+	store := &JSONStore{baseDir: string([]byte{'b', 'a', 'd', 0})}
+	if _, err := store.Load(context.Background(), "session-ok"); err == nil {
+		t.Fatalf("expected load error for invalid base path")
+	}
+
+	if _, err := store.SaveAsset(context.Background(), "session-ok", strings.NewReader("img"), "image/png"); err == nil {
+		t.Fatalf("expected save asset error for invalid base path")
+	}
+
+	if _, err := store.Stat(context.Background(), "session-ok", "asset-ok"); err == nil {
+		t.Fatalf("expected stat error for invalid base path")
+	}
+}
+
 func TestJSONStoreLoadRejectsInvalidTodos(t *testing.T) {
 	t.Parallel()
 
@@ -948,7 +1202,7 @@ func TestJSONStoreLoadRejectsInvalidTodos(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	store := NewJSONStore(baseDir, workspaceRoot)
 
-	mustWriteSessionFile(t, filepath.Join(sessionDirectory(baseDir, workspaceRoot), "invalid-todos-load.json"), strings.Join([]string{
+	mustWriteSessionFile(t, sessionFilePathForTest(baseDir, workspaceRoot, "invalid-todos-load"), strings.Join([]string{
 		`{`,
 		`  "schema_version": 2,`,
 		`  "id": "invalid-todos-load",`,
@@ -1008,4 +1262,8 @@ func mustWriteSessionFile(t *testing.T, path string, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
+}
+
+func sessionFilePathForTest(baseDir string, workspaceRoot string, sessionID string) string {
+	return filepath.Join(sessionDirectory(baseDir, workspaceRoot), sessionID, sessionFileName)
 }
