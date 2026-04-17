@@ -308,6 +308,31 @@ func TestInputPreparerPrepareImagePathAndMimeValidation(t *testing.T) {
 	})
 }
 
+func TestAssetSaveErrorMethods(t *testing.T) {
+	t.Parallel()
+
+	if err := (*AssetSaveError)(nil).Unwrap(); err != nil {
+		t.Fatalf("expected nil asset save error unwrap to return nil, got %v", err)
+	}
+	if msg := (*AssetSaveError)(nil).Error(); msg != "session: asset save failed" {
+		t.Fatalf("unexpected nil asset save error message: %q", msg)
+	}
+
+	inner := errors.New("boom")
+	assetErr := &AssetSaveError{
+		SessionID: "session-1",
+		Index:     2,
+		Path:      "/tmp/image.png",
+		Err:       inner,
+	}
+	if !errors.Is(assetErr, inner) {
+		t.Fatalf("expected asset save error to unwrap inner error")
+	}
+	if !strings.Contains(assetErr.Error(), "image.png") || !strings.Contains(assetErr.Error(), "index 2") {
+		t.Fatalf("unexpected asset save error message: %q", assetErr.Error())
+	}
+}
+
 func minimalPNGBytes() []byte {
 	return []byte{
 		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,

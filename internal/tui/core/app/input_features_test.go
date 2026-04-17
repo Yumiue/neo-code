@@ -301,6 +301,53 @@ func TestAbsorbInlineImageReferencesSupportsQuotedPathWithSpaces(t *testing.T) {
 	}
 }
 
+func TestParseInlineImagePathToken(t *testing.T) {
+	app, _ := newTestApp(t)
+	root := t.TempDir()
+	app.state.CurrentWorkdir = root
+
+	relative, ok := app.parseInlineImagePathToken(`@image:"charts/sales q1.png"`)
+	if !ok {
+		t.Fatalf("expected quoted relative token to parse")
+	}
+	if relative != filepath.Join(root, filepath.FromSlash("charts/sales q1.png")) {
+		t.Fatalf("unexpected resolved path: %q", relative)
+	}
+
+	absolutePath := filepath.Join(root, "abs.png")
+	absolute, ok := app.parseInlineImagePathToken("@image:" + absolutePath)
+	if !ok || absolute != absolutePath {
+		t.Fatalf("expected absolute token to pass through, got %q ok=%v", absolute, ok)
+	}
+
+	if _, ok := app.parseInlineImagePathToken("@image:notes.txt"); ok {
+		t.Fatalf("expected non-image token to be rejected")
+	}
+	app.state.CurrentWorkdir = ""
+	if _, ok := app.parseInlineImagePathToken("@image:relative.png"); ok {
+		t.Fatalf("expected missing workdir to reject relative token")
+	}
+	if _, ok := app.parseInlineImagePathToken("not-image-token"); ok {
+		t.Fatalf("expected invalid token to be rejected")
+	}
+}
+
+func TestParseInlineImageReferenceAtBranches(t *testing.T) {
+	if _, _, ok := parseInlineImageReferenceAt("x@image:a.png", 1); ok {
+		t.Fatalf("expected token without boundary whitespace to be rejected")
+	}
+	path, end, ok := parseInlineImageReferenceAt(`@image:folder\ with\ space.png next`, 0)
+	if !ok {
+		t.Fatalf("expected escaped-space token to parse")
+	}
+	if path != "folder with space.png" || end <= 0 {
+		t.Fatalf("unexpected escaped path parse result path=%q end=%d", path, end)
+	}
+	if _, _, ok := parseInlineImageReferenceAt(`@image:""`, 0); ok {
+		t.Fatalf("expected empty quoted token to fail")
+	}
+}
+
 func TestGetAndClearImageAttachments(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.pendingImageAttachments = []pendingImageAttachment{
