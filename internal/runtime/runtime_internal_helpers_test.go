@@ -44,6 +44,11 @@ func (s *lockProbeStore) ListSummaries(ctx context.Context) ([]agentsession.Summ
 	return nil, errors.New("not implemented")
 }
 
+// UpdateSessionWorkdir 仅为接口占位，当前测试不会走到该分支。
+func (s *lockProbeStore) UpdateSessionWorkdir(ctx context.Context, input agentsession.UpdateSessionWorkdirInput) error {
+	return errors.New("not implemented")
+}
+
 func (s *lockProbeStore) UpdateSessionState(ctx context.Context, input agentsession.UpdateSessionStateInput) error {
 	return errors.New("not implemented")
 }

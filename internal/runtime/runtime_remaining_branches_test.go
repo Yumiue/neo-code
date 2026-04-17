@@ -100,6 +100,14 @@ func (s *saveHookStore) AppendMessages(ctx context.Context, input agentsession.A
 	return s.base.AppendMessages(ctx, input)
 }
 
+// UpdateSessionWorkdir 在写前注入回调，再转发给底层内存 store。
+func (s *saveHookStore) UpdateSessionWorkdir(ctx context.Context, input agentsession.UpdateSessionWorkdirInput) error {
+	if err := s.beforeSave(ctx); err != nil {
+		return err
+	}
+	return s.base.UpdateSessionWorkdir(ctx, input)
+}
+
 func (s *saveHookStore) UpdateSessionState(ctx context.Context, input agentsession.UpdateSessionStateInput) error {
 	if err := s.beforeSave(ctx); err != nil {
 		return err
@@ -129,6 +137,11 @@ func (s *postSaveHookStore) ListSummaries(ctx context.Context) ([]agentsession.S
 
 func (s *postSaveHookStore) AppendMessages(ctx context.Context, input agentsession.AppendMessagesInput) error {
 	return s.afterSave(s.base.AppendMessages(ctx, input))
+}
+
+// UpdateSessionWorkdir 在底层写入完成后执行一次 post-save 钩子。
+func (s *postSaveHookStore) UpdateSessionWorkdir(ctx context.Context, input agentsession.UpdateSessionWorkdirInput) error {
+	return s.afterSave(s.base.UpdateSessionWorkdir(ctx, input))
 }
 
 func (s *postSaveHookStore) UpdateSessionState(ctx context.Context, input agentsession.UpdateSessionStateInput) error {

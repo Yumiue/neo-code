@@ -401,18 +401,10 @@ func (p *InputPreparer) persistSessionWorkdirUpdate(ctx context.Context, pending
 	if !pending.dirty {
 		return nil
 	}
-	if err := p.store.UpdateSessionState(ctx, UpdateSessionStateInput{
-		SessionID:        pending.session.ID,
-		Title:            pending.session.Title,
-		UpdatedAt:        pending.session.UpdatedAt,
-		Provider:         pending.session.Provider,
-		Model:            pending.session.Model,
-		Workdir:          pending.session.Workdir,
-		TaskState:        pending.session.TaskState,
-		ActivatedSkills:  pending.session.ActivatedSkills,
-		Todos:            pending.session.Todos,
-		TokenInputTotal:  pending.session.TokenInputTotal,
-		TokenOutputTotal: pending.session.TokenOutputTotal,
+	if err := p.store.UpdateSessionWorkdir(ctx, UpdateSessionWorkdirInput{
+		SessionID: pending.session.ID,
+		UpdatedAt: pending.session.UpdatedAt,
+		Workdir:   pending.session.Workdir,
 	}); err != nil {
 		return err
 	}

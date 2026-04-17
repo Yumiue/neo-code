@@ -13,7 +13,8 @@ import (
 	"sync"
 	"time"
 
-	_ "modernc.org/sqlite"
+	sqlitedriver "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 	providertypes "neo-code/internal/provider/types"
 )
 
@@ -259,6 +260,35 @@ WHERE id = ?
 	return nil
 }
 
+// UpdateSessionWorkdir 仅更新会话 workdir 与更新时间，避免 Prepare 阶段覆盖其他会话头字段。
+func (s *SQLiteStore) UpdateSessionWorkdir(ctx context.Context, input UpdateSessionWorkdirInput) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := validateStorageID("session id", input.SessionID); err != nil {
+		return fmt.Errorf("session: %w", err)
+	}
+	db, err := s.ensureDB(ctx)
+	if err != nil {
+		return err
+	}
+
+	result, err := db.ExecContext(ctx, `
+UPDATE sessions
+SET updated_at_ms = ?,
+	workdir = ?
+WHERE id = ?
+`,
+		toUnixMillis(resolveUpdatedAt(input.UpdatedAt)),
+		stringsTrimSpace(input.Workdir),
+		input.SessionID,
+	)
+	if err != nil {
+		return fmt.Errorf("session: update session workdir %s: %w", input.SessionID, err)
+	}
+	return expectRowsAffected(result, input.SessionID)
+}
+
 // UpdateSessionState 仅更新会话头字段，不写入消息。
 func (s *SQLiteStore) UpdateSessionState(ctx context.Context, input UpdateSessionStateInput) error {
 	if err := ctx.Err(); err != nil {
@@ -464,7 +494,7 @@ VALUES (?, ?, ?, ?, ?, ?)
 	)
 	if err != nil {
 		_ = os.Remove(target)
-		return AssetMeta{}, fmt.Errorf("session: insert asset meta %s: %w", meta.ID, err)
+		return AssetMeta{}, mapSessionAssetInsertError(meta.ID, err)
 	}
 	if err := expectRowsAffected(result, sessionID); err != nil {
 		_ = os.Remove(target)
@@ -1039,6 +1069,23 @@ func expectRowsAffected(result sql.Result, sessionID string) error {
 }
 
 // cloneMessage 深拷贝消息，避免共享底层切片和映射。
+// mapSessionAssetInsertError 统一收敛附件元数据插入阶段的缺失会话语义，避免向上泄漏底层 SQLite 错误。
+func mapSessionAssetInsertError(assetID string, err error) error {
+	if isSQLiteForeignKeyConstraintError(err) {
+		return fmt.Errorf("session: insert asset meta %s: %w", assetID, os.ErrNotExist)
+	}
+	return fmt.Errorf("session: insert asset meta %s: %w", assetID, err)
+}
+
+// isSQLiteForeignKeyConstraintError 判断底层错误是否为 SQLite 外键约束失败。
+func isSQLiteForeignKeyConstraintError(err error) bool {
+	var sqliteErr *sqlitedriver.Error
+	if errors.As(err, &sqliteErr) {
+		return sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_FOREIGNKEY
+	}
+	return false
+}
+
 func cloneMessage(message providertypes.Message) providertypes.Message {
 	next := message
 	next.Parts = providertypes.CloneParts(message.Parts)

@@ -66,6 +66,23 @@ func (s *mutatorStore) AppendMessages(ctx context.Context, input agentsession.Ap
 	return nil
 }
 
+// UpdateSessionWorkdir 仅更新 workdir 与更新时间，模拟最小粒度持久化。
+func (s *mutatorStore) UpdateSessionWorkdir(ctx context.Context, input agentsession.UpdateSessionWorkdirInput) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.err != nil {
+		return s.err
+	}
+	if s.last.ID != "" && s.last.ID != input.SessionID {
+		return errors.New("not found")
+	}
+	s.last.ID = input.SessionID
+	s.last.UpdatedAt = input.UpdatedAt
+	s.last.Workdir = input.Workdir
+	return nil
+}
+
 func (s *mutatorStore) UpdateSessionState(ctx context.Context, input agentsession.UpdateSessionStateInput) error {
 	if err := ctx.Err(); err != nil {
 		return err

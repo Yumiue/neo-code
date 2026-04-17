@@ -71,6 +71,8 @@ func TestSQLiteStoreSaveAssetRejectsInvalidInput(t *testing.T) {
 	}
 	if _, err := store.SaveAsset(ctx, "missing", strings.NewReader("x"), "image/png"); err == nil {
 		t.Fatalf("expected missing session error")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected os.ErrNotExist, got %v", err)
 	}
 	if _, _, err := store.Open(ctx, "bad/session", "asset_ok"); err == nil {
 		t.Fatalf("expected invalid session id error")

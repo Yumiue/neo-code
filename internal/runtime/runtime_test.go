@@ -161,6 +161,27 @@ func (s *memoryStore) AppendMessages(ctx context.Context, input agentsession.App
 }
 
 // UpdateSessionState 只覆写会话头字段，不改消息正文。
+// UpdateSessionWorkdir 仅更新会话 workdir 与时间，避免输入归一化覆盖其他会话头字段。
+func (s *memoryStore) UpdateSessionWorkdir(ctx context.Context, input agentsession.UpdateSessionWorkdirInput) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	session, ok := s.sessions[input.SessionID]
+	if !ok {
+		return errors.New("not found")
+	}
+	if !input.UpdatedAt.IsZero() {
+		session.UpdatedAt = input.UpdatedAt
+	}
+	session.Workdir = input.Workdir
+	s.saves++
+	s.sessions[input.SessionID] = cloneSession(session)
+	return nil
+}
+
 func (s *memoryStore) UpdateSessionState(ctx context.Context, input agentsession.UpdateSessionStateInput) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -257,6 +278,17 @@ func (s *failingStore) AppendMessages(ctx context.Context, input agentsession.Ap
 }
 
 // UpdateSessionState 转发到底层 Store，并按写入次数注入失败。
+// UpdateSessionWorkdir 杞彂鍒板簳灞?Store锛屽苟鎸夊啓鍏ユ鏁版敞鍏ュけ璐ャ€?
+func (s *failingStore) UpdateSessionWorkdir(ctx context.Context, input agentsession.UpdateSessionWorkdirInput) error {
+	if err := s.nextSaveError(ctx); err != nil {
+		return err
+	}
+	if s.Store == nil {
+		return nil
+	}
+	return s.Store.UpdateSessionWorkdir(ctx, input)
+}
+
 func (s *failingStore) UpdateSessionState(ctx context.Context, input agentsession.UpdateSessionStateInput) error {
 	if err := s.nextSaveError(ctx); err != nil {
 		return err
@@ -376,6 +408,25 @@ func (s *blockingLoadStore) AppendMessages(ctx context.Context, input agentsessi
 }
 
 // UpdateSessionState 在阻塞加载测试桩中更新会话头。
+// UpdateSessionWorkdir 鍦ㄩ樆濉炲姞杞芥祴璇曟々涓粎鏇存柊 workdir 涓庢椂闂淬€?
+func (s *blockingLoadStore) UpdateSessionWorkdir(ctx context.Context, input agentsession.UpdateSessionWorkdirInput) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	session, ok := s.sessions[input.SessionID]
+	if !ok {
+		return errors.New("not found")
+	}
+	if !input.UpdatedAt.IsZero() {
+		session.UpdatedAt = input.UpdatedAt
+	}
+	session.Workdir = input.Workdir
+	s.sessions[input.SessionID] = cloneSession(session)
+	return nil
+}
+
 func (s *blockingLoadStore) UpdateSessionState(ctx context.Context, input agentsession.UpdateSessionStateInput) error {
 	if err := ctx.Err(); err != nil {
 		return err

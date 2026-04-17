@@ -87,6 +87,13 @@ type UpdateSessionStateInput struct {
 	TokenOutputTotal int
 }
 
+// UpdateSessionWorkdirInput 描述一次仅更新会话 workdir 的最小粒度写入。
+type UpdateSessionWorkdirInput struct {
+	SessionID string
+	UpdatedAt time.Time
+	Workdir   string
+}
+
 // ReplaceTranscriptInput 描述 compact 后整段 transcript 的原子替换。
 type ReplaceTranscriptInput struct {
 	SessionID        string
@@ -108,6 +115,7 @@ type Store interface {
 	LoadSession(ctx context.Context, id string) (Session, error)
 	ListSummaries(ctx context.Context) ([]Summary, error)
 	AppendMessages(ctx context.Context, input AppendMessagesInput) error
+	UpdateSessionWorkdir(ctx context.Context, input UpdateSessionWorkdirInput) error
 	UpdateSessionState(ctx context.Context, input UpdateSessionStateInput) error
 	ReplaceTranscript(ctx context.Context, input ReplaceTranscriptInput) error
 }
