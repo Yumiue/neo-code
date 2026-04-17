@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	agentsession "neo-code/internal/session"
 )
+
+const prepareEventEmitTimeout = 200 * time.Millisecond
 
 // NewSessionInputPreparer 创建基于 session 子层实现的输入归一化适配器。
 func NewSessionInputPreparer(store agentsession.Store, assetStore agentsession.AssetStore) UserInputPreparer {
@@ -51,7 +54,7 @@ func (s *Service) PrepareUserInput(ctx context.Context, input PrepareInput) (Use
 	}
 
 	runID := strings.TrimSpace(input.RunID)
-	_ = s.emit(ctx, EventInputNormalized, runID, prepared.UserInput.SessionID, InputNormalizedPayload{
+	_ = s.emitPrepareEvent(ctx, EventInputNormalized, runID, prepared.UserInput.SessionID, InputNormalizedPayload{
 		TextLength: len([]rune(strings.TrimSpace(input.Text))),
 		ImageCount: len(input.Images),
 	})
@@ -60,7 +63,7 @@ func (s *Service) PrepareUserInput(ctx context.Context, input PrepareInput) (Use
 		if index >= 0 && index < len(input.Images) {
 			path = strings.TrimSpace(input.Images[index].Path)
 		}
-		_ = s.emit(ctx, EventAssetSaved, runID, prepared.UserInput.SessionID, AssetSavedPayload{
+		_ = s.emitPrepareEvent(ctx, EventAssetSaved, runID, prepared.UserInput.SessionID, AssetSavedPayload{
 			Index:    index,
 			Path:     path,
 			AssetID:  asset.ID,
@@ -86,13 +89,31 @@ func (s *Service) emitPrepareFailure(ctx context.Context, input PrepareInput, er
 		if session := strings.TrimSpace(saveErr.SessionID); session != "" {
 			sessionID = session
 		}
-		return s.emit(ctx, EventAssetSaveFailed, runID, sessionID, AssetSaveFailedPayload{
+		return s.emitPrepareEvent(ctx, EventAssetSaveFailed, runID, sessionID, AssetSaveFailedPayload{
 			Index:   saveErr.Index,
 			Path:    strings.TrimSpace(saveErr.Path),
 			Message: strings.TrimSpace(saveErr.Error()),
 		})
 	}
-	return s.emit(ctx, EventError, runID, sessionID, strings.TrimSpace(err.Error()))
+	return s.emitPrepareEvent(ctx, EventError, runID, sessionID, strings.TrimSpace(err.Error()))
+}
+
+// emitPrepareEvent 在输入归一化阶段使用限时上下文发事件，避免通道拥塞导致提交链路卡死。
+func (s *Service) emitPrepareEvent(ctx context.Context, kind EventType, runID string, sessionID string, payload any) error {
+	emitCtx := ctx
+	cancel := func() {}
+	if _, hasDeadline := emitCtx.Deadline(); !hasDeadline {
+		emitCtx, cancel = context.WithTimeout(emitCtx, prepareEventEmitTimeout)
+	}
+	defer cancel()
+
+	if err := s.emit(emitCtx, kind, runID, sessionID, payload); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 type sessionInputPreparer struct {

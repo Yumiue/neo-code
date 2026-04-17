@@ -123,6 +123,31 @@ func TestServiceSubmitWithoutPreparerReturnsError(t *testing.T) {
 	}
 }
 
+func TestServicePrepareUserInputDoesNotBlockWhenPrepareEventQueueIsFull(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	svc, _ := newPrepareTestService(t, workdir, true)
+	for index := 0; index < cap(svc.events); index++ {
+		svc.events <- RuntimeEvent{Type: EventToolChunk}
+	}
+
+	start := time.Now()
+	input, err := svc.PrepareUserInput(context.Background(), PrepareInput{
+		RunID: "run-prepare-full-queue",
+		Text:  "hello",
+	})
+	if err != nil {
+		t.Fatalf("PrepareUserInput() error = %v", err)
+	}
+	if input.SessionID == "" {
+		t.Fatalf("expected prepared session id")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("PrepareUserInput() blocked too long with full event queue: %v", elapsed)
+	}
+}
+
 func newPrepareTestService(t *testing.T, workdir string, withPreparer bool) (*Service, *agentsession.JSONStore) {
 	t.Helper()
 
