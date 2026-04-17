@@ -27,6 +27,7 @@ import (
 	"neo-code/internal/skills"
 	"neo-code/internal/tools"
 	"neo-code/internal/tools/mcp"
+	"neo-code/internal/tools/webfetch"
 	"neo-code/internal/tui"
 )
 
@@ -167,7 +168,7 @@ func TestBuildToolRegistryUsesWebFetchConfig(t *testing.T) {
 		t.Fatalf("marshal args: %v", err)
 	}
 
-	result, execErr := tool.Execute(context.Background(), tools.ToolCallInput{
+	result, execErr := tool.Execute(webfetch.WithUnsafeBypassTargetValidation(context.Background()), tools.ToolCallInput{
 		Name:      "webfetch",
 		Arguments: args,
 	})

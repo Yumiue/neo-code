@@ -173,11 +173,7 @@ func NewManager(executor Executor, engine security.PermissionEngine, sandbox Wor
 		return nil, errors.New("tools: executor is nil")
 	}
 	if engine == nil {
-		defaultEngine, err := security.NewStaticGateway(security.DecisionAllow, nil)
-		if err != nil {
-			return nil, err
-		}
-		engine = defaultEngine
+		return nil, errors.New("tools: permission engine is nil")
 	}
 	if sandbox == nil {
 		sandbox = NoopWorkspaceSandbox{}

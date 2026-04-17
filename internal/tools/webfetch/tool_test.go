@@ -14,6 +14,10 @@ import (
 	"neo-code/internal/tools"
 )
 
+func executionContextAllowLoopback() context.Context {
+	return WithUnsafeBypassTargetValidation(context.Background())
+}
+
 func TestToolExecute(t *testing.T) {
 	t.Parallel()
 
@@ -281,7 +285,7 @@ func TestToolExecute(t *testing.T) {
 				raw = data
 			}
 
-			result, execErr := tool.Execute(context.Background(), tools.ToolCallInput{
+			result, execErr := tool.Execute(executionContextAllowLoopback(), tools.ToolCallInput{
 				Name:      tool.Name(),
 				Arguments: raw,
 			})
@@ -334,7 +338,7 @@ func TestToolDefaultsAndContentTypeFallback(t *testing.T) {
 		t.Fatalf("marshal args: %v", err)
 	}
 
-	result, execErr := tool.Execute(context.Background(), tools.ToolCallInput{
+	result, execErr := tool.Execute(executionContextAllowLoopback(), tools.ToolCallInput{
 		Name:      tool.Name(),
 		Arguments: args,
 	})
@@ -377,5 +381,52 @@ func TestHTMLHelpers(t *testing.T) {
 	titleNode.AppendChild(&html.Node{Type: html.TextNode, Data: "Example"})
 	if textContent(titleNode) != "Example " {
 		t.Fatalf("expected title text content, got %q", textContent(titleNode))
+	}
+}
+
+func TestToolExecuteBlocksLocalAndPrivateTargets(t *testing.T) {
+	t.Parallel()
+
+	tool := New(Config{
+		Timeout:               2 * time.Second,
+		MaxResponseBytes:      config.DefaultWebFetchMaxResponseBytes,
+		SupportedContentTypes: config.DefaultWebFetchSupportedContentTypes(),
+	})
+
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{name: "localhost", url: "http://localhost/internal"},
+		{name: "localhost subdomain", url: "http://api.localhost/internal"},
+		{name: "loopback ipv4", url: "http://127.0.0.1/internal"},
+		{name: "link local metadata", url: "http://169.254.169.254/latest/meta-data"},
+		{name: "private network", url: "http://10.1.2.3/internal"},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			raw, err := json.Marshal(map[string]string{"url": tc.url})
+			if err != nil {
+				t.Fatalf("marshal args: %v", err)
+			}
+
+			result, execErr := tool.Execute(context.Background(), tools.ToolCallInput{
+				Name:      tool.Name(),
+				Arguments: raw,
+			})
+			if execErr == nil || !strings.Contains(execErr.Error(), "target host is blocked") {
+				t.Fatalf("expected blocked target error, got %v", execErr)
+			}
+			if !result.IsError {
+				t.Fatalf("expected error result for blocked target")
+			}
+			if !strings.Contains(result.Content, "reason: "+reasonInvalidURL) {
+				t.Fatalf("expected invalid url reason, got %q", result.Content)
+			}
+		})
 	}
 }

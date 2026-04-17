@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -53,6 +54,18 @@ type responseData struct {
 	Title       string
 	Content     string
 	Truncated   bool
+}
+
+type validationContextKey string
+
+const bypassTargetValidationKey validationContextKey = "webfetch_bypass_target_validation"
+
+// WithUnsafeBypassTargetValidation 返回跳过目标地址安全校验的上下文，仅用于受控测试场景。
+func WithUnsafeBypassTargetValidation(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, bypassTargetValidationKey, true)
 }
 
 // New creates a webfetch tool with bounded responses and content-type filtering.
@@ -112,6 +125,12 @@ func (t *Tool) Execute(ctx context.Context, call tools.ToolCallInput) (tools.Too
 		result := t.newErrorResult(responseData{URL: strings.TrimSpace(in.URL)}, reasonInvalidURL, err.Error())
 		return result, fmt.Errorf("webfetch: validate url: %w", err)
 	}
+	if !bypassTargetValidation(ctx) {
+		if err := validateFetchTarget(ctx, targetURL); err != nil {
+			result := t.newErrorResult(responseData{URL: targetURL}, reasonInvalidURL, err.Error())
+			return result, fmt.Errorf("webfetch: validate target: %w", err)
+		}
+	}
 
 	resp, err := t.fetch(ctx, targetURL)
 	if err != nil {
@@ -148,6 +167,69 @@ func validateURL(raw string) (string, error) {
 		return "", fmt.Errorf("%s: url host is empty", toolName)
 	}
 	return parsed.String(), nil
+}
+
+// validateFetchTarget 校验目标主机是否命中本地或内网地址，防止 SSRF 访问敏感网络。
+func validateFetchTarget(ctx context.Context, target string) error {
+	parsed, err := url.Parse(target)
+	if err != nil {
+		return err
+	}
+
+	hostname := strings.TrimSpace(parsed.Hostname())
+	if hostname == "" {
+		return fmt.Errorf("%s: url host is empty", toolName)
+	}
+	if isLocalHostName(hostname) {
+		return fmt.Errorf("%s: target host is blocked", toolName)
+	}
+	if ip := net.ParseIP(hostname); ip != nil {
+		if isBlockedIP(ip) {
+			return fmt.Errorf("%s: target host is blocked", toolName)
+		}
+		return nil
+	}
+
+	lookupCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	records, err := net.DefaultResolver.LookupIPAddr(lookupCtx, hostname)
+	if err != nil {
+		return fmt.Errorf("%s: resolve host: %w", toolName, err)
+	}
+	if len(records) == 0 {
+		return fmt.Errorf("%s: resolve host: empty result", toolName)
+	}
+	for _, record := range records {
+		if isBlockedIP(record.IP) {
+			return fmt.Errorf("%s: target host is blocked", toolName)
+		}
+	}
+	return nil
+}
+
+// bypassTargetValidation 判断当前上下文是否显式跳过目标地址安全校验，仅供包内测试使用。
+func bypassTargetValidation(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	enabled, ok := ctx.Value(bypassTargetValidationKey).(bool)
+	return ok && enabled
+}
+
+// isLocalHostName 判断主机名是否属于本地回环域名变体。
+func isLocalHostName(host string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(host))
+	return normalized == "localhost" || strings.HasSuffix(normalized, ".localhost")
+}
+
+// isBlockedIP 判断 IP 是否属于回环、链路本地、私网或其他不应被 webfetch 访问的网段。
+func isBlockedIP(ip net.IP) bool {
+	return ip.IsLoopback() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsPrivate() ||
+		ip.IsMulticast() ||
+		ip.IsUnspecified()
 }
 
 func (t *Tool) fetch(ctx context.Context, targetURL string) (*http.Response, error) {
