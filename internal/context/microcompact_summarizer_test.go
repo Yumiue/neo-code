@@ -229,6 +229,7 @@ func TestSummarizeOrClearWithNilSummarizers(t *testing.T) {
 
 	got := summarizeOrClear(
 		providertypes.Message{Parts: []providertypes.ContentPart{providertypes.NewTextPart("test")}},
+		"test",
 		nil,
 		nil,
 	)
@@ -245,6 +246,7 @@ func TestSummarizeOrClearWithToolNamesLookup(t *testing.T) {
 		toolNames := map[string]string{"call-2": "filesystem_read_file"}
 		got := summarizeOrClear(
 			providertypes.Message{ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("content")}},
+			"content",
 			toolNames,
 			stubMicroCompactSummarizerSource{
 				"filesystem_read_file": func(content string, metadata map[string]string, isError bool) string {
@@ -261,6 +263,7 @@ func TestSummarizeOrClearWithToolNamesLookup(t *testing.T) {
 		toolNames := map[string]string{"call-1": "bash"}
 		got := summarizeOrClear(
 			providertypes.Message{ToolCallID: "unknown-id", Parts: []providertypes.ContentPart{providertypes.NewTextPart("content")}},
+			"content",
 			toolNames,
 			stubMicroCompactSummarizerSource{},
 		)

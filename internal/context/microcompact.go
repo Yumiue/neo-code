@@ -57,8 +57,8 @@ func microCompactMessagesWithPolicies(messages []providertypes.Message, policies
 		}
 
 		for messageIndex := span.Start + 1; messageIndex < span.End; messageIndex++ {
-			if shouldClearToolMessage(cloned[messageIndex], compactableIDs) {
-				summary := summarizeOrClear(cloned[messageIndex], toolNames, summarizers)
+			if content, ok := compactableToolMessageContent(cloned[messageIndex], compactableIDs); ok {
+				summary := summarizeOrClear(cloned[messageIndex], content, toolNames, summarizers)
 				cloned[messageIndex].Parts = []providertypes.ContentPart{providertypes.NewTextPart(summary)}
 			}
 		}
@@ -134,32 +134,34 @@ func toolParticipatesInMicroCompact(toolName string, policies MicroCompactPolicy
 // hasCompactableToolContent 判断工具块中是否存在会影响保留预算的有效工具结果内容。
 func hasCompactableToolContent(messages []providertypes.Message, span internalcompact.MessageSpan, compactableIDs map[string]struct{}) bool {
 	for messageIndex := span.Start + 1; messageIndex < span.End; messageIndex++ {
-		if shouldClearToolMessage(messages[messageIndex], compactableIDs) {
+		if _, ok := compactableToolMessageContent(messages[messageIndex], compactableIDs); ok {
 			return true
 		}
 	}
 	return false
 }
 
-// shouldClearToolMessage 判断一条 tool 消息是否满足旧结果清理条件。
-func shouldClearToolMessage(message providertypes.Message, compactableIDs map[string]struct{}) bool {
+// compactableToolMessageContent 判断 tool 消息是否可压缩，并返回渲染后的内容文本。
+func compactableToolMessageContent(message providertypes.Message, compactableIDs map[string]struct{}) (string, bool) {
 	if message.Role != providertypes.RoleTool || message.IsError {
-		return false
+		return "", false
 	}
-	if compactableIDs == nil {
-		return false
-	}
-	if _, ok := compactableIDs[strings.TrimSpace(message.ToolCallID)]; !ok {
-		return false
+	callID := strings.TrimSpace(message.ToolCallID)
+	if _, ok := compactableIDs[callID]; !ok {
+		return "", false
 	}
 
 	content := strings.TrimSpace(renderDisplayParts(message.Parts))
-	return content != "" && content != microCompactClearedMessage
+	if content == "" || content == microCompactClearedMessage {
+		return "", false
+	}
+	return content, true
 }
 
 // summarizeOrClear 为单条可压缩工具消息生成摘要或回退到默认清除占位。
 func summarizeOrClear(
 	message providertypes.Message,
+	content string,
 	toolNames map[string]string,
 	summarizers MicroCompactSummarizerSource,
 ) string {
@@ -167,7 +169,8 @@ func summarizeOrClear(
 		return microCompactClearedMessage
 	}
 
-	toolName, ok := toolNames[strings.TrimSpace(message.ToolCallID)]
+	callID := strings.TrimSpace(message.ToolCallID)
+	toolName, ok := toolNames[callID]
 	if !ok {
 		return microCompactClearedMessage
 	}
@@ -177,7 +180,6 @@ func summarizeOrClear(
 		return microCompactClearedMessage
 	}
 
-	content := renderDisplayParts(message.Parts)
 	summary := summarizer(content, message.ToolMetadata, message.IsError)
 	if summary == "" {
 		return microCompactClearedMessage

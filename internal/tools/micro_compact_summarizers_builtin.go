@@ -34,7 +34,7 @@ func RegisterBuiltinSummarizers(registry *Registry) {
 
 const summaryMaxRunes = 200
 
-// bashSummarizer 保留退出状态 + 末尾若干行 + 工作目录。
+// bashSummarizer 仅保留结构化执行元信息，避免把原始输出内容重新注入上下文。
 func bashSummarizer(content string, metadata map[string]string, isError bool) string {
 	var parts []string
 
@@ -48,42 +48,28 @@ func bashSummarizer(content string, metadata map[string]string, isError bool) st
 		parts = append(parts, "workdir="+workdir)
 	}
 
-	const tailLines = 5
-	lines := strings.Split(strings.TrimSpace(content), "\n")
-	if len(lines) > tailLines {
-		body := "...(truncated)\n" + strings.Join(lines[len(lines)-tailLines:], "\n")
-		parts = append(parts, body)
-	} else if len(lines) > 0 && strings.TrimSpace(content) != "" {
-		parts = append(parts, content)
+	trimmed := strings.TrimSpace(content)
+	if trimmed != "" {
+		parts = appendTextStats(parts, trimmed)
 	}
 
 	return truncateRunes(strings.Join(parts, " "), summaryMaxRunes)
 }
 
-// readFileSummarizer 保留文件路径 + 行数 + 首尾行片段。
+// readFileSummarizer 仅保留稳定元信息，避免在摘要中再次暴露文件正文。
 func readFileSummarizer(content string, metadata map[string]string, isError bool) string {
 	path := metadata["path"]
 	if path == "" {
 		return ""
 	}
 
-	lines := strings.Split(content, "\n")
-	lineCount := len(lines)
+	trimmed := strings.TrimRight(content, "\n")
+	lineCount := stableLineCount(trimmed)
 
 	var parts []string
 	parts = append(parts, "[summary]", path, "lines="+strconv.Itoa(lineCount))
-
-	if len(lines) > 0 {
-		first := truncateRunes(strings.TrimSpace(lines[0]), 60)
-		if first != "" {
-			parts = append(parts, "first="+first)
-		}
-	}
-	if len(lines) > 1 {
-		last := truncateRunes(strings.TrimSpace(lines[len(lines)-1]), 60)
-		if last != "" && last != strings.TrimSpace(lines[0]) {
-			parts = append(parts, "last="+last)
-		}
+	if trimmed != "" {
+		parts = append(parts, "chars="+strconv.Itoa(utf8.RuneCountInString(trimmed)))
 	}
 
 	return truncateRunes(strings.Join(parts, " "), summaryMaxRunes)
@@ -96,7 +82,7 @@ func writeFileSummarizer(content string, metadata map[string]string, isError boo
 		return ""
 	}
 	bytes := metadata["bytes"]
-	return "[summary] wrote " + path + " (" + bytes + " bytes)"
+	return truncateRunes("[summary] wrote "+path+" ("+bytes+" bytes)", summaryMaxRunes)
 }
 
 // editSummarizer 保留编辑路径与替换范围。
@@ -110,7 +96,10 @@ func editSummarizer(content string, metadata map[string]string, isError bool) st
 	}
 	searchLen := metadata["search_length"]
 	replaceLen := metadata["replacement_length"]
-	return "[summary] edited " + path + " (search=" + searchLen + " chars, replace=" + replaceLen + " chars)"
+	return truncateRunes(
+		"[summary] edited "+path+" (search="+searchLen+" chars, replace="+replaceLen+" chars)",
+		summaryMaxRunes,
+	)
 }
 
 // grepSummarizer 保留搜索根目录、匹配计数与前若干文件名。
@@ -204,4 +193,20 @@ func truncateRunes(text string, maxRunes int) string {
 	}
 	runes := []rune(text)
 	return string(runes[:maxRunes]) + "..."
+}
+
+// stableLineCount 统计文本行数；空文本返回 0，末尾换行不会产生额外空行计数。
+func stableLineCount(text string) int {
+	if text == "" {
+		return 0
+	}
+	return strings.Count(text, "\n") + 1
+}
+
+// appendTextStats 为摘要补充文本统计字段，保持统一的结构化输出格式。
+func appendTextStats(parts []string, text string) []string {
+	return append(parts,
+		"lines="+strconv.Itoa(stableLineCount(text)),
+		"chars="+strconv.Itoa(utf8.RuneCountInString(text)),
+	)
 }

@@ -29,6 +29,13 @@ func assertMaxRuneCount(t *testing.T, got string, max int) {
 	}
 }
 
+func assertEmptySummary(t *testing.T, got string) {
+	t.Helper()
+	if got != "" {
+		t.Fatalf("expected empty string, got %q", got)
+	}
+}
+
 func TestBashSummarizer(t *testing.T) {
 	t.Parallel()
 
@@ -38,8 +45,9 @@ func TestBashSummarizer(t *testing.T) {
 		got := bashSummarizer(content, meta, false)
 		assertContains(t, got, "[exit=0]")
 		assertContains(t, got, "workdir=/home/user/project")
-		assertContains(t, got, "line8")
-		assertMaxRuneCount(t, got, 200)
+		assertContains(t, got, "lines=8")
+		assertContains(t, got, "chars=")
+		assertMaxRuneCount(t, got, summaryMaxRunes)
 	})
 
 	t.Run("error_output", func(t *testing.T) {
@@ -52,7 +60,7 @@ func TestBashSummarizer(t *testing.T) {
 	t.Run("short_output", func(t *testing.T) {
 		content := "ok"
 		got := bashSummarizer(content, nil, false)
-		assertContains(t, got, "ok")
+		assertContains(t, got, "lines=1")
 	})
 
 	t.Run("empty_content", func(t *testing.T) {
@@ -69,16 +77,21 @@ func TestReadFileSummarizer(t *testing.T) {
 		meta := stubMetadata("path", "/home/user/main.go")
 		got := readFileSummarizer(content, meta, false)
 		assertContains(t, got, "/home/user/main.go")
-		assertContains(t, got, "lines=")
-		assertContains(t, got, "first=package main")
-		assertMaxRuneCount(t, got, 200)
+		assertContains(t, got, "lines=5")
+		assertContains(t, got, "chars=")
+		assertMaxRuneCount(t, got, summaryMaxRunes)
+	})
+
+	t.Run("trailing_newline_not_counted_as_extra_line", func(t *testing.T) {
+		content := "a\nb\n"
+		meta := stubMetadata("path", "/tmp/a.txt")
+		got := readFileSummarizer(content, meta, false)
+		assertContains(t, got, "lines=2")
 	})
 
 	t.Run("missing_path", func(t *testing.T) {
 		got := readFileSummarizer("content", nil, false)
-		if got != "" {
-			t.Fatalf("expected empty string for missing path, got %q", got)
-		}
+		assertEmptySummary(t, got)
 	})
 }
 
@@ -90,13 +103,12 @@ func TestWriteFileSummarizer(t *testing.T) {
 		got := writeFileSummarizer("", meta, false)
 		assertContains(t, got, "/home/user/test.go")
 		assertContains(t, got, "1024 bytes")
+		assertMaxRuneCount(t, got, summaryMaxRunes)
 	})
 
 	t.Run("missing_path", func(t *testing.T) {
 		got := writeFileSummarizer("", stubMetadata("bytes", "100"), false)
-		if got != "" {
-			t.Fatalf("expected empty for missing path, got %q", got)
-		}
+		assertEmptySummary(t, got)
 	})
 }
 
@@ -108,6 +120,7 @@ func TestEditSummarizer(t *testing.T) {
 		got := editSummarizer("", meta, false)
 		assertContains(t, got, "src/main.go")
 		assertContains(t, got, "search=50")
+		assertMaxRuneCount(t, got, summaryMaxRunes)
 	})
 
 	t.Run("fallback_to_abs_path", func(t *testing.T) {
@@ -118,9 +131,14 @@ func TestEditSummarizer(t *testing.T) {
 
 	t.Run("missing_path", func(t *testing.T) {
 		got := editSummarizer("", stubMetadata("search_length", "10"), false)
-		if got != "" {
-			t.Fatalf("expected empty for missing path, got %q", got)
-		}
+		assertEmptySummary(t, got)
+	})
+
+	t.Run("long_path_is_truncated", func(t *testing.T) {
+		longPath := strings.Repeat("abcdef/", 80) + "main.go"
+		meta := stubMetadata("path", longPath, "search_length", "10", "replacement_length", "20")
+		got := editSummarizer("", meta, false)
+		assertMaxRuneCount(t, got, summaryMaxRunes+3)
 	})
 }
 
@@ -133,7 +151,7 @@ func TestGrepSummarizer(t *testing.T) {
 		got := grepSummarizer(content, meta, false)
 		assertContains(t, got, "root=/home/user")
 		assertContains(t, got, "files=4")
-		assertMaxRuneCount(t, got, 200)
+		assertMaxRuneCount(t, got, summaryMaxRunes)
 	})
 
 	t.Run("empty_content", func(t *testing.T) {
@@ -151,7 +169,7 @@ func TestGlobSummarizer(t *testing.T) {
 		meta := stubMetadata("count", "4")
 		got := globSummarizer(content, meta, false)
 		assertContains(t, got, "4 files")
-		assertMaxRuneCount(t, got, 200)
+		assertMaxRuneCount(t, got, summaryMaxRunes)
 	})
 
 	t.Run("no_matches", func(t *testing.T) {
