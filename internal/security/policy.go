@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // PolicyRule 描述一条可组合的权限策略规则。
@@ -111,6 +112,9 @@ func (e *PolicyEngine) Check(ctx context.Context, action Action) (CheckResult, e
 	}
 	if err := action.Validate(); err != nil {
 		return CheckResult{}, err
+	}
+	if capResult, denied := EvaluateCapabilityForEngine(action, time.Now().UTC()); denied {
+		return capResult, nil
 	}
 
 	view := newActionView(action)

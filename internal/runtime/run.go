@@ -93,6 +93,12 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	}
 
 	state := newRunState(input.RunID, session)
+	state.taskID = strings.TrimSpace(input.TaskID)
+	state.agentID = strings.TrimSpace(input.AgentID)
+	if input.CapabilityToken != nil {
+		token := input.CapabilityToken.Normalize()
+		state.capabilityToken = &token
+	}
 	statePtr = &state
 	if err := s.appendUserMessageAndSave(ctx, &state, input.Parts); err != nil {
 		return s.handleRunError(ctx, state.runID, state.session.ID, err)

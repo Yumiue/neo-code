@@ -8,6 +8,7 @@ import (
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/controlplane"
+	"neo-code/internal/security"
 	agentsession "neo-code/internal/session"
 )
 
@@ -23,6 +24,9 @@ type runState struct {
 	reactiveCompactAttempts int
 	autoCompactCache        autoCompactThresholdCache
 	rememberedThisRun       bool
+	taskID                  string
+	agentID                 string
+	capabilityToken         *security.CapabilityToken
 	turn                    int
 	phase                   controlplane.Phase
 	stopEmitted             bool

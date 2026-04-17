@@ -2,7 +2,9 @@ package security
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestPolicyEngineRecommendedRules(t *testing.T) {
@@ -604,5 +606,50 @@ func TestDeriveToolCategoryMCP(t *testing.T) {
 				t.Fatalf("deriveToolCategory() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestPolicyEngineCheckCapabilityTokenDeny(t *testing.T) {
+	t.Parallel()
+
+	engine, err := NewPolicyEngine(DecisionAllow, nil)
+	if err != nil {
+		t.Fatalf("new policy engine: %v", err)
+	}
+
+	now := time.Now().UTC()
+	token := CapabilityToken{
+		ID:              "token-policy",
+		TaskID:          "task-policy",
+		AgentID:         "agent-policy",
+		IssuedAt:        now.Add(-time.Minute),
+		ExpiresAt:       now.Add(time.Hour),
+		AllowedTools:    []string{"filesystem_read_file"},
+		AllowedPaths:    []string{"/workspace"},
+		NetworkPolicy:   NetworkPolicy{Mode: NetworkPermissionDenyAll},
+		WritePermission: WritePermissionWorkspace,
+	}
+
+	result, err := engine.Check(context.Background(), Action{
+		Type: ActionTypeRead,
+		Payload: ActionPayload{
+			ToolName:        "webfetch",
+			Resource:        "webfetch",
+			TargetType:      TargetTypeURL,
+			Target:          "https://example.com",
+			CapabilityToken: &token,
+		},
+	})
+	if err != nil {
+		t.Fatalf("policy check: %v", err)
+	}
+	if result.Decision != DecisionDeny {
+		t.Fatalf("expected deny decision, got %q", result.Decision)
+	}
+	if result.Rule == nil || result.Rule.ID != CapabilityRuleID {
+		t.Fatalf("expected capability rule id, got %+v", result.Rule)
+	}
+	if !strings.Contains(strings.ToLower(result.Reason), "tool not allowed") {
+		t.Fatalf("expected tool-not-allowed reason, got %q", result.Reason)
 	}
 }

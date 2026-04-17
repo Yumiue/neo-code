@@ -1342,6 +1342,18 @@ func TestServiceRunUsesToolManager(t *testing.T) {
 
 	manager := newRuntimeConfigManager(t)
 	store := newMemoryStore()
+	now := time.Now().UTC()
+	capability := &security.CapabilityToken{
+		ID:              "token-run-tool-manager",
+		TaskID:          "task-run-tool-manager",
+		AgentID:         "agent-run-tool-manager",
+		IssuedAt:        now.Add(-time.Minute),
+		ExpiresAt:       now.Add(time.Hour),
+		AllowedTools:    []string{"filesystem_edit"},
+		AllowedPaths:    []string{t.TempDir()},
+		NetworkPolicy:   security.NetworkPolicy{Mode: security.NetworkPermissionDenyAll},
+		WritePermission: security.WritePermissionWorkspace,
+	}
 	toolManager := &stubToolManager{
 		specs: []providertypes.ToolSpec{
 			{Name: "filesystem_edit", Description: "stub", Schema: map[string]any{"type": "object"}},
@@ -1366,7 +1378,13 @@ func TestServiceRunUsesToolManager(t *testing.T) {
 	}
 
 	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
-	if err := service.Run(context.Background(), UserInput{RunID: "run-tool-manager", Parts: []providertypes.ContentPart{providertypes.NewTextPart("edit file")}}); err != nil {
+	if err := service.Run(context.Background(), UserInput{
+		RunID:           "run-tool-manager",
+		Parts:           []providertypes.ContentPart{providertypes.NewTextPart("edit file")},
+		TaskID:          capability.TaskID,
+		AgentID:         capability.AgentID,
+		CapabilityToken: capability,
+	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 
@@ -1378,6 +1396,15 @@ func TestServiceRunUsesToolManager(t *testing.T) {
 	}
 	if toolManager.lastInput.ID != "call-manager" {
 		t.Fatalf("expected forwarded tool call id, got %q", toolManager.lastInput.ID)
+	}
+	if toolManager.lastInput.TaskID != capability.TaskID {
+		t.Fatalf("expected forwarded task id %q, got %q", capability.TaskID, toolManager.lastInput.TaskID)
+	}
+	if toolManager.lastInput.AgentID != capability.AgentID {
+		t.Fatalf("expected forwarded agent id %q, got %q", capability.AgentID, toolManager.lastInput.AgentID)
+	}
+	if toolManager.lastInput.CapabilityToken == nil || toolManager.lastInput.CapabilityToken.ID != capability.ID {
+		t.Fatalf("expected forwarded capability token id %q, got %+v", capability.ID, toolManager.lastInput.CapabilityToken)
 	}
 	if len(scripted.requests) == 0 || len(scripted.requests[0].Tools) != 1 || scripted.requests[0].Tools[0].Name != "filesystem_edit" {
 		t.Fatalf("expected tool specs from tool manager, got %+v", scripted.requests)

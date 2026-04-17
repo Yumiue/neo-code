@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNewStaticGateway(t *testing.T) {
@@ -239,4 +240,49 @@ func TestStaticGatewayCheck(t *testing.T) {
 
 func containsText(err error, text string) bool {
 	return err != nil && strings.Contains(err.Error(), text)
+}
+
+func TestStaticGatewayCheckCapabilityTokenDeny(t *testing.T) {
+	t.Parallel()
+
+	gateway, err := NewStaticGateway(DecisionAllow, nil)
+	if err != nil {
+		t.Fatalf("new gateway: %v", err)
+	}
+
+	now := time.Now().UTC()
+	token := CapabilityToken{
+		ID:              "token-gateway",
+		TaskID:          "task-gateway",
+		AgentID:         "agent-gateway",
+		IssuedAt:        now.Add(-time.Minute),
+		ExpiresAt:       now.Add(time.Hour),
+		AllowedTools:    []string{"filesystem_read_file"},
+		AllowedPaths:    []string{"/workspace"},
+		NetworkPolicy:   NetworkPolicy{Mode: NetworkPermissionDenyAll},
+		WritePermission: WritePermissionWorkspace,
+	}
+
+	result, err := gateway.Check(context.Background(), Action{
+		Type: ActionTypeRead,
+		Payload: ActionPayload{
+			ToolName:        "webfetch",
+			Resource:        "webfetch",
+			TargetType:      TargetTypeURL,
+			Target:          "https://example.com",
+			CapabilityToken: &token,
+		},
+	})
+	if err != nil {
+		t.Fatalf("gateway check: %v", err)
+	}
+	if result.Decision != DecisionDeny {
+		t.Fatalf("expected deny decision, got %q", result.Decision)
+	}
+	if result.Rule == nil || result.Rule.ID != CapabilityRuleID {
+		t.Fatalf("expected capability rule id, got %+v", result.Rule)
+	}
+	if !strings.Contains(strings.ToLower(result.Reason), "tool not allowed") {
+		t.Fatalf("expected tool-not-allowed reason, got %q", result.Reason)
+	}
 }

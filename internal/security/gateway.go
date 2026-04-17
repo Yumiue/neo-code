@@ -3,6 +3,7 @@ package security
 import (
 	"context"
 	"strings"
+	"time"
 )
 
 // PermissionEngine evaluates actions deterministically.
@@ -46,6 +47,9 @@ func (g *StaticGateway) Check(ctx context.Context, action Action) (CheckResult, 
 	}
 	if err := action.Validate(); err != nil {
 		return CheckResult{}, err
+	}
+	if capResult, denied := EvaluateCapabilityForEngine(action, time.Now().UTC()); denied {
+		return capResult, nil
 	}
 
 	for idx := range g.rules {

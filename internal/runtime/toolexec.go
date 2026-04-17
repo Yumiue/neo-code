@@ -90,6 +90,9 @@ func (s *Service) executeOneToolCall(
 	result, execErr := s.executeToolCallWithPermission(ctx, permissionExecutionInput{
 		RunID:       state.runID,
 		SessionID:   state.session.ID,
+		TaskID:      state.taskID,
+		AgentID:     state.agentID,
+		Capability:  state.capabilityToken,
 		State:       state,
 		Call:        call,
 		Workdir:     snapshot.workdir,

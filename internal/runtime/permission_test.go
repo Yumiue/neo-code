@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1068,5 +1069,162 @@ func TestExecuteToolCallWithPermissionReturnsContextCanceledWhenChunkNotDelivere
 	})
 	if !errors.Is(execErr, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", execErr)
+	}
+}
+
+func TestExecuteToolCallWithPermissionCapabilityDenyEmitsResolvedEvent(t *testing.T) {
+	t.Parallel()
+
+	registry := tools.NewRegistry()
+	readTool := &stubTool{name: "filesystem_read_file", content: "ok"}
+	registry.Register(readTool)
+
+	engine, err := security.NewStaticGateway(security.DecisionAllow, nil)
+	if err != nil {
+		t.Fatalf("new static gateway: %v", err)
+	}
+	toolManager, err := tools.NewManager(registry, engine, nil)
+	if err != nil {
+		t.Fatalf("new tool manager: %v", err)
+	}
+
+	now := time.Now().UTC()
+	workdir := t.TempDir()
+	token := security.CapabilityToken{
+		ID:              "token-runtime-deny",
+		TaskID:          "task-runtime-deny",
+		AgentID:         "agent-runtime-deny",
+		IssuedAt:        now.Add(-time.Minute),
+		ExpiresAt:       now.Add(time.Hour),
+		AllowedTools:    []string{"filesystem_read_file"},
+		AllowedPaths:    []string{workdir},
+		NetworkPolicy:   security.NetworkPolicy{Mode: security.NetworkPermissionDenyAll},
+		WritePermission: security.WritePermissionWorkspace,
+	}
+	signed, err := toolManager.CapabilitySigner().Sign(token)
+	if err != nil {
+		t.Fatalf("sign token: %v", err)
+	}
+
+	service := NewWithFactory(
+		newRuntimeConfigManager(t),
+		toolManager,
+		newMemoryStore(),
+		&scriptedProviderFactory{provider: &scriptedProvider{}},
+		nil,
+	)
+
+	_, execErr := service.executeToolCallWithPermission(context.Background(), permissionExecutionInput{
+		RunID:      "run-capability-deny",
+		SessionID:  "session-capability-deny",
+		TaskID:     token.TaskID,
+		AgentID:    token.AgentID,
+		Capability: &signed,
+		Call: providertypes.ToolCall{
+			ID:        "call-capability-deny",
+			Name:      "filesystem_read_file",
+			Arguments: `{"path":"../outside.txt"}`,
+		},
+		Workdir:     workdir,
+		ToolTimeout: time.Second,
+	})
+	var permissionErr *tools.PermissionDecisionError
+	if !errors.As(execErr, &permissionErr) {
+		t.Fatalf("expected permission decision error, got %v", execErr)
+	}
+	if permissionErr.Decision() != string(security.DecisionDeny) {
+		t.Fatalf("expected deny decision, got %q", permissionErr.Decision())
+	}
+	if permissionErr.RuleID() != security.CapabilityRuleID {
+		t.Fatalf("expected capability rule id, got %q", permissionErr.RuleID())
+	}
+	if !strings.Contains(strings.ToLower(permissionErr.Reason()), "traversal") {
+		t.Fatalf("expected traversal reason, got %q", permissionErr.Reason())
+	}
+	if readTool.callCount != 0 {
+		t.Fatalf("expected denied tool not to execute, got %d calls", readTool.callCount)
+	}
+
+	select {
+	case event := <-service.Events():
+		if event.Type != EventPermissionResolved {
+			t.Fatalf("expected permission resolved event, got %q", event.Type)
+		}
+		payload, ok := event.Payload.(PermissionResolvedPayload)
+		if !ok {
+			t.Fatalf("expected PermissionResolvedPayload, got %#v", event.Payload)
+		}
+		if payload.Decision != "deny" || payload.ResolvedAs != "denied" {
+			t.Fatalf("unexpected resolved payload decision: %+v", payload)
+		}
+		if payload.RuleID != security.CapabilityRuleID {
+			t.Fatalf("expected rule id %q, got %q", security.CapabilityRuleID, payload.RuleID)
+		}
+		if !strings.Contains(strings.ToLower(payload.Reason), "traversal") {
+			t.Fatalf("expected traversal reason in payload, got %q", payload.Reason)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting permission resolved event")
+	}
+}
+
+func TestExecuteToolCallWithPermissionForwardsCapabilityContext(t *testing.T) {
+	t.Parallel()
+
+	manager := &stubToolManager{
+		result: tools.ToolResult{
+			Name:    "filesystem_read_file",
+			Content: "ok",
+		},
+	}
+	service := NewWithFactory(
+		newRuntimeConfigManager(t),
+		manager,
+		newMemoryStore(),
+		&scriptedProviderFactory{provider: &scriptedProvider{}},
+		nil,
+	)
+
+	token := security.CapabilityToken{
+		ID:              "token-forward",
+		TaskID:          "task-forward",
+		AgentID:         "agent-forward",
+		IssuedAt:        time.Now().UTC().Add(-time.Minute),
+		ExpiresAt:       time.Now().UTC().Add(time.Hour),
+		AllowedTools:    []string{"filesystem_read_file"},
+		AllowedPaths:    []string{t.TempDir()},
+		NetworkPolicy:   security.NetworkPolicy{Mode: security.NetworkPermissionDenyAll},
+		WritePermission: security.WritePermissionWorkspace,
+	}
+
+	result, execErr := service.executeToolCallWithPermission(context.Background(), permissionExecutionInput{
+		RunID:      "run-forward",
+		SessionID:  "session-forward",
+		TaskID:     token.TaskID,
+		AgentID:    token.AgentID,
+		Capability: &token,
+		Call: providertypes.ToolCall{
+			ID:        "call-forward",
+			Name:      "filesystem_read_file",
+			Arguments: `{"path":"README.md"}`,
+		},
+		Workdir:     t.TempDir(),
+		ToolTimeout: time.Second,
+	})
+	if execErr != nil {
+		t.Fatalf("executeToolCallWithPermission() error = %v", execErr)
+	}
+	if result.Content != "ok" {
+		t.Fatalf("expected successful tool result, got %+v", result)
+	}
+
+	if manager.lastInput.TaskID != token.TaskID {
+		t.Fatalf("expected task id %q, got %q", token.TaskID, manager.lastInput.TaskID)
+	}
+	if manager.lastInput.AgentID != token.AgentID {
+		t.Fatalf("expected agent id %q, got %q", token.AgentID, manager.lastInput.AgentID)
+	}
+	if manager.lastInput.CapabilityToken == nil || manager.lastInput.CapabilityToken.ID != token.ID {
+		t.Fatalf("expected capability token forwarded, got %+v", manager.lastInput.CapabilityToken)
 	}
 }

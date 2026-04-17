@@ -62,6 +62,8 @@ type ActionPayload struct {
 	Resource   string
 	Operation  string
 	SessionID  string
+	TaskID     string
+	AgentID    string
 	Workdir    string
 	TargetType TargetType
 	Target     string
@@ -73,6 +75,8 @@ type ActionPayload struct {
 	// validation. It falls back to Target when unset. For example, bash validates
 	// its requested workdir here while Target still contains the shell command.
 	SandboxTarget string
+	// CapabilityToken 是子代理调用工具时附带的能力令牌；为空表示主代理路径。
+	CapabilityToken *CapabilityToken
 }
 
 // Action is the unified security input for one tool execution request.

@@ -30,6 +30,10 @@ func (s *WorkspaceSandbox) Check(ctx context.Context, action Action) (*Workspace
 	if err := action.Validate(); err != nil {
 		return nil, err
 	}
+	// 对携带 capability token 的子代理动作，先执行路径 allowlist 复核。
+	if err := ValidateCapabilityForWorkspace(action); err != nil {
+		return nil, err
+	}
 
 	plan, ok, err := buildWorkspacePlan(action)
 	if err != nil {

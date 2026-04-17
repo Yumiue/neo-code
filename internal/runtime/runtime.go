@@ -11,6 +11,7 @@ import (
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/approval"
+	"neo-code/internal/security"
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/skills"
 	"neo-code/internal/tools"
@@ -41,10 +42,13 @@ type Runtime interface {
 
 // UserInput 描述一次用户输入请求的最小运行参数。
 type UserInput struct {
-	SessionID string
-	RunID     string
-	Parts     []providertypes.ContentPart
-	Workdir   string
+	SessionID       string
+	RunID           string
+	Parts           []providertypes.ContentPart
+	Workdir         string
+	TaskID          string
+	AgentID         string
+	CapabilityToken *security.CapabilityToken
 }
 
 // ProviderFactory 负责基于运行期配置创建 provider 实例。

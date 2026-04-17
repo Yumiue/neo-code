@@ -36,12 +36,15 @@ type SessionMutator interface {
 
 // ToolCallInput 承载一次工具调用所需的运行时上下文。
 type ToolCallInput struct {
-	ID            string
-	Name          string
-	Arguments     []byte
-	SessionID     string
-	Workdir       string
-	WorkspacePlan *security.WorkspaceExecutionPlan
+	ID              string
+	Name            string
+	Arguments       []byte
+	SessionID       string
+	TaskID          string
+	AgentID         string
+	Workdir         string
+	CapabilityToken *security.CapabilityToken
+	WorkspacePlan   *security.WorkspaceExecutionPlan
 	// SessionMutator 仅对需要会话级写入的工具开放（例如 todo_write）。
 	SessionMutator SessionMutator
 	// EmitChunk 用于工具执行期间的流式输出回调。

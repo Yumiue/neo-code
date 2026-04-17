@@ -45,6 +45,9 @@ const (
 type permissionExecutionInput struct {
 	RunID       string
 	SessionID   string
+	TaskID      string
+	AgentID     string
+	Capability  *security.CapabilityToken
 	State       *runState
 	Call        providertypes.ToolCall
 	Workdir     string
@@ -72,11 +75,14 @@ func (s *Service) ResolvePermission(ctx context.Context, input PermissionResolut
 // executeToolCallWithPermission 执行工具调用，并在 ask/deny 路径上统一发出权限事件。
 func (s *Service) executeToolCallWithPermission(ctx context.Context, input permissionExecutionInput) (tools.ToolResult, error) {
 	callInput := tools.ToolCallInput{
-		ID:        input.Call.ID,
-		Name:      input.Call.Name,
-		Arguments: []byte(input.Call.Arguments),
-		Workdir:   input.Workdir,
-		SessionID: input.SessionID,
+		ID:              input.Call.ID,
+		Name:            input.Call.Name,
+		Arguments:       []byte(input.Call.Arguments),
+		Workdir:         input.Workdir,
+		SessionID:       input.SessionID,
+		TaskID:          input.TaskID,
+		AgentID:         input.AgentID,
+		CapabilityToken: input.Capability,
 		EmitChunk: func(chunk []byte) error {
 			if err := ctx.Err(); err != nil {
 				return err

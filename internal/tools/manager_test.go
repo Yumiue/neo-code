@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/security"
@@ -481,6 +482,9 @@ func TestPermissionDecisionError(t *testing.T) {
 	if errors.Is(err, context.Canceled) {
 		t.Fatalf("permission error should not match unrelated errors")
 	}
+	if !errors.Is(err, ErrPermissionApprovalRequired) {
+		t.Fatalf("ask decision should match ErrPermissionApprovalRequired")
+	}
 
 	denyErr := &PermissionDecisionError{}
 	if !strings.Contains(denyErr.Error(), "permission denied") {
@@ -495,6 +499,9 @@ func TestPermissionDecisionError(t *testing.T) {
 	if denyErr.RememberScope() != "" {
 		t.Fatalf("expected empty remember scope, got %q", denyErr.RememberScope())
 	}
+	if !errors.Is(denyErr, ErrPermissionDenied) {
+		t.Fatalf("default deny should match ErrPermissionDenied")
+	}
 
 	var nilErr *PermissionDecisionError
 	if nilErr.Error() != "" || nilErr.Decision() != "" || nilErr.ToolName() != "" || nilErr.RememberScope() != "" {
@@ -508,6 +515,17 @@ func TestPermissionDecisionError(t *testing.T) {
 	if !strings.Contains(defaultAsk.Error(), "permission approval required") {
 		t.Fatalf("expected default ask message, got %q", defaultAsk.Error())
 	}
+
+	capabilityErr := &PermissionDecisionError{
+		decision: security.DecisionDeny,
+		ruleID:   security.CapabilityRuleID,
+	}
+	if !errors.Is(capabilityErr, ErrCapabilityDenied) {
+		t.Fatalf("capability deny should match ErrCapabilityDenied")
+	}
+	if !errors.Is(capabilityErr, ErrPermissionDenied) {
+		t.Fatalf("capability deny should also match ErrPermissionDenied")
+	}
 }
 
 func TestNewManagerRejectsNilExecutor(t *testing.T) {
@@ -516,6 +534,171 @@ func TestNewManagerRejectsNilExecutor(t *testing.T) {
 	manager, err := NewManager(nil, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "executor is nil") {
 		t.Fatalf("expected nil executor error, got manager=%v err=%v", manager, err)
+	}
+}
+
+func TestManagerPermissionHelperBranches(t *testing.T) {
+	t.Parallel()
+
+	decision := security.CheckResult{
+		Decision: security.DecisionAsk,
+		Action: security.Action{
+			Type: security.ActionTypeRead,
+			Payload: security.ActionPayload{
+				ToolName:          "webfetch",
+				Resource:          "webfetch",
+				Operation:         "fetch",
+				TargetType:        security.TargetTypeURL,
+				Target:            "https://example.com",
+				SandboxTargetType: security.TargetTypePath,
+				SandboxTarget:     "/workspace/tmp.txt",
+				TaskID:            "task-1",
+				AgentID:           "agent-1",
+			},
+		},
+		Rule: &security.Rule{
+			ID: "session-memory:" + string(SessionPermissionScopeAlways),
+		},
+		Reason: "need approval",
+	}
+
+	if scope := extractRememberScope(security.CheckResult{}); scope != "" {
+		t.Fatalf("expected empty scope for nil rule, got %q", scope)
+	}
+	if scope := extractRememberScope(decision); scope != SessionPermissionScopeAlways {
+		t.Fatalf("expected always session scope, got %q", scope)
+	}
+	if scope := extractRememberScope(security.CheckResult{Rule: &security.Rule{ID: "session-memory:" + string(SessionPermissionScopeOnce)}}); scope != SessionPermissionScopeOnce {
+		t.Fatalf("expected once scope, got %q", scope)
+	}
+	if scope := extractRememberScope(security.CheckResult{Rule: &security.Rule{ID: "session-memory:" + string(SessionPermissionScopeReject)}}); scope != SessionPermissionScopeReject {
+		t.Fatalf("expected reject scope, got %q", scope)
+	}
+	if scope := extractRememberScope(security.CheckResult{Rule: &security.Rule{ID: "unknown"}}); scope != "" {
+		t.Fatalf("expected unknown scope to map empty, got %q", scope)
+	}
+
+	if got := sessionDecisionReason(""); got != "session permission remembered" {
+		t.Fatalf("unexpected default session decision reason: %q", got)
+	}
+	if got := sessionDecisionReason(SessionPermissionScopeOnce); !strings.Contains(got, "once") {
+		t.Fatalf("unexpected once reason: %q", got)
+	}
+	if got := sessionDecisionReason(SessionPermissionScopeAlways); !strings.Contains(got, "always") {
+		t.Fatalf("unexpected always reason: %q", got)
+	}
+	if got := sessionDecisionReason(SessionPermissionScopeReject); !strings.Contains(got, "reject") {
+		t.Fatalf("unexpected reject reason: %q", got)
+	}
+
+	metadata := permissionMetadata(decision)
+	for _, key := range []string{
+		"permission_decision",
+		"permission_rule_id",
+		"permission_action_type",
+		"permission_resource",
+		"permission_operation",
+		"permission_target_type",
+		"permission_target",
+		"permission_sandbox_target_type",
+		"permission_sandbox_target",
+		"permission_task_id",
+		"permission_agent_id",
+	} {
+		if _, ok := metadata[key]; !ok {
+			t.Fatalf("expected metadata key %q, got %+v", key, metadata)
+		}
+	}
+
+	withoutRule := permissionMetadata(security.CheckResult{
+		Decision: security.DecisionDeny,
+		Action: security.Action{
+			Type: security.ActionTypeRead,
+			Payload: security.ActionPayload{
+				ToolName: "filesystem_read_file",
+				Resource: "filesystem_read_file",
+			},
+		},
+	})
+	if _, ok := withoutRule["permission_rule_id"]; ok {
+		t.Fatalf("did not expect permission_rule_id for empty rule")
+	}
+	if _, ok := withoutRule["permission_target_type"]; ok {
+		t.Fatalf("did not expect target metadata when target is empty")
+	}
+	if _, ok := withoutRule["permission_task_id"]; ok {
+		t.Fatalf("did not expect task metadata when task id is empty")
+	}
+
+	details := permissionDetails(decision)
+	for _, fragment := range []string{"type: read", "resource: webfetch", "operation: fetch", "url: https://example.com", "policy: need approval"} {
+		if !strings.Contains(details, fragment) {
+			t.Fatalf("expected details containing %q, got %q", fragment, details)
+		}
+	}
+	minimalDetails := permissionDetails(security.CheckResult{
+		Action: security.Action{Type: security.ActionTypeBash},
+	})
+	if strings.TrimSpace(minimalDetails) != "type: bash" {
+		t.Fatalf("expected minimal details for bash, got %q", minimalDetails)
+	}
+}
+
+func TestManagerCapabilityDecisionHelpers(t *testing.T) {
+	t.Parallel()
+
+	action := security.Action{
+		Type: security.ActionTypeRead,
+		Payload: security.ActionPayload{
+			ToolName: "filesystem_read_file",
+			Resource: "filesystem_read_file",
+		},
+	}
+	deny := capabilityDenyDecision(action, "")
+	if deny.Decision != security.DecisionDeny {
+		t.Fatalf("expected deny decision, got %q", deny.Decision)
+	}
+	if deny.Rule == nil || deny.Rule.ID != security.CapabilityRuleID {
+		t.Fatalf("expected capability rule id, got %+v", deny.Rule)
+	}
+	if deny.Reason != "capability token denied" {
+		t.Fatalf("expected default deny reason, got %q", deny.Reason)
+	}
+
+	resultAsk := blockedToolResult(ToolCallInput{
+		ID:   "call-ask",
+		Name: "webfetch",
+	}, security.CheckResult{
+		Decision: security.DecisionAsk,
+		Action:   action,
+	})
+	if !strings.Contains(resultAsk.Content, "permission approval required") {
+		t.Fatalf("expected ask reason in blocked result, got %q", resultAsk.Content)
+	}
+
+	resultDeny := blockedToolResult(ToolCallInput{
+		ID:   "call-deny",
+		Name: "webfetch",
+	}, security.CheckResult{
+		Decision: security.DecisionDeny,
+		Action:   action,
+		Reason:   "explicit deny",
+	})
+	if !strings.Contains(resultDeny.Content, "explicit deny") {
+		t.Fatalf("expected explicit deny reason in blocked result, got %q", resultDeny.Content)
+	}
+
+	var nilManager *DefaultManager
+	if err := nilManager.RememberSessionDecision("session-1", action, SessionPermissionScopeAlways); err == nil || !strings.Contains(err.Error(), "manager is nil") {
+		t.Fatalf("expected nil manager remember error, got %v", err)
+	}
+
+	manager := &DefaultManager{}
+	if err := manager.RememberSessionDecision("session-2", action, SessionPermissionScopeAlways); err != nil {
+		t.Fatalf("expected remember session decision success, got %v", err)
+	}
+	if manager.sessionDecisions == nil {
+		t.Fatalf("expected session memory to be initialized")
 	}
 }
 
@@ -874,6 +1057,17 @@ func TestBuildPermissionAction(t *testing.T) {
 			wantResource: "bash",
 			wantTarget:   "echo hi",
 			wantSandbox:  "scripts",
+		},
+		{
+			name: "bash defaults sandbox workdir to dot",
+			input: ToolCallInput{
+				Name:      "bash",
+				Arguments: []byte(`{"command":"echo hi"}`),
+			},
+			wantType:     security.ActionTypeBash,
+			wantResource: "bash",
+			wantTarget:   "echo hi",
+			wantSandbox:  ".",
 		},
 		{
 			name: "read file maps to read action",
@@ -1332,5 +1526,399 @@ func TestNoopWorkspaceSandbox(t *testing.T) {
 	_, err = sandbox.Check(ctx, security.Action{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context canceled, got %v", err)
+	}
+}
+
+func TestDefaultManagerExecuteCapabilityTokenValidation(t *testing.T) {
+	t.Parallel()
+
+	makeManager := func(t *testing.T) (*DefaultManager, *managerStubTool) {
+		t.Helper()
+		registry := NewRegistry()
+		readTool := &managerStubTool{name: "filesystem_read_file", content: "ok"}
+		registry.Register(readTool)
+		engine, err := security.NewStaticGateway(security.DecisionAllow, nil)
+		if err != nil {
+			t.Fatalf("new static gateway: %v", err)
+		}
+		manager, err := NewManager(registry, engine, nil)
+		if err != nil {
+			t.Fatalf("new manager: %v", err)
+		}
+		return manager, readTool
+	}
+
+	now := time.Now().UTC()
+	workdir := t.TempDir()
+	baseToken := security.CapabilityToken{
+		ID:              "token-validation",
+		TaskID:          "task-validation",
+		AgentID:         "agent-validation",
+		IssuedAt:        now.Add(-time.Minute),
+		ExpiresAt:       now.Add(time.Hour),
+		AllowedTools:    []string{"filesystem_read_file"},
+		AllowedPaths:    []string{workdir},
+		NetworkPolicy:   security.NetworkPolicy{Mode: security.NetworkPermissionDenyAll},
+		WritePermission: security.WritePermissionWorkspace,
+	}
+
+	testCases := []struct {
+		name        string
+		buildInput  func(t *testing.T, manager *DefaultManager) ToolCallInput
+		expectErr   string
+		expectCalls int
+	}{
+		{
+			name: "allow signed token",
+			buildInput: func(t *testing.T, manager *DefaultManager) ToolCallInput {
+				t.Helper()
+				signed, err := manager.CapabilitySigner().Sign(baseToken)
+				if err != nil {
+					t.Fatalf("sign token: %v", err)
+				}
+				return ToolCallInput{
+					ID:              "call-allow",
+					Name:            "filesystem_read_file",
+					Arguments:       []byte(`{"path":"README.md"}`),
+					Workdir:         workdir,
+					TaskID:          baseToken.TaskID,
+					AgentID:         baseToken.AgentID,
+					CapabilityToken: &signed,
+				}
+			},
+			expectCalls: 1,
+		},
+		{
+			name: "deny tampered signature",
+			buildInput: func(t *testing.T, manager *DefaultManager) ToolCallInput {
+				t.Helper()
+				signed, err := manager.CapabilitySigner().Sign(baseToken)
+				if err != nil {
+					t.Fatalf("sign token: %v", err)
+				}
+				signed.AllowedTools = []string{"filesystem_write_file"}
+				return ToolCallInput{
+					ID:              "call-tampered",
+					Name:            "filesystem_read_file",
+					Arguments:       []byte(`{"path":"README.md"}`),
+					Workdir:         workdir,
+					TaskID:          baseToken.TaskID,
+					AgentID:         baseToken.AgentID,
+					CapabilityToken: &signed,
+				}
+			},
+			expectErr: "invalid capability token signature",
+		},
+		{
+			name: "deny expired token",
+			buildInput: func(t *testing.T, manager *DefaultManager) ToolCallInput {
+				t.Helper()
+				expired := baseToken
+				expired.ID = "token-expired"
+				expired.IssuedAt = now.Add(-2 * time.Hour)
+				expired.ExpiresAt = now.Add(-time.Minute)
+				signed, err := manager.CapabilitySigner().Sign(expired)
+				if err != nil {
+					t.Fatalf("sign token: %v", err)
+				}
+				return ToolCallInput{
+					ID:              "call-expired",
+					Name:            "filesystem_read_file",
+					Arguments:       []byte(`{"path":"README.md"}`),
+					Workdir:         workdir,
+					TaskID:          expired.TaskID,
+					AgentID:         expired.AgentID,
+					CapabilityToken: &signed,
+				}
+			},
+			expectErr: "capability token expired",
+		},
+		{
+			name: "deny task mismatch",
+			buildInput: func(t *testing.T, manager *DefaultManager) ToolCallInput {
+				t.Helper()
+				signed, err := manager.CapabilitySigner().Sign(baseToken)
+				if err != nil {
+					t.Fatalf("sign token: %v", err)
+				}
+				return ToolCallInput{
+					ID:              "call-mismatch",
+					Name:            "filesystem_read_file",
+					Arguments:       []byte(`{"path":"README.md"}`),
+					Workdir:         workdir,
+					TaskID:          "task-other",
+					AgentID:         baseToken.AgentID,
+					CapabilityToken: &signed,
+				}
+			},
+			expectErr: "task_id does not match action",
+		},
+		{
+			name: "deny missing task id binding",
+			buildInput: func(t *testing.T, manager *DefaultManager) ToolCallInput {
+				t.Helper()
+				signed, err := manager.CapabilitySigner().Sign(baseToken)
+				if err != nil {
+					t.Fatalf("sign token: %v", err)
+				}
+				return ToolCallInput{
+					ID:              "call-missing-task",
+					Name:            "filesystem_read_file",
+					Arguments:       []byte(`{"path":"README.md"}`),
+					Workdir:         workdir,
+					TaskID:          "",
+					AgentID:         baseToken.AgentID,
+					CapabilityToken: &signed,
+				}
+			},
+			expectErr: "requires non-empty action task_id",
+		},
+		{
+			name: "deny missing agent id binding",
+			buildInput: func(t *testing.T, manager *DefaultManager) ToolCallInput {
+				t.Helper()
+				signed, err := manager.CapabilitySigner().Sign(baseToken)
+				if err != nil {
+					t.Fatalf("sign token: %v", err)
+				}
+				return ToolCallInput{
+					ID:              "call-missing-agent",
+					Name:            "filesystem_read_file",
+					Arguments:       []byte(`{"path":"README.md"}`),
+					Workdir:         workdir,
+					TaskID:          baseToken.TaskID,
+					AgentID:         "",
+					CapabilityToken: &signed,
+				}
+			},
+			expectErr: "requires non-empty action agent_id",
+		},
+	}
+
+	for _, tt := range testCases {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			manager, readTool := makeManager(t)
+			input := tt.buildInput(t, manager)
+
+			_, execErr := manager.Execute(context.Background(), input)
+			if tt.expectErr == "" {
+				if execErr != nil {
+					t.Fatalf("expected nil error, got %v", execErr)
+				}
+			} else {
+				var permissionErr *PermissionDecisionError
+				if !errors.As(execErr, &permissionErr) {
+					t.Fatalf("expected permission decision error, got %v", execErr)
+				}
+				if permissionErr.Decision() != string(security.DecisionDeny) {
+					t.Fatalf("expected deny decision, got %q", permissionErr.Decision())
+				}
+				if permissionErr.RuleID() != security.CapabilityRuleID {
+					t.Fatalf("expected capability rule id, got %q", permissionErr.RuleID())
+				}
+				if !strings.Contains(strings.ToLower(permissionErr.Reason()), strings.ToLower(tt.expectErr)) {
+					t.Fatalf("expected reason containing %q, got %q", tt.expectErr, permissionErr.Reason())
+				}
+			}
+			if readTool.callCount != tt.expectCalls {
+				t.Fatalf("expected tool call count %d, got %d", tt.expectCalls, readTool.callCount)
+			}
+		})
+	}
+}
+
+func TestDefaultManagerExecuteCapabilityTokenPolicyDeny(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	webTool := &managerStubTool{name: "webfetch", content: "ok"}
+	readTool := &managerStubTool{name: "filesystem_read_file", content: "ok"}
+	registry.Register(webTool)
+	registry.Register(readTool)
+
+	engine, err := security.NewStaticGateway(security.DecisionAllow, nil)
+	if err != nil {
+		t.Fatalf("new static gateway: %v", err)
+	}
+	manager, err := NewManager(registry, engine, nil)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+
+	now := time.Now().UTC()
+	workdir := t.TempDir()
+	token := security.CapabilityToken{
+		ID:              "token-engine-deny",
+		TaskID:          "task-engine-deny",
+		AgentID:         "agent-engine-deny",
+		IssuedAt:        now.Add(-time.Minute),
+		ExpiresAt:       now.Add(time.Hour),
+		AllowedTools:    []string{"filesystem_read_file"},
+		AllowedPaths:    []string{filepath.Join(workdir, "safe")},
+		NetworkPolicy:   security.NetworkPolicy{Mode: security.NetworkPermissionDenyAll},
+		WritePermission: security.WritePermissionWorkspace,
+	}
+	signed, err := manager.CapabilitySigner().Sign(token)
+	if err != nil {
+		t.Fatalf("sign token: %v", err)
+	}
+
+	cases := []struct {
+		name      string
+		input     ToolCallInput
+		wantInErr string
+	}{
+		{
+			name: "tool allowlist miss",
+			input: ToolCallInput{
+				ID:              "call-tool-miss",
+				Name:            "webfetch",
+				Arguments:       []byte(`{"url":"https://example.com"}`),
+				Workdir:         workdir,
+				TaskID:          token.TaskID,
+				AgentID:         token.AgentID,
+				CapabilityToken: &signed,
+			},
+			wantInErr: "tool not allowed",
+		},
+		{
+			name: "path traversal blocked",
+			input: ToolCallInput{
+				ID:              "call-path-traversal",
+				Name:            "filesystem_read_file",
+				Arguments:       []byte(`{"path":"../secret.txt"}`),
+				Workdir:         workdir,
+				TaskID:          token.TaskID,
+				AgentID:         token.AgentID,
+				CapabilityToken: &signed,
+			},
+			wantInErr: "traversal",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, execErr := manager.Execute(context.Background(), tc.input)
+			var permissionErr *PermissionDecisionError
+			if !errors.As(execErr, &permissionErr) {
+				t.Fatalf("expected permission decision error, got %v", execErr)
+			}
+			if permissionErr.Decision() != string(security.DecisionDeny) {
+				t.Fatalf("expected deny decision, got %q", permissionErr.Decision())
+			}
+			if permissionErr.RuleID() != security.CapabilityRuleID {
+				t.Fatalf("expected capability rule id, got %q", permissionErr.RuleID())
+			}
+			if !strings.Contains(strings.ToLower(permissionErr.Reason()), strings.ToLower(tc.wantInErr)) {
+				t.Fatalf("expected reason containing %q, got %q", tc.wantInErr, permissionErr.Reason())
+			}
+		})
+	}
+
+	if webTool.callCount != 0 || readTool.callCount != 0 {
+		t.Fatalf("expected denied calls not to execute tools, got web=%d read=%d", webTool.callCount, readTool.callCount)
+	}
+}
+
+func TestDefaultManagerCapabilitySignerHelpers(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	registry.Register(&managerStubTool{name: "filesystem_read_file", content: "ok"})
+
+	manager, err := NewManager(registry, nil, nil)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	if manager.CapabilitySigner() == nil {
+		t.Fatalf("expected default capability signer")
+	}
+
+	if err := manager.SetCapabilitySigner(nil); err == nil || !strings.Contains(err.Error(), "capability signer is nil") {
+		t.Fatalf("expected nil signer error, got %v", err)
+	}
+	customSigner, err := security.NewCapabilitySigner([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("new custom signer: %v", err)
+	}
+	if err := manager.SetCapabilitySigner(customSigner); err != nil {
+		t.Fatalf("set custom signer: %v", err)
+	}
+	if manager.CapabilitySigner() != customSigner {
+		t.Fatalf("expected custom signer to be installed")
+	}
+
+	var nilManager *DefaultManager
+	if err := nilManager.SetCapabilitySigner(customSigner); err == nil || !strings.Contains(err.Error(), "manager is nil") {
+		t.Fatalf("expected nil manager error, got %v", err)
+	}
+}
+
+func TestDefaultManagerExecuteCapabilityTokenWithoutSigner(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	readTool := &managerStubTool{name: "filesystem_read_file", content: "ok"}
+	registry.Register(readTool)
+
+	engine, err := security.NewStaticGateway(security.DecisionAllow, nil)
+	if err != nil {
+		t.Fatalf("new static gateway: %v", err)
+	}
+	manager, err := NewManager(registry, engine, nil)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+
+	now := time.Now().UTC()
+	token := security.CapabilityToken{
+		ID:              "token-no-signer",
+		TaskID:          "task-no-signer",
+		AgentID:         "agent-no-signer",
+		IssuedAt:        now.Add(-time.Minute),
+		ExpiresAt:       now.Add(time.Hour),
+		AllowedTools:    []string{"filesystem_read_file"},
+		AllowedPaths:    []string{t.TempDir()},
+		NetworkPolicy:   security.NetworkPolicy{Mode: security.NetworkPermissionDenyAll},
+		WritePermission: security.WritePermissionWorkspace,
+	}
+	signed, err := manager.CapabilitySigner().Sign(token)
+	if err != nil {
+		t.Fatalf("sign token: %v", err)
+	}
+	manager.capabilityMu.Lock()
+	manager.capabilitySigner = nil
+	manager.capabilityMu.Unlock()
+
+	_, execErr := manager.Execute(context.Background(), ToolCallInput{
+		ID:              "call-no-signer",
+		Name:            "filesystem_read_file",
+		Arguments:       []byte(`{"path":"README.md"}`),
+		Workdir:         t.TempDir(),
+		TaskID:          token.TaskID,
+		AgentID:         token.AgentID,
+		CapabilityToken: &signed,
+	})
+	var permissionErr *PermissionDecisionError
+	if !errors.As(execErr, &permissionErr) {
+		t.Fatalf("expected permission decision error, got %v", execErr)
+	}
+	if permissionErr.Decision() != string(security.DecisionDeny) || permissionErr.RuleID() != security.CapabilityRuleID {
+		t.Fatalf("unexpected decision/rule: decision=%q rule=%q", permissionErr.Decision(), permissionErr.RuleID())
+	}
+	if !strings.Contains(strings.ToLower(permissionErr.Reason()), "signer is unavailable") {
+		t.Fatalf("expected signer unavailable reason, got %q", permissionErr.Reason())
+	}
+	if !errors.Is(execErr, ErrCapabilityDenied) {
+		t.Fatalf("expected capability denied sentinel, got %v", execErr)
+	}
+	if readTool.callCount != 0 {
+		t.Fatalf("expected denied call not to execute tool, got %d", readTool.callCount)
 	}
 }
