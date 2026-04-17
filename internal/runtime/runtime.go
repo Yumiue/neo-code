@@ -44,7 +44,7 @@ type Runtime interface {
 type UserInput struct {
 	SessionID       string
 	RunID           string
-	Content         string
+	Parts           []providertypes.ContentPart
 	Workdir         string
 	TaskID          string
 	AgentID         string
