@@ -33,6 +33,7 @@ func RegisterBuiltinSummarizers(registry *Registry) {
 }
 
 const summaryMaxRunes = 200
+const metadataTokenMaxRunes = 120
 
 // bashSummarizer 仅保留结构化执行元信息，避免把原始输出内容重新注入上下文。
 func bashSummarizer(content string, metadata map[string]string, isError bool) string {
@@ -44,7 +45,7 @@ func bashSummarizer(content string, metadata map[string]string, isError bool) st
 		parts = append(parts, "[exit=0]")
 	}
 
-	if workdir := metadata["workdir"]; workdir != "" {
+	if workdir := metadataToken(metadata["workdir"]); workdir != "" {
 		parts = append(parts, "workdir="+workdir)
 	}
 
@@ -58,7 +59,7 @@ func bashSummarizer(content string, metadata map[string]string, isError bool) st
 
 // readFileSummarizer 仅保留稳定元信息，避免在摘要中再次暴露文件正文。
 func readFileSummarizer(content string, metadata map[string]string, isError bool) string {
-	path := metadata["path"]
+	path := metadataToken(metadata["path"])
 	if path == "" {
 		return ""
 	}
@@ -76,7 +77,7 @@ func readFileSummarizer(content string, metadata map[string]string, isError bool
 
 // writeFileSummarizer 保留文件路径与写入字节数。
 func writeFileSummarizer(content string, metadata map[string]string, isError bool) string {
-	path := metadata["path"]
+	path := metadataToken(metadata["path"])
 	if path == "" {
 		return ""
 	}
@@ -86,9 +87,9 @@ func writeFileSummarizer(content string, metadata map[string]string, isError boo
 
 // editSummarizer 保留编辑路径与替换范围。
 func editSummarizer(content string, metadata map[string]string, isError bool) string {
-	path := metadata["relative_path"]
+	path := metadataToken(metadata["relative_path"])
 	if path == "" {
-		path = metadata["path"]
+		path = metadataToken(metadata["path"])
 	}
 	if path == "" {
 		return ""
@@ -106,7 +107,7 @@ func grepSummarizer(content string, metadata map[string]string, isError bool) st
 	var parts []string
 	parts = append(parts, "[summary] grep")
 
-	if root := metadata["root"]; root != "" {
+	if root := metadataToken(metadata["root"]); root != "" {
 		parts = append(parts, "root="+root)
 	}
 
@@ -272,4 +273,9 @@ func sanitizeSummaryToken(text string, maxRunes int) string {
 		return ""
 	}
 	return truncateRunes(clean, maxRunes)
+}
+
+// metadataToken 统一清理 metadata 中可回灌到摘要的文本字段。
+func metadataToken(text string) string {
+	return sanitizeSummaryToken(text, metadataTokenMaxRunes)
 }

@@ -3,6 +3,7 @@ package context
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"neo-code/internal/context/internalcompact"
 	providertypes "neo-code/internal/provider/types"
@@ -272,6 +273,53 @@ func TestSummarizeOrClearWithToolNamesLookup(t *testing.T) {
 			t.Fatalf("expected cleared for unknown tool call id, got %q", got)
 		}
 	})
+}
+
+// TestSummarizeOrClearSanitizesSummary 验证摘要回灌前会执行控制字符净化与长度裁剪。
+func TestSummarizeOrClearSanitizesSummary(t *testing.T) {
+	t.Parallel()
+
+	raw := strings.Repeat("x", microCompactSummaryMaxRunes+50) + "\n\t\x07"
+	got := summarizeOrClear(
+		providertypes.Message{ToolCallID: "call-1"},
+		"ignored",
+		map[string]string{"call-1": "bash"},
+		stubMicroCompactSummarizerSource{
+			"bash": func(content string, metadata map[string]string, isError bool) string {
+				return raw
+			},
+		},
+	)
+
+	if strings.ContainsAny(got, "\n\t\a") {
+		t.Fatalf("expected control characters removed, got %q", got)
+	}
+	if utf8.RuneCountInString(got) > microCompactSummaryMaxRunes+3 {
+		t.Fatalf("expected summary capped, got %d runes", utf8.RuneCountInString(got))
+	}
+	if !strings.HasSuffix(got, "...") {
+		t.Fatalf("expected truncated summary suffix, got %q", got)
+	}
+}
+
+// TestSummarizeOrClearSanitizationEmptyFallback 验证净化后为空时会回退清理占位。
+func TestSummarizeOrClearSanitizationEmptyFallback(t *testing.T) {
+	t.Parallel()
+
+	got := summarizeOrClear(
+		providertypes.Message{ToolCallID: "call-1"},
+		"ignored",
+		map[string]string{"call-1": "bash"},
+		stubMicroCompactSummarizerSource{
+			"bash": func(content string, metadata map[string]string, isError bool) string {
+				return "\n\t\x07 "
+			},
+		},
+	)
+
+	if got != microCompactClearedMessage {
+		t.Fatalf("expected cleared fallback when sanitized summary is empty, got %q", got)
+	}
 }
 
 // TestIsToolCallSpanBoundaries 验证 span 边界异常时返回 false。

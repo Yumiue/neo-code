@@ -67,6 +67,15 @@ func TestBashSummarizer(t *testing.T) {
 		got := bashSummarizer("", nil, false)
 		assertContains(t, got, "[exit=0]")
 	})
+
+	t.Run("sanitizes_workdir_metadata", func(t *testing.T) {
+		meta := stubMetadata("workdir", " \n\t/tmp/proj\x07 ")
+		got := bashSummarizer("ok", meta, false)
+		if strings.ContainsAny(got, "\n\t\a") {
+			t.Fatalf("expected sanitized workdir without control characters, got %q", got)
+		}
+		assertContains(t, got, "workdir=/tmp/proj")
+	})
 }
 
 func TestReadFileSummarizer(t *testing.T) {
@@ -100,6 +109,16 @@ func TestReadFileSummarizer(t *testing.T) {
 		got := readFileSummarizer("content", nil, false)
 		assertEmptySummary(t, got)
 	})
+
+	t.Run("sanitizes_path_metadata", func(t *testing.T) {
+		content := "line1\nline2"
+		meta := stubMetadata("path", " \n\t/tmp/a.go\x07 ")
+		got := readFileSummarizer(content, meta, false)
+		if strings.ContainsAny(got, "\n\t\a") {
+			t.Fatalf("expected sanitized path without control characters, got %q", got)
+		}
+		assertContains(t, got, "/tmp/a.go")
+	})
 }
 
 func TestWriteFileSummarizer(t *testing.T) {
@@ -116,6 +135,15 @@ func TestWriteFileSummarizer(t *testing.T) {
 	t.Run("missing_path", func(t *testing.T) {
 		got := writeFileSummarizer("", stubMetadata("bytes", "100"), false)
 		assertEmptySummary(t, got)
+	})
+
+	t.Run("sanitizes_path_metadata", func(t *testing.T) {
+		meta := stubMetadata("path", " \n\t/tmp/out.go\x07 ", "bytes", "4")
+		got := writeFileSummarizer("", meta, false)
+		if strings.ContainsAny(got, "\n\t\a") {
+			t.Fatalf("expected sanitized path without control characters, got %q", got)
+		}
+		assertContains(t, got, "/tmp/out.go")
 	})
 }
 
@@ -139,6 +167,15 @@ func TestEditSummarizer(t *testing.T) {
 	t.Run("missing_path", func(t *testing.T) {
 		got := editSummarizer("", stubMetadata("search_length", "10"), false)
 		assertEmptySummary(t, got)
+	})
+
+	t.Run("sanitizes_path_metadata", func(t *testing.T) {
+		meta := stubMetadata("relative_path", " \n\tsrc/main.go\x07 ", "search_length", "10", "replacement_length", "12")
+		got := editSummarizer("", meta, false)
+		if strings.ContainsAny(got, "\n\t\a") {
+			t.Fatalf("expected sanitized path without control characters, got %q", got)
+		}
+		assertContains(t, got, "src/main.go")
 	})
 
 	t.Run("long_path_is_truncated", func(t *testing.T) {
@@ -165,6 +202,16 @@ func TestGrepSummarizer(t *testing.T) {
 		meta := stubMetadata("root", "/home", "matched_files", "0", "matched_lines", "0")
 		got := grepSummarizer("", meta, false)
 		assertContains(t, got, "files=0")
+	})
+
+	t.Run("sanitizes_root_metadata", func(t *testing.T) {
+		content := "a.go:1:x"
+		meta := stubMetadata("root", " \n\t/tmp/root\x07 ", "matched_files", "1", "matched_lines", "1")
+		got := grepSummarizer(content, meta, false)
+		if strings.ContainsAny(got, "\n\t\a") {
+			t.Fatalf("expected sanitized root without control characters, got %q", got)
+		}
+		assertContains(t, got, "root=/tmp/root")
 	})
 
 	t.Run("sanitizes_injected_filename", func(t *testing.T) {

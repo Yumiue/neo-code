@@ -13,6 +13,8 @@ const (
 	microCompactClearedMessage = "[Old tool result content cleared]"
 	// defaultMicroCompactRetainedToolSpans 定义 micro compact 默认保留原始内容的最近可压缩工具块数量。
 	defaultMicroCompactRetainedToolSpans = 2
+	// microCompactSummaryMaxRunes 是摘要回灌到上下文前允许的最大 rune 数量。
+	microCompactSummaryMaxRunes = 200
 )
 
 // microCompactMessages 对裁剪后的消息做只读投影式微压缩，优先摘要旧工具结果，失败时回退清理占位。
@@ -193,5 +195,45 @@ func summarizeOrClear(
 	if summary == "" {
 		return microCompactClearedMessage
 	}
+	summary = sanitizeMicroCompactSummary(summary)
+	if summary == "" {
+		return microCompactClearedMessage
+	}
 	return summary
+}
+
+// sanitizeMicroCompactSummary 对 summarizer 输出做最终净化与限长，避免把不安全文本直接回灌上下文。
+func sanitizeMicroCompactSummary(summary string) string {
+	trimmed := strings.TrimSpace(summary)
+	if trimmed == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	b.Grow(len(trimmed))
+	for _, r := range trimmed {
+		if r < 32 || r == 127 {
+			continue
+		}
+		b.WriteRune(r)
+	}
+
+	clean := strings.TrimSpace(b.String())
+	if clean == "" {
+		return ""
+	}
+	return truncateSummaryRunes(clean, microCompactSummaryMaxRunes)
+}
+
+// truncateSummaryRunes 按 rune 数量截断摘要，超限时追加 "..."。
+func truncateSummaryRunes(summary string, maxRunes int) string {
+	if maxRunes <= 0 || summary == "" {
+		return summary
+	}
+
+	runes := []rune(summary)
+	if len(runes) <= maxRunes {
+		return summary
+	}
+	return string(runes[:maxRunes]) + "..."
 }
