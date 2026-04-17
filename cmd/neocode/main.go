@@ -13,4 +13,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "neocode: %v\n", err)
 		os.Exit(1)
 	}
+	if notice := cli.ConsumeUpdateNotice(); notice != "" {
+		fmt.Fprintln(os.Stdout, notice)
+	}
 }

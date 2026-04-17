@@ -148,6 +148,7 @@ go run ./cmd/neocode --workdir /path/to/workspace
 - [Context Compact 说明](docs/context-compact.md)
 - [Tools 与 TUI 集成](docs/tools-and-tui-integration.md)
 - [MCP 配置指南](docs/guides/mcp-configuration.md)
+- [更新与升级](docs/guides/update.md)
 
 ## 如何参与
 

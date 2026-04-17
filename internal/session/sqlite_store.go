@@ -501,6 +501,71 @@ func (s *SQLiteStore) Stat(ctx context.Context, sessionID string, assetID string
 	return meta, nil
 }
 
+// DeleteAsset 删除指定会话附件的元数据与二进制文件，缺失目标按幂等处理。
+func (s *SQLiteStore) DeleteAsset(ctx context.Context, sessionID string, assetID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := validateStorageID("session id", sessionID); err != nil {
+		return fmt.Errorf("session: %w", err)
+	}
+	if err := validateStorageID("asset id", assetID); err != nil {
+		return fmt.Errorf("session: %w", err)
+	}
+	db, err := s.ensureDB(ctx)
+	if err != nil {
+		return err
+	}
+
+	meta, path, err := s.loadAssetMeta(ctx, sessionID, assetID)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+
+	result, execErr := db.ExecContext(ctx, `DELETE FROM session_assets WHERE session_id = ? AND id = ?`, sessionID, assetID)
+	if execErr != nil {
+		return fmt.Errorf("session: delete asset meta %s: %w", assetID, execErr)
+	}
+	if affected, affErr := result.RowsAffected(); affErr == nil && affected == 0 && errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+
+	if strings.TrimSpace(meta.ID) == "" {
+		return nil
+	}
+	if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+		return fmt.Errorf("session: delete asset file %s: %w", assetID, removeErr)
+	}
+	return nil
+}
+
+// DeleteSession 删除会话头、消息、附件元数据，并清理对应附件目录。
+func (s *SQLiteStore) DeleteSession(ctx context.Context, sessionID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := validateStorageID("session id", sessionID); err != nil {
+		return fmt.Errorf("session: %w", err)
+	}
+	db, err := s.ensureDB(ctx)
+	if err != nil {
+		return err
+	}
+
+	if _, err := db.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, sessionID); err != nil {
+		return fmt.Errorf("session: delete session %s: %w", sessionID, err)
+	}
+
+	assetDir := filepath.Join(s.assetsDir, sessionID)
+	if err := ensurePathWithinBase(s.projectDir, assetDir); err != nil {
+		return fmt.Errorf("session: resolve assets dir path: %w", err)
+	}
+	if err := os.RemoveAll(assetDir); err != nil {
+		return fmt.Errorf("session: delete assets dir %s: %w", sessionID, err)
+	}
+	return nil
+}
+
 // ensureDB 懒加载数据库并执行 schema 初始化。
 func (s *SQLiteStore) ensureDB(ctx context.Context) (*sql.DB, error) {
 	s.initMu.Lock()

@@ -196,6 +196,19 @@ func TestWorkspaceSandboxCheckShortCircuits(t *testing.T) {
 	}
 }
 
+func TestWorkspaceSandboxCheckRejectsInvalidCapabilityToken(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	action := fileAction(ActionTypeRead, "filesystem_read_file", "read_file", root, "notes.txt")
+	action.Payload.CapabilityToken = &CapabilityToken{}
+
+	_, err := NewWorkspaceSandbox().Check(context.Background(), action)
+	if err == nil || !strings.Contains(err.Error(), "capability token path not allowed") {
+		t.Fatalf("expected capability token path rejection, got %v", err)
+	}
+}
+
 func TestBuildWorkspacePlan(t *testing.T) {
 	t.Parallel()
 
@@ -263,6 +276,21 @@ func TestBuildWorkspacePlan(t *testing.T) {
 			wantOK:     true,
 			wantTarget: ".",
 		},
+		{
+			name: "sandbox target type falls back to target type",
+			action: Action{
+				Type: ActionTypeRead,
+				Payload: ActionPayload{
+					ToolName:   "filesystem_grep",
+					Resource:   "filesystem_grep",
+					Workdir:    root,
+					TargetType: TargetTypeDirectory,
+					Target:     "docs",
+				},
+			},
+			wantOK:     true,
+			wantTarget: "docs",
+		},
 	}
 
 	for _, tt := range tests {
@@ -288,6 +316,21 @@ func TestBuildWorkspacePlan(t *testing.T) {
 				t.Fatalf("target = %q, want %q", plan.target, tt.wantTarget)
 			}
 		})
+	}
+}
+
+func TestWorkspaceSandboxValidateWorkspacePlanErrors(t *testing.T) {
+	t.Parallel()
+
+	sandbox := NewWorkspaceSandbox()
+	_, err := sandbox.validateWorkspacePlan(workspacePlan{
+		root:       filepath.Join(t.TempDir(), "missing"),
+		target:     "notes.txt",
+		targetType: TargetTypePath,
+		actionType: ActionTypeRead,
+	})
+	if err == nil || !strings.Contains(err.Error(), "resolve workspace root") {
+		t.Fatalf("expected resolve workspace root error, got %v", err)
 	}
 }
 
@@ -440,6 +483,13 @@ func TestCanonicalWorkspaceRoot(t *testing.T) {
 	}
 	if _, ok := sandbox.canonicalRoots.Load(cleanedPathKey(existing)); !ok {
 		t.Fatalf("expected canonical root cache entry for %q", existing)
+	}
+	gotCached, err := sandbox.canonicalWorkspaceRoot(existing)
+	if err != nil {
+		t.Fatalf("canonicalWorkspaceRoot(cached) error: %v", err)
+	}
+	if !samePathKey(gotCached, got) {
+		t.Fatalf("canonicalWorkspaceRoot(cached) = %q, want %q", gotCached, got)
 	}
 
 	missing := filepath.Join(t.TempDir(), "missing", "dir")
@@ -776,6 +826,54 @@ func TestWorkspaceExecutionPlanValidateForExecution(t *testing.T) {
 			t.Fatalf("expected valid plan, got %v", err)
 		}
 	})
+
+	t.Run("nearest existing path failure is returned", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		file := filepath.Join(root, "file.txt")
+		mustWriteWorkspaceFile(t, file, "x")
+		plan := &WorkspaceExecutionPlan{
+			Root:            root,
+			Target:          filepath.Join(file, "child.txt"),
+			RequestedTarget: filepath.Join("file.txt", "child.txt"),
+			anchorPath:      file,
+			anchorSnapshot:  pathSnapshot{},
+		}
+		err := plan.ValidateForExecution()
+		if err == nil || !strings.Contains(err.Error(), "inspect path") {
+			t.Fatalf("expected inspect path error, got %v", err)
+		}
+	})
+
+	t.Run("anchor path mismatch is rejected", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		targetA := filepath.Join(root, "a")
+		targetB := filepath.Join(root, "b")
+		if err := os.MkdirAll(targetA, 0o755); err != nil {
+			t.Fatalf("mkdir targetA: %v", err)
+		}
+		if err := os.MkdirAll(targetB, 0o755); err != nil {
+			t.Fatalf("mkdir targetB: %v", err)
+		}
+		snapshot, err := capturePathSnapshot(targetB)
+		if err != nil {
+			t.Fatalf("capturePathSnapshot(targetB): %v", err)
+		}
+		plan := &WorkspaceExecutionPlan{
+			Root:            root,
+			Target:          targetA,
+			RequestedTarget: "a",
+			anchorPath:      targetB,
+			anchorSnapshot:  snapshot,
+		}
+		err = plan.ValidateForExecution()
+		if err == nil || !strings.Contains(err.Error(), "changed before execution") {
+			t.Fatalf("expected changed-before-execution error, got %v", err)
+		}
+	})
 }
 
 func TestCapturePathSnapshotAndEqual(t *testing.T) {
@@ -893,6 +991,28 @@ func TestNearestExistingPath(t *testing.T) {
 				return cleanedPathKey(filepath.Join(root, "broken"))
 			},
 		},
+		{
+			name: "returns inspect error for non-not-exist lstat",
+			setup: func(t *testing.T) (string, string) {
+				t.Helper()
+				root := t.TempDir()
+				file := filepath.Join(root, "file.txt")
+				mustWriteWorkspaceFile(t, file, "x")
+				return root, filepath.Join(file, "child.txt")
+			},
+			expectErr: "inspect path",
+		},
+		{
+			name: "missing root path returns root",
+			setup: func(t *testing.T) (string, string) {
+				t.Helper()
+				root := filepath.Join(t.TempDir(), "missing-root")
+				return root, root
+			},
+			expect: func(root string, target string) string {
+				return cleanedPathKey(root)
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -915,6 +1035,27 @@ func TestNearestExistingPath(t *testing.T) {
 				t.Fatalf("nearestExistingPath() = %q, want %q", got, want)
 			}
 		})
+	}
+}
+
+func TestEnsureNoSymlinkEscapeReturnsNearestPathError(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	file := filepath.Join(root, "file.txt")
+	mustWriteWorkspaceFile(t, file, "x")
+
+	_, err := ensureNoSymlinkEscape(root, filepath.Join(file, "child.txt"), filepath.Join("file.txt", "child.txt"))
+	if err == nil || !strings.Contains(err.Error(), "inspect path") {
+		t.Fatalf("expected inspect path error, got %v", err)
+	}
+}
+
+func TestValidateTargetVolumeNoVolumeShortCircuit(t *testing.T) {
+	t.Parallel()
+
+	if err := validateTargetVolume(filepath.Join(t.TempDir(), "workspace"), filepath.Join(t.TempDir(), "target")); err != nil {
+		t.Fatalf("validateTargetVolume() error = %v, want nil on non-volume paths", err)
 	}
 }
 

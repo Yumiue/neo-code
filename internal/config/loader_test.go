@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -1044,18 +1045,26 @@ func TestDeleteCustomProviderRemovesProviderDir(t *testing.T) {
 
 func TestLoadCustomProvidersReadDirAndStatErrors(t *testing.T) {
 	t.Run("providers dir read error", func(t *testing.T) {
-		baseDir := t.TempDir()
-		providersPath := filepath.Join(baseDir, providersDirName)
-		if err := os.WriteFile(providersPath, []byte("file"), 0o600); err != nil {
-			t.Fatalf("WriteFile() error = %v", err)
+		if runtime.GOOS == "windows" {
+			t.Skip("Windows does not support chmod 000 for directories")
 		}
 
-		_, err := loadCustomProviders(baseDir)
-		if err == nil {
-			t.Fatal("expected read providers dir error")
+		baseDir := t.TempDir()
+		providersPath := filepath.Join(baseDir, providersDirName)
+		if err := os.MkdirAll(providersPath, 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
 		}
-		if !strings.Contains(err.Error(), "read providers dir") {
-			t.Fatalf("expected read providers dir error, got %v", err)
+		if err := os.Chmod(providersPath, 0o000); err != nil {
+			t.Fatalf("Chmod() error = %v", err)
+		}
+		defer func() { _ = os.Chmod(providersPath, 0o755) }()
+
+		providers, err := loadCustomProviders(baseDir)
+		if err != nil {
+			t.Fatalf("expected read providers dir fallback, got %v", err)
+		}
+		if len(providers) != 0 {
+			t.Fatalf("expected empty providers on read fallback, got %d", len(providers))
 		}
 	})
 
