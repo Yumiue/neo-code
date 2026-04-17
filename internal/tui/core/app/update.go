@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"neo-code/internal/config"
+	configstate "neo-code/internal/config/state"
 	"neo-code/internal/memo"
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
@@ -43,13 +44,12 @@ const (
 )
 
 const providerAddSelectTimeout = 10 * time.Second
+const providerAddNonPersistentEnvWarning = "API key is applied to the current process only on this platform; persist it in your shell profile for future sessions."
 
 const sessionSwitchBusyMessage = "cannot switch sessions while run or compact is active"
 
 var panelOrder = []panel{panelTranscript, panelActivity, panelInput}
-var persistProviderUserEnvVar = config.PersistUserEnvVar
-var deleteProviderUserEnvVar = config.DeleteUserEnvVar
-var lookupProviderUserEnvVar = config.LookupUserEnvVar
+var supportsUserEnvPersistence = config.SupportsUserEnvPersistence
 
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
@@ -2187,6 +2187,7 @@ const (
 	providerAddFieldAPIStyle
 	providerAddFieldDeploymentMode
 	providerAddFieldAPIVersion
+	providerAddFieldAPIKeyEnv
 	providerAddFieldAPIKey
 )
 
@@ -2206,7 +2207,7 @@ func providerAddVisibleFields(driver string) []providerAddFieldID {
 		fields = append(fields, providerAddFieldAPIVersion)
 	}
 
-	fields = append(fields, providerAddFieldAPIKey)
+	fields = append(fields, providerAddFieldAPIKeyEnv, providerAddFieldAPIKey)
 	return fields
 }
 
@@ -2248,6 +2249,7 @@ func (a *App) startProviderAddForm() {
 		APIStyle:       provider.OpenAICompatibleAPIStyleChatCompletions,
 		DeploymentMode: "",
 		APIVersion:     "",
+		APIKeyEnv:      "",
 		APIKey:         "",
 		Error:          "",
 		ErrorIsHard:    false,
@@ -2294,6 +2296,8 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.providerAddForm.DeploymentMode = trimLastRune(a.providerAddForm.DeploymentMode)
 		case providerAddFieldAPIVersion:
 			a.providerAddForm.APIVersion = trimLastRune(a.providerAddForm.APIVersion)
+		case providerAddFieldAPIKeyEnv:
+			a.providerAddForm.APIKeyEnv = trimLastRune(a.providerAddForm.APIKeyEnv)
 		case providerAddFieldAPIKey:
 			a.providerAddForm.APIKey = trimLastRune(a.providerAddForm.APIKey)
 		}
@@ -2328,19 +2332,23 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	default:
 		if len(typed.Runes) > 0 {
-			switch currentProviderAddField(a.providerAddForm) {
-			case providerAddFieldName:
-				a.providerAddForm.Name += string(typed.Runes)
-			case providerAddFieldBaseURL:
-				a.providerAddForm.BaseURL += string(typed.Runes)
-			case providerAddFieldAPIStyle:
-				a.providerAddForm.APIStyle += string(typed.Runes)
-			case providerAddFieldDeploymentMode:
-				a.providerAddForm.DeploymentMode += string(typed.Runes)
-			case providerAddFieldAPIVersion:
-				a.providerAddForm.APIVersion += string(typed.Runes)
-			case providerAddFieldAPIKey:
-				a.providerAddForm.APIKey += string(typed.Runes)
+			if cleanInput := sanitizeProviderAddInputRunes(typed.Runes); cleanInput != "" {
+				switch currentProviderAddField(a.providerAddForm) {
+				case providerAddFieldName:
+					a.providerAddForm.Name += cleanInput
+				case providerAddFieldBaseURL:
+					a.providerAddForm.BaseURL += cleanInput
+				case providerAddFieldAPIStyle:
+					a.providerAddForm.APIStyle += cleanInput
+				case providerAddFieldDeploymentMode:
+					a.providerAddForm.DeploymentMode += cleanInput
+				case providerAddFieldAPIVersion:
+					a.providerAddForm.APIVersion += cleanInput
+				case providerAddFieldAPIKeyEnv:
+					a.providerAddForm.APIKeyEnv += cleanInput
+				case providerAddFieldAPIKey:
+					a.providerAddForm.APIKey += cleanInput
+				}
 			}
 		}
 	}
@@ -2381,24 +2389,27 @@ type providerAddRequest struct {
 	APIStyle       string
 	DeploymentMode string
 	APIVersion     string
+	APIKeyEnv      string
 	APIKey         string
 }
 
 type providerAddResultMsg struct {
-	Name  string
-	Model string
-	Error string
+	Name    string
+	Model   string
+	Error   string
+	Warning string
 }
 
 func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, string) {
 	request := providerAddRequest{
-		Name:           strings.TrimSpace(form.Name),
-		Driver:         provider.NormalizeProviderDriver(form.Driver),
-		BaseURL:        strings.TrimSpace(form.BaseURL),
-		APIStyle:       strings.TrimSpace(form.APIStyle),
-		DeploymentMode: strings.TrimSpace(form.DeploymentMode),
-		APIVersion:     strings.TrimSpace(form.APIVersion),
-		APIKey:         strings.TrimSpace(form.APIKey),
+		Name:           normalizeProviderAddFieldValue(form.Name),
+		Driver:         provider.NormalizeProviderDriver(normalizeProviderAddFieldValue(form.Driver)),
+		BaseURL:        normalizeProviderAddFieldValue(form.BaseURL),
+		APIStyle:       normalizeProviderAddFieldValue(form.APIStyle),
+		DeploymentMode: normalizeProviderAddFieldValue(form.DeploymentMode),
+		APIVersion:     normalizeProviderAddFieldValue(form.APIVersion),
+		APIKeyEnv:      normalizeProviderAddFieldValue(form.APIKeyEnv),
+		APIKey:         normalizeProviderAddFieldValue(form.APIKey),
 	}
 
 	if request.Name == "" {
@@ -2409,6 +2420,12 @@ func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, str
 	}
 	if request.APIKey == "" {
 		return providerAddRequest{}, "API Key is required"
+	}
+	if request.APIKeyEnv == "" {
+		return providerAddRequest{}, "API Key Env is required"
+	}
+	if err := config.ValidateEnvVarName(request.APIKeyEnv); err != nil {
+		return providerAddRequest{}, err.Error()
 	}
 
 	switch request.Driver {
@@ -2445,34 +2462,26 @@ func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, str
 	return request, ""
 }
 
-func providerAddAPIKeyEnv(name string) string {
-	upper := strings.ToUpper(strings.TrimSpace(name))
-	if upper == "" {
-		return "CUSTOM_PROVIDER_API_KEY"
+// sanitizeProviderAddInputRunes 过滤 provider 表单输入中的控制字符，避免不可见字符污染配置字段。
+func sanitizeProviderAddInputRunes(runes []rune) string {
+	if len(runes) == 0 {
+		return ""
 	}
 
-	var b strings.Builder
-	lastUnderscore := false
-	for _, r := range upper {
-		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-			lastUnderscore = false
+	var builder strings.Builder
+	builder.Grow(len(runes))
+	for _, r := range runes {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf) {
 			continue
 		}
-		if !lastUnderscore {
-			b.WriteByte('_')
-			lastUnderscore = true
-		}
+		builder.WriteRune(r)
 	}
+	return builder.String()
+}
 
-	normalized := strings.Trim(b.String(), "_")
-	if normalized == "" {
-		normalized = "CUSTOM_PROVIDER"
-	}
-	if normalized[0] >= '0' && normalized[0] <= '9' {
-		normalized = "P_" + normalized
-	}
-	return normalized + "_API_KEY"
+// normalizeProviderAddFieldValue 对 provider 表单字段做统一清理，去除控制字符并裁剪首尾空白。
+func normalizeProviderAddFieldValue(value string) string {
+	return strings.TrimSpace(sanitizeProviderAddInputRunes([]rune(value)))
 }
 
 // trimLastRune 按 UTF-8 rune 删除字符串末尾一个字符，避免按字节截断导致乱码。
@@ -2505,173 +2514,25 @@ func sanitizeProviderAddError(err error, secrets ...string) string {
 	return text
 }
 
-type fileSnapshot struct {
-	Exists  bool
-	Content []byte
-}
-
-// loadFileSnapshot 读取目标文件当前快照，用于 provider add 失败时恢复原始状态。
-func loadFileSnapshot(path string) (fileSnapshot, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fileSnapshot{}, nil
-		}
-		return fileSnapshot{}, err
-	}
-	return fileSnapshot{
-		Exists:  true,
-		Content: append([]byte(nil), data...),
-	}, nil
-}
-
-// restoreEnvFileSnapshot 将 .env 恢复到提交前快照，避免覆盖场景下丢失原有键值。
-func restoreEnvFileSnapshot(path string, snapshot fileSnapshot) error {
-	if !snapshot.Exists {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(path, snapshot.Content, 0o600)
-}
-
-// restoreProviderConfigSnapshot 恢复 provider.yaml 快照；若原先不存在则清理新建目录。
-func restoreProviderConfigSnapshot(baseDir string, providerName string, snapshot fileSnapshot) error {
-	providerDir := filepath.Join(baseDir, "providers", providerName)
-	if !snapshot.Exists {
-		return config.DeleteCustomProvider(baseDir, providerName)
-	}
-	if err := os.RemoveAll(providerDir); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(providerDir, 0o755); err != nil {
-		return err
-	}
-	providerPath := filepath.Join(providerDir, "provider.yaml")
-	return os.WriteFile(providerPath, snapshot.Content, 0o644)
-}
-
 func (a *App) runProviderAddFlow(request providerAddRequest) tea.Cmd {
 	baseDir := a.configManager.BaseDir()
-	configManager := a.configManager
 	providerSvc := a.providerSvc
 
 	return func() tea.Msg {
-		apiKeyEnv := providerAddAPIKeyEnv(request.Name)
-		previousProcessEnvValue, hadPreviousProcessEnv := os.LookupEnv(apiKeyEnv)
-		previousUserEnvValue, hadPreviousUserEnv, err := lookupProviderUserEnvVar(apiKeyEnv)
-		if err != nil {
-			return providerAddResultMsg{
-				Name:  request.Name,
-				Error: sanitizeProviderAddError(fmt.Errorf("lookup user environment variable: %w", err), request.APIKey, baseDir),
-			}
-		}
-
-		providerPath := filepath.Join(baseDir, "providers", request.Name, "provider.yaml")
-		providerSnapshot, err := loadFileSnapshot(providerPath)
-		if err != nil {
-			return providerAddResultMsg{
-				Name:  request.Name,
-				Error: sanitizeProviderAddError(fmt.Errorf("snapshot provider config: %w", err), request.APIKey, baseDir),
-			}
-		}
-
-		envPath := config.EnvFilePath(baseDir)
-		envSnapshot, err := loadFileSnapshot(envPath)
-		if err != nil {
-			return providerAddResultMsg{
-				Name:  request.Name,
-				Error: sanitizeProviderAddError(fmt.Errorf("snapshot env file: %w", err), request.APIKey, baseDir),
-			}
-		}
-
-		rollback := func(processEnvApplied bool, userEnvPersisted bool, envPersisted bool, providerSaved bool, originalErr error) error {
-			return rollbackProviderAddSideEffects(
-				baseDir,
-				request.Name,
-				apiKeyEnv,
-				processEnvApplied,
-				userEnvPersisted,
-				envPersisted,
-				hadPreviousProcessEnv,
-				previousProcessEnvValue,
-				hadPreviousUserEnv,
-				previousUserEnvValue,
-				providerSaved,
-				envPath,
-				envSnapshot,
-				providerSnapshot,
-				originalErr,
-			)
-		}
-
-		providerSaved := false
-		envPersisted := false
-		userEnvPersisted := false
-		processEnvApplied := false
-
-		if err := config.SaveCustomProvider(
-			baseDir,
-			request.Name,
-			request.Driver,
-			request.BaseURL,
-			apiKeyEnv,
-			request.APIStyle,
-			request.DeploymentMode,
-			request.APIVersion,
-		); err != nil {
-			return providerAddResultMsg{
-				Name:  request.Name,
-				Error: sanitizeProviderAddError(fmt.Errorf("save provider config: %w", err), request.APIKey, baseDir),
-			}
-		}
-		providerSaved = true
-		if err := config.PersistEnvVar(baseDir, apiKeyEnv, request.APIKey); err != nil {
-			err = rollback(processEnvApplied, userEnvPersisted, envPersisted, providerSaved, err)
-			return providerAddResultMsg{
-				Name:  request.Name,
-				Error: sanitizeProviderAddError(fmt.Errorf("persist api key: %w", err), request.APIKey, baseDir),
-			}
-		}
-		envPersisted = true
-		if err := persistProviderUserEnvVar(apiKeyEnv, request.APIKey); err != nil {
-			err = rollback(processEnvApplied, userEnvPersisted, envPersisted, providerSaved, err)
-			return providerAddResultMsg{
-				Name: request.Name,
-				Error: sanitizeProviderAddError(
-					fmt.Errorf("persist user environment variable: %w", err),
-					request.APIKey,
-					baseDir,
-				),
-			}
-		}
-		userEnvPersisted = true
-		if err := os.Setenv(apiKeyEnv, request.APIKey); err != nil {
-			err = rollback(processEnvApplied, userEnvPersisted, envPersisted, providerSaved, err)
-			return providerAddResultMsg{
-				Name:  request.Name,
-				Error: sanitizeProviderAddError(fmt.Errorf("apply api key env: %w", err), request.APIKey, baseDir),
-			}
-		}
-		processEnvApplied = true
-		if _, err := configManager.Reload(context.Background()); err != nil {
-			err = rollback(processEnvApplied, userEnvPersisted, envPersisted, providerSaved, err)
-			return providerAddResultMsg{
-				Name:  request.Name,
-				Error: sanitizeProviderAddError(fmt.Errorf("reload config snapshot: %w", err), request.APIKey, baseDir),
-			}
-		}
-
 		ctx, cancel := context.WithTimeout(context.Background(), providerAddSelectTimeout)
 		defer cancel()
 
-		selection, err := providerSvc.SelectProvider(ctx, request.Name)
+		selection, err := providerSvc.CreateCustomProvider(ctx, configstate.CreateCustomProviderInput{
+			Name:           request.Name,
+			Driver:         request.Driver,
+			BaseURL:        request.BaseURL,
+			APIStyle:       request.APIStyle,
+			DeploymentMode: request.DeploymentMode,
+			APIVersion:     request.APIVersion,
+			APIKeyEnv:      request.APIKeyEnv,
+			APIKey:         request.APIKey,
+		})
 		if err != nil {
-			err = rollback(processEnvApplied, userEnvPersisted, envPersisted, providerSaved, err)
 			if errors.Is(err, context.DeadlineExceeded) {
 				err = fmt.Errorf(
 					"model discovery timed out after %s; check base URL, API key, and network connectivity",
@@ -2680,77 +2541,23 @@ func (a *App) runProviderAddFlow(request providerAddRequest) tea.Cmd {
 			}
 			return providerAddResultMsg{
 				Name:  request.Name,
-				Error: sanitizeProviderAddError(fmt.Errorf("select provider: %w", err), request.APIKey, baseDir),
+				Error: sanitizeProviderAddError(fmt.Errorf("create provider: %w", err), request.APIKey, baseDir),
 			}
 		}
 
 		return providerAddResultMsg{
-			Name:  request.Name,
-			Model: strings.TrimSpace(selection.ModelID),
+			Name:    request.Name,
+			Model:   strings.TrimSpace(selection.ModelID),
+			Warning: providerAddPersistenceWarning(),
 		}
 	}
 }
 
-// rollbackProviderAddSideEffects 回滚 provider add 过程中已落地的副作用，避免失败后残留配置与密钥。
-func rollbackProviderAddSideEffects(
-	baseDir string,
-	providerName string,
-	apiKeyEnv string,
-	processEnvApplied bool,
-	userEnvPersisted bool,
-	envPersisted bool,
-	hadPreviousEnv bool,
-	previousEnvValue string,
-	hadPreviousUserEnv bool,
-	previousUserEnvValue string,
-	providerSaved bool,
-	envPath string,
-	envSnapshot fileSnapshot,
-	providerSnapshot fileSnapshot,
-	originalErr error,
-) error {
-	rollbackErrs := make([]error, 0, 4)
-
-	if processEnvApplied {
-		if hadPreviousEnv {
-			if err := os.Setenv(apiKeyEnv, previousEnvValue); err != nil {
-				rollbackErrs = append(rollbackErrs, fmt.Errorf("restore process env: %w", err))
-			}
-		} else {
-			if err := os.Unsetenv(apiKeyEnv); err != nil {
-				rollbackErrs = append(rollbackErrs, fmt.Errorf("unset process env: %w", err))
-			}
-		}
+func providerAddPersistenceWarning() string {
+	if supportsUserEnvPersistence() {
+		return ""
 	}
-
-	if userEnvPersisted {
-		if hadPreviousUserEnv {
-			if err := persistProviderUserEnvVar(apiKeyEnv, previousUserEnvValue); err != nil {
-				rollbackErrs = append(rollbackErrs, fmt.Errorf("restore user env: %w", err))
-			}
-		} else {
-			if err := deleteProviderUserEnvVar(apiKeyEnv); err != nil {
-				rollbackErrs = append(rollbackErrs, fmt.Errorf("delete user env: %w", err))
-			}
-		}
-	}
-
-	if envPersisted {
-		if err := restoreEnvFileSnapshot(envPath, envSnapshot); err != nil {
-			rollbackErrs = append(rollbackErrs, fmt.Errorf("restore persisted env: %w", err))
-		}
-	}
-
-	if providerSaved {
-		if err := restoreProviderConfigSnapshot(baseDir, providerName, providerSnapshot); err != nil {
-			rollbackErrs = append(rollbackErrs, fmt.Errorf("restore provider config: %w", err))
-		}
-	}
-
-	if len(rollbackErrs) == 0 {
-		return originalErr
-	}
-	return fmt.Errorf("%w (rollback failed: %v)", originalErr, errors.Join(rollbackErrs...))
+	return providerAddNonPersistentEnvWarning
 }
 
 func (a *App) handleProviderAddResultMsg(msg providerAddResultMsg) {
@@ -2777,6 +2584,9 @@ func (a *App) handleProviderAddResultMsg(msg providerAddResultMsg) {
 		a.state.CurrentModel = msg.Model
 	}
 	a.appendActivity("provider", "Provider added", msg.Name, false)
+	if msg.Warning != "" {
+		a.appendActivity("provider", "Provider key persistence", msg.Warning, false)
+	}
 
 	if err := a.refreshProviderPicker(); err != nil {
 		a.appendActivity("system", "Failed to refresh providers", err.Error(), true)

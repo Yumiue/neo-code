@@ -65,9 +65,14 @@ func loadCustomProviders(baseDir string) ([]ProviderConfig, error) {
 	entries, err := os.ReadDir(providersDir)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if _, statErr := os.Stat(providersDir); statErr == nil {
+				return nil, fmt.Errorf("config: read providers dir: %w", err)
+			} else if !os.IsNotExist(statErr) {
+				return nil, fmt.Errorf("config: read providers dir: %w", statErr)
+			}
 			return nil, nil
 		}
-		return nil, nil
+		return nil, fmt.Errorf("config: read providers dir: %w", err)
 	}
 
 	sort.Slice(entries, func(i, j int) bool {
@@ -275,6 +280,11 @@ func DeleteCustomProvider(baseDir string, name string) error {
 	}
 	providersDir := filepath.Join(baseDir, providersDirName, name)
 	return os.RemoveAll(providersDir)
+}
+
+// ValidateCustomProviderName 校验 provider 名称，拒绝路径穿越和分隔符语义。
+func ValidateCustomProviderName(name string) error {
+	return validateCustomProviderName(name)
 }
 
 // validateCustomProviderName 校验 provider 名称，拒绝路径穿越和分隔符语义。

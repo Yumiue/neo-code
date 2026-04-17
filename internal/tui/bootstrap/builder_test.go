@@ -99,6 +99,13 @@ func (s *testProviderService) SetCurrentModel(ctx context.Context, modelID strin
 	return configstate.Selection{}, nil
 }
 
+func (s *testProviderService) CreateCustomProvider(
+	ctx context.Context,
+	input configstate.CreateCustomProviderInput,
+) (configstate.Selection, error) {
+	return configstate.Selection{}, nil
+}
+
 func TestBuild(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		manager := &config.Manager{}
@@ -307,6 +314,13 @@ func (s noopProviderService) ListModelsSnapshot(ctx context.Context) ([]provider
 }
 
 func (s noopProviderService) SetCurrentModel(ctx context.Context, modelID string) (configstate.Selection, error) {
+	return configstate.Selection{}, nil
+}
+
+func (s noopProviderService) CreateCustomProvider(
+	ctx context.Context,
+	input configstate.CreateCustomProviderInput,
+) (configstate.Selection, error) {
 	return configstate.Selection{}, nil
 }
 

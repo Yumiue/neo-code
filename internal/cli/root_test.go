@@ -1425,46 +1425,7 @@ func TestDefaultSilentUpdateCheckSetsSanitizedNotice(t *testing.T) {
 	t.Fatal("expected update notice to be set")
 }
 
-func TestDefaultGlobalPreloadLoadsPersistedEnv(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-
-	envPath := filepath.Join(home, ".neocode", ".env")
-	if err := os.MkdirAll(filepath.Dir(envPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	if err := os.WriteFile(envPath, []byte("NEOCODE_PRELOAD_KEY=loaded-value\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	restore := captureEnvForRootTest(t, "NEOCODE_PRELOAD_KEY")
-	defer restore()
-	if err := os.Unsetenv("NEOCODE_PRELOAD_KEY"); err != nil {
-		t.Fatalf("Unsetenv() error = %v", err)
-	}
-
-	if err := defaultGlobalPreload(context.Background()); err != nil {
-		t.Fatalf("defaultGlobalPreload() error = %v", err)
-	}
-	if got := os.Getenv("NEOCODE_PRELOAD_KEY"); got != "loaded-value" {
-		t.Fatalf("expected loaded env value, got %q", got)
-	}
-}
-
-func TestDefaultGlobalPreloadKeepsExistingProcessEnv(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-
-	envPath := config.EnvFilePath("")
-	if err := os.MkdirAll(filepath.Dir(envPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	if err := os.WriteFile(envPath, []byte("NEOCODE_PRELOAD_KEEP=file-value\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
+func TestDefaultGlobalPreloadNoop(t *testing.T) {
 	restore := captureEnvForRootTest(t, "NEOCODE_PRELOAD_KEEP")
 	defer restore()
 	if err := os.Setenv("NEOCODE_PRELOAD_KEEP", "process-value"); err != nil {
@@ -1475,7 +1436,7 @@ func TestDefaultGlobalPreloadKeepsExistingProcessEnv(t *testing.T) {
 		t.Fatalf("defaultGlobalPreload() error = %v", err)
 	}
 	if got := os.Getenv("NEOCODE_PRELOAD_KEEP"); got != "process-value" {
-		t.Fatalf("expected existing process env value, got %q", got)
+		t.Fatalf("defaultGlobalPreload should not mutate process env, got %q", got)
 	}
 }
 

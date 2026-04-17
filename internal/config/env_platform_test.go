@@ -28,3 +28,9 @@ func TestLookupUserEnvVarNoopOnNonWindows(t *testing.T) {
 		t.Fatalf("LookupUserEnvVar() value = %q, want empty", value)
 	}
 }
+
+func TestSupportsUserEnvPersistenceOnNonWindows(t *testing.T) {
+	if SupportsUserEnvPersistence() {
+		t.Fatal("SupportsUserEnvPersistence() = true, want false")
+	}
+}

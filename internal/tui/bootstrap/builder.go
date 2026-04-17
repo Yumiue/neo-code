@@ -18,6 +18,7 @@ type ProviderService interface {
 	ListModels(ctx context.Context) ([]providertypes.ModelDescriptor, error)
 	ListModelsSnapshot(ctx context.Context) ([]providertypes.ModelDescriptor, error)
 	SetCurrentModel(ctx context.Context, modelID string) (configstate.Selection, error)
+	CreateCustomProvider(ctx context.Context, input configstate.CreateCustomProviderInput) (configstate.Selection, error)
 }
 
 // Options 定义 bootstrap 装配输入。

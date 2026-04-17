@@ -3,7 +3,6 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 
@@ -15,14 +14,11 @@ const windowsUserEnvironmentKey = `Environment`
 // PersistUserEnvVar persists key/value into Windows user environment variables.
 func PersistUserEnvVar(key string, value string) error {
 	normalizedKey := strings.TrimSpace(key)
-	if normalizedKey == "" {
-		return errors.New("config: env key is empty")
-	}
-	if strings.ContainsAny(normalizedKey, " \t\r\n=") {
-		return fmt.Errorf("config: env key %q is invalid", normalizedKey)
+	if err := ValidateEnvVarName(normalizedKey); err != nil {
+		return err
 	}
 	if strings.ContainsAny(value, "\r\n") {
-		return errors.New("config: env value contains newline")
+		return fmt.Errorf("config: env value contains newline")
 	}
 
 	envKey, _, err := registry.CreateKey(registry.CURRENT_USER, windowsUserEnvironmentKey, registry.SET_VALUE)
@@ -40,16 +36,13 @@ func PersistUserEnvVar(key string, value string) error {
 // DeleteUserEnvVar 删除 Windows 用户级环境变量，不存在时视为成功。
 func DeleteUserEnvVar(key string) error {
 	normalizedKey := strings.TrimSpace(key)
-	if normalizedKey == "" {
-		return errors.New("config: env key is empty")
-	}
-	if strings.ContainsAny(normalizedKey, " \t\r\n=") {
-		return fmt.Errorf("config: env key %q is invalid", normalizedKey)
+	if err := ValidateEnvVarName(normalizedKey); err != nil {
+		return err
 	}
 
 	envKey, err := registry.OpenKey(registry.CURRENT_USER, windowsUserEnvironmentKey, registry.SET_VALUE)
 	if err != nil {
-		if errors.Is(err, registry.ErrNotExist) {
+		if err == registry.ErrNotExist {
 			return nil
 		}
 		return fmt.Errorf("config: open windows user env: %w", err)
@@ -57,7 +50,7 @@ func DeleteUserEnvVar(key string) error {
 	defer envKey.Close()
 
 	if err := envKey.DeleteValue(normalizedKey); err != nil {
-		if errors.Is(err, registry.ErrNotExist) {
+		if err == registry.ErrNotExist {
 			return nil
 		}
 		return fmt.Errorf("config: delete windows user env %q: %w", normalizedKey, err)
@@ -68,16 +61,13 @@ func DeleteUserEnvVar(key string) error {
 // LookupUserEnvVar 查询 Windows 用户级环境变量，不存在时返回 exists=false。
 func LookupUserEnvVar(key string) (string, bool, error) {
 	normalizedKey := strings.TrimSpace(key)
-	if normalizedKey == "" {
-		return "", false, errors.New("config: env key is empty")
-	}
-	if strings.ContainsAny(normalizedKey, " \t\r\n=") {
-		return "", false, fmt.Errorf("config: env key %q is invalid", normalizedKey)
+	if err := ValidateEnvVarName(normalizedKey); err != nil {
+		return "", false, err
 	}
 
 	envKey, err := registry.OpenKey(registry.CURRENT_USER, windowsUserEnvironmentKey, registry.QUERY_VALUE)
 	if err != nil {
-		if errors.Is(err, registry.ErrNotExist) {
+		if err == registry.ErrNotExist {
 			return "", false, nil
 		}
 		return "", false, fmt.Errorf("config: open windows user env: %w", err)
@@ -86,10 +76,15 @@ func LookupUserEnvVar(key string) (string, bool, error) {
 
 	value, _, err := envKey.GetStringValue(normalizedKey)
 	if err != nil {
-		if errors.Is(err, registry.ErrNotExist) {
+		if err == registry.ErrNotExist {
 			return "", false, nil
 		}
 		return "", false, fmt.Errorf("config: read windows user env %q: %w", normalizedKey, err)
 	}
 	return value, true, nil
+}
+
+// SupportsUserEnvPersistence 返回当前平台是否支持用户级环境变量持久化。
+func SupportsUserEnvPersistence() bool {
+	return true
 }

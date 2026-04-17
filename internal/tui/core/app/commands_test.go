@@ -175,6 +175,13 @@ func (s errorProviderService) SetCurrentModel(ctx context.Context, modelID strin
 	return configstate.Selection{}, s.err
 }
 
+func (s errorProviderService) CreateCustomProvider(
+	ctx context.Context,
+	input configstate.CreateCustomProviderInput,
+) (configstate.Selection, error) {
+	return configstate.Selection{}, s.err
+}
+
 func TestExecuteLocalCommandErrors(t *testing.T) {
 	app, _ := newTestApp(t)
 	snapshot := app.currentStatusSnapshot()
