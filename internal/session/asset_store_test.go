@@ -118,6 +118,21 @@ func TestJSONStoreAssetStoreRespectsCanceledContext(t *testing.T) {
 	}
 }
 
+func TestJSONStoreSaveAssetStopsWhenContextCanceledDuringCopy(t *testing.T) {
+	t.Parallel()
+
+	store := NewJSONStore(t.TempDir(), t.TempDir())
+	ctx, cancel := context.WithCancel(context.Background())
+	reader := &cancelAfterFirstReadReader{
+		cancel: cancel,
+		chunks: [][]byte{[]byte("chunk-1"), []byte("chunk-2")},
+	}
+
+	if _, err := store.SaveAsset(ctx, "session_ctx_cancel_during_copy", reader, "image/png"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context canceled during copy, got %v", err)
+	}
+}
+
 func TestJSONStoreSaveAssetRejectsOversizedPayload(t *testing.T) {
 	t.Parallel()
 
@@ -228,4 +243,23 @@ type failingReader struct{}
 
 func (failingReader) Read(_ []byte) (int, error) {
 	return 0, errors.New("read failure")
+}
+
+type cancelAfterFirstReadReader struct {
+	cancel context.CancelFunc
+	chunks [][]byte
+	index  int
+}
+
+func (r *cancelAfterFirstReadReader) Read(p []byte) (int, error) {
+	if r.index >= len(r.chunks) {
+		return 0, io.EOF
+	}
+	chunk := r.chunks[r.index]
+	r.index++
+	n := copy(p, chunk)
+	if r.index == 1 && r.cancel != nil {
+		r.cancel()
+	}
+	return n, nil
 }

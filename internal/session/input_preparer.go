@@ -161,8 +161,15 @@ func (p *InputPreparer) saveImageAsset(
 	path string,
 	mimeType string,
 ) (AssetMeta, error) {
+	if err := ctx.Err(); err != nil {
+		return AssetMeta{}, err
+	}
+
 	absolutePath, err := resolveImagePath(workdir, path)
 	if err != nil {
+		return AssetMeta{}, err
+	}
+	if err := ctx.Err(); err != nil {
 		return AssetMeta{}, err
 	}
 
@@ -173,9 +180,15 @@ func (p *InputPreparer) saveImageAsset(
 	defer func() {
 		_ = file.Close()
 	}()
+	if err := ctx.Err(); err != nil {
+		return AssetMeta{}, err
+	}
 
-	resolvedMimeType, err := resolveImageMimeType(path, mimeType, file)
+	resolvedMimeType, err := resolveImageMimeType(ctx, path, mimeType, file)
 	if err != nil {
+		return AssetMeta{}, err
+	}
+	if err := ctx.Err(); err != nil {
 		return AssetMeta{}, err
 	}
 
@@ -187,8 +200,12 @@ func (p *InputPreparer) saveImageAsset(
 }
 
 // resolveImageMimeType 解析图片 MIME 类型，仅允许 image/*，并要求声明值与文件头探测一致。
-func resolveImageMimeType(path string, declared string, file *os.File) (string, error) {
-	detected, err := detectImageMimeTypeFromFile(file)
+func resolveImageMimeType(ctx context.Context, path string, declared string, file *os.File) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
+	detected, err := detectImageMimeTypeFromFile(ctx, file)
 	if err != nil {
 		return "", err
 	}
@@ -212,11 +229,18 @@ func resolveImageMimeType(path string, declared string, file *os.File) (string, 
 }
 
 // detectImageMimeTypeFromFile 根据文件头探测 MIME，且要求结果为 image/*。
-func detectImageMimeTypeFromFile(file *os.File) (string, error) {
+func detectImageMimeTypeFromFile(ctx context.Context, file *os.File) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
 	buffer := make([]byte, 512)
 	n, readErr := file.Read(buffer)
 	if readErr != nil && readErr != io.EOF {
 		return "", fmt.Errorf("detect image mime type: %w", readErr)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return "", fmt.Errorf("reset image reader: %w", err)

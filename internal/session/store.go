@@ -70,6 +70,34 @@ type JSONStore struct {
 	baseDir string
 }
 
+// contextReader 在读取前检查上下文取消状态，避免长时间 I/O 无法及时退出。
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r *contextReader) Read(p []byte) (int, error) {
+	if r == nil || r.reader == nil {
+		return 0, io.EOF
+	}
+	if r.ctx != nil {
+		if err := r.ctx.Err(); err != nil {
+			return 0, err
+		}
+	}
+	return r.reader.Read(p)
+}
+
+func contextDone(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return nil
+}
+
 // NewJSONStore 创建 JSONStore，实际会话目录为 {baseDir}/sessions。
 func NewJSONStore(baseDir string, workspaceRoot string) *JSONStore {
 	return &JSONStore{
@@ -271,7 +299,7 @@ func (s *JSONStore) assetMetaPath(sessionID string, assetID string) string {
 
 // SaveAsset 将会话附件二进制内容写入当前工作区会话目录，并返回附件元数据。
 func (s *JSONStore) SaveAsset(ctx context.Context, sessionID string, r io.Reader, mimeType string) (AssetMeta, error) {
-	if err := ctx.Err(); err != nil {
+	if err := contextDone(ctx); err != nil {
 		return AssetMeta{}, err
 	}
 	if r == nil {
@@ -296,6 +324,9 @@ func (s *JSONStore) SaveAsset(ctx context.Context, sessionID string, r io.Reader
 	if err := os.MkdirAll(assetDir, 0o755); err != nil {
 		return AssetMeta{}, fmt.Errorf("session: create assets dir: %w", err)
 	}
+	if err := contextDone(ctx); err != nil {
+		return AssetMeta{}, err
+	}
 
 	target := s.assetPath(sessionID, meta.ID)
 	if err := ensurePathWithinBase(s.baseDir, target); err != nil {
@@ -306,9 +337,14 @@ func (s *JSONStore) SaveAsset(ctx context.Context, sessionID string, r io.Reader
 		return AssetMeta{}, err
 	}
 
-	written, copyErr := io.Copy(tempFile, io.LimitReader(r, providertypes.MaxSessionAssetBytes+1))
+	limitedReader := io.LimitReader(&contextReader{ctx: ctx, reader: r}, providertypes.MaxSessionAssetBytes+1)
+	written, copyErr := io.Copy(tempFile, limitedReader)
 	syncErr := tempFile.Sync()
 	closeErr := tempFile.Close()
+	if ctxErr := contextDone(ctx); ctxErr != nil {
+		_ = os.Remove(tempPath)
+		return AssetMeta{}, ctxErr
+	}
 	if copyErr != nil {
 		_ = os.Remove(tempPath)
 		return AssetMeta{}, fmt.Errorf("session: write temp asset: %w", copyErr)
@@ -331,6 +367,10 @@ func (s *JSONStore) SaveAsset(ctx context.Context, sessionID string, r io.Reader
 		_ = os.Remove(tempPath)
 		return AssetMeta{}, err
 	}
+	if err := contextDone(ctx); err != nil {
+		_ = os.Remove(target)
+		return AssetMeta{}, err
+	}
 
 	metaData, err := encodeStoredAssetMeta(meta)
 	if err != nil {
@@ -344,6 +384,11 @@ func (s *JSONStore) SaveAsset(ctx context.Context, sessionID string, r io.Reader
 	}
 	if err := writeFileAtomically(metaTarget, "asset-meta-*.tmp", metaData, 0o644); err != nil {
 		_ = os.Remove(target)
+		return AssetMeta{}, err
+	}
+	if err := contextDone(ctx); err != nil {
+		_ = os.Remove(target)
+		_ = os.Remove(metaTarget)
 		return AssetMeta{}, err
 	}
 
