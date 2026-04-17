@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -19,7 +20,12 @@ import (
 	"neo-code/internal/gateway"
 	"neo-code/internal/gateway/adapters/urlscheme"
 	gatewayauth "neo-code/internal/gateway/auth"
+	"neo-code/internal/updater"
 )
+
+func init() {
+	runSilentUpdateCheck = func(context.Context) {}
+}
 
 func TestNewRootCommandPassesWorkdirFlagToLauncher(t *testing.T) {
 	originalLauncher := launchRootProgram
@@ -101,6 +107,52 @@ func TestExecuteUsesOSArgs(t *testing.T) {
 	}
 	if captured.Workdir != `D:\项目\中文目录` {
 		t.Fatalf("expected Execute to forward workdir, got %q", captured.Workdir)
+	}
+}
+
+func TestExecuteWaitsForSilentUpdateCheckCompletion(t *testing.T) {
+	originalLauncher := launchRootProgram
+	originalPreload := runGlobalPreload
+	originalSilentCheck := runSilentUpdateCheck
+	originalArgs := os.Args
+	t.Cleanup(func() {
+		launchRootProgram = originalLauncher
+		runGlobalPreload = originalPreload
+		runSilentUpdateCheck = originalSilentCheck
+		os.Args = originalArgs
+	})
+
+	_ = ConsumeUpdateNotice()
+	runGlobalPreload = func(context.Context) error { return nil }
+	launchRootProgram = func(context.Context, app.BootstrapOptions) error { return nil }
+	runSilentUpdateCheck = func(context.Context) {
+		done := make(chan struct{})
+		setSilentUpdateCheckDone(done)
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			setUpdateNotice("发现新版本: v0.2.1")
+			close(done)
+		}()
+	}
+	os.Args = []string{"neocode"}
+
+	if err := Execute(context.Background()); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if got := ConsumeUpdateNotice(); got == "" {
+		t.Fatal("expected update notice after Execute waits for silent check")
+	}
+}
+
+func TestWaitSilentUpdateCheckDoneReturnsOnTimeout(t *testing.T) {
+	blocked := make(chan struct{})
+	setSilentUpdateCheckDone(blocked)
+	t.Cleanup(func() { setSilentUpdateCheckDone(nil) })
+
+	start := time.Now()
+	waitSilentUpdateCheckDone(30 * time.Millisecond)
+	if elapsed := time.Since(start); elapsed < 20*time.Millisecond || elapsed > 150*time.Millisecond {
+		t.Fatalf("wait duration out of expected range, got %s", elapsed)
 	}
 }
 
@@ -1190,6 +1242,187 @@ func TestShouldSkipGlobalPreload(t *testing.T) {
 	if shouldSkipGlobalPreload(nil) {
 		t.Fatal("nil command should not skip global preload")
 	}
+}
+
+func TestNormalizedCommandName(t *testing.T) {
+	if got := normalizedCommandName(nil); got != "" {
+		t.Fatalf("normalizedCommandName(nil) = %q, want empty", got)
+	}
+	if got := normalizedCommandName(&cobra.Command{Use: "URL-Dispatch"}); got != "url-dispatch" {
+		t.Fatalf("normalizedCommandName() = %q, want %q", got, "url-dispatch")
+	}
+}
+
+func TestShouldSkipSilentUpdateCheck(t *testing.T) {
+	if !shouldSkipSilentUpdateCheck(&cobra.Command{Use: "url-dispatch"}) {
+		t.Fatal("url-dispatch should skip silent update check")
+	}
+	if !shouldSkipSilentUpdateCheck(&cobra.Command{Use: "update"}) {
+		t.Fatal("update should skip silent update check")
+	}
+	if shouldSkipSilentUpdateCheck(&cobra.Command{Use: "gateway"}) {
+		t.Fatal("gateway should not skip silent update check")
+	}
+	if shouldSkipSilentUpdateCheck(nil) {
+		t.Fatal("nil command should not skip silent update check")
+	}
+}
+
+func TestRootCommandRunsSilentUpdateCheckAfterPreload(t *testing.T) {
+	originalLauncher := launchRootProgram
+	originalPreload := runGlobalPreload
+	originalSilentCheck := runSilentUpdateCheck
+	t.Cleanup(func() { launchRootProgram = originalLauncher })
+	t.Cleanup(func() { runGlobalPreload = originalPreload })
+	t.Cleanup(func() { runSilentUpdateCheck = originalSilentCheck })
+
+	events := make([]string, 0, 3)
+	runGlobalPreload = func(context.Context) error {
+		events = append(events, "preload")
+		return nil
+	}
+	runSilentUpdateCheck = func(context.Context) {
+		events = append(events, "check")
+	}
+	launchRootProgram = func(context.Context, app.BootstrapOptions) error {
+		events = append(events, "run")
+		return nil
+	}
+
+	command := NewRootCommand()
+	command.SetArgs([]string{})
+	if err := command.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
+	}
+	want := []string{"preload", "check", "run"}
+	if len(events) != len(want) {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+	for i := range want {
+		if events[i] != want[i] {
+			t.Fatalf("events[%d] = %q, want %q", i, events[i], want[i])
+		}
+	}
+}
+
+func TestURLDispatchSkipsSilentUpdateCheck(t *testing.T) {
+	originalSilentCheck := runSilentUpdateCheck
+	originalRunner := runURLDispatchCommand
+	t.Cleanup(func() { runSilentUpdateCheck = originalSilentCheck })
+	t.Cleanup(func() { runURLDispatchCommand = originalRunner })
+
+	var called bool
+	runSilentUpdateCheck = func(context.Context) {
+		called = true
+	}
+	runURLDispatchCommand = func(context.Context, urlDispatchCommandOptions) error {
+		return nil
+	}
+
+	command := NewRootCommand()
+	command.SetArgs([]string{"url-dispatch", "--url", "neocode://review?path=README.md"})
+	if err := command.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
+	}
+	if called {
+		t.Fatal("expected silent update check to be skipped for url-dispatch")
+	}
+}
+
+func TestUpdateCommandSkipsSilentUpdateCheck(t *testing.T) {
+	originalSilentCheck := runSilentUpdateCheck
+	originalRunner := runUpdateCommand
+	t.Cleanup(func() { runSilentUpdateCheck = originalSilentCheck })
+	t.Cleanup(func() { runUpdateCommand = originalRunner })
+
+	var called bool
+	runSilentUpdateCheck = func(context.Context) {
+		called = true
+	}
+	runUpdateCommand = func(context.Context, updateCommandOptions) (updater.UpdateResult, error) {
+		return updater.UpdateResult{Updated: false, LatestVersion: "v0.2.1"}, nil
+	}
+
+	command := NewRootCommand()
+	command.SetArgs([]string{"update"})
+	if err := command.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
+	}
+	if called {
+		t.Fatal("expected silent update check to be skipped for update command")
+	}
+}
+
+func TestSanitizeVersionForTerminal(t *testing.T) {
+	dirty := "\x1b[31mv0.2.1\x1b[0m\t\n\r\x00"
+	if got := sanitizeVersionForTerminal(dirty); got != "v0.2.1" {
+		t.Fatalf("sanitizeVersionForTerminal() = %q, want %q", got, "v0.2.1")
+	}
+}
+
+func TestDefaultSilentUpdateCheckSkipsForNonReleaseVersion(t *testing.T) {
+	originalVersionReader := readCurrentVersion
+	originalCheckLatest := checkLatestRelease
+	t.Cleanup(func() { readCurrentVersion = originalVersionReader })
+	t.Cleanup(func() { checkLatestRelease = originalCheckLatest })
+
+	readCurrentVersion = func() string { return "dev" }
+
+	var called bool
+	checkLatestRelease = func(context.Context, updater.CheckOptions) (updater.CheckResult, error) {
+		called = true
+		return updater.CheckResult{}, nil
+	}
+
+	defaultSilentUpdateCheck(context.Background())
+	if called {
+		t.Fatal("expected release check to be skipped for non-semver version")
+	}
+}
+
+func TestDefaultSilentUpdateCheckSetsSanitizedNotice(t *testing.T) {
+	_ = ConsumeUpdateNotice()
+
+	originalVersionReader := readCurrentVersion
+	originalCheckLatest := checkLatestRelease
+	t.Cleanup(func() { readCurrentVersion = originalVersionReader })
+	t.Cleanup(func() { checkLatestRelease = originalCheckLatest })
+
+	readCurrentVersion = func() string { return "v0.1.0" }
+	done := make(chan struct{})
+	checkLatestRelease = func(context.Context, updater.CheckOptions) (updater.CheckResult, error) {
+		close(done)
+		return updater.CheckResult{
+			CurrentVersion: "v0.1.0",
+			LatestVersion:  "\x1b[31mv0.2.1\x1b[0m\t\n\r",
+			HasUpdate:      true,
+		}, nil
+	}
+
+	defaultSilentUpdateCheck(context.Background())
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("expected silent update check goroutine to finish")
+	}
+
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		notice := ConsumeUpdateNotice()
+		if notice == "" {
+			time.Sleep(5 * time.Millisecond)
+			continue
+		}
+		if strings.Contains(notice, "\x1b") {
+			t.Fatalf("expected notice without ANSI sequence, got %q", notice)
+		}
+		if !strings.Contains(notice, "v0.2.1") {
+			t.Fatalf("expected sanitized version in notice, got %q", notice)
+		}
+		return
+	}
+	t.Fatal("expected update notice to be set")
 }
 
 func TestDefaultGlobalPreloadLoadsPersistedEnv(t *testing.T) {

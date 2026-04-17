@@ -11,6 +11,8 @@ before:
 builds:
   - env:
       - CGO_ENABLED=0 # 禁用 CGO，确保生成纯静态链接的二进制文件
+    ldflags:
+      - -s -w -X 'neo-code/internal/version.Version={{.Version}}'
     goos:
       - linux
       - windows
@@ -46,4 +48,3 @@ changelog:
     exclude:
       - '^docs:'
       - '^test:'
-
