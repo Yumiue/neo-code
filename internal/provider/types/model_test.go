@@ -43,6 +43,47 @@ func TestDescriptorFromRawModel(t *testing.T) {
 			wantOK: true,
 		},
 		{
+			name: "name from displayName alias",
+			raw: map[string]any{
+				"id":          "gemini-2.5-flash",
+				"displayName": "Gemini 2.5 Flash",
+			},
+			want: ModelDescriptor{
+				ID:   "gemini-2.5-flash",
+				Name: "Gemini 2.5 Flash",
+			},
+			wantOK: true,
+		},
+		{
+			name: "id from model_id alias and name from displayname alias",
+			raw: map[string]any{
+				"model_id":    "qwen-plus",
+				"displayname": "Qwen Plus",
+			},
+			want: ModelDescriptor{
+				ID:   "qwen-plus",
+				Name: "Qwen Plus",
+			},
+			wantOK: true,
+		},
+		{
+			name: "case-insensitive model id and string token fields",
+			raw: map[string]any{
+				"ModelId":           "qwen-max",
+				"model_description": "Best model",
+				"contextWindow":     "128000",
+				"maxTokens":         "8192",
+			},
+			want: ModelDescriptor{
+				ID:              "qwen-max",
+				Name:            "qwen-max",
+				Description:     "Best model",
+				ContextWindow:   128000,
+				MaxOutputTokens: 8192,
+			},
+			wantOK: true,
+		},
+		{
 			name: "capabilities map becomes hints",
 			raw: map[string]any{
 				"id":                 "gpt-4o-mini",
@@ -60,6 +101,39 @@ func TestDescriptorFromRawModel(t *testing.T) {
 					ToolCalling: ModelCapabilityStateSupported,
 					ImageInput:  ModelCapabilityStateUnsupported,
 				},
+			},
+			wantOK: true,
+		},
+		{
+			name: "nested model object fields",
+			raw: map[string]any{
+				"model": map[string]any{
+					"id":           "Tencent-Hunyuan/HY-World-2.0",
+					"display_name": "混元世界模型2.0 HY-World-2.0",
+				},
+			},
+			want: ModelDescriptor{
+				ID:   "Tencent-Hunyuan/HY-World-2.0",
+				Name: "混元世界模型2.0 HY-World-2.0",
+			},
+			wantOK: true,
+		},
+		{
+			name: "nested model_info with token metadata",
+			raw: map[string]any{
+				"model_info": map[string]any{
+					"model_id":          "vendor-reasoning",
+					"modelDescription":  "reasoning model",
+					"input_token_limit": "262144",
+					"maxTokens":         16384,
+				},
+			},
+			want: ModelDescriptor{
+				ID:              "vendor-reasoning",
+				Name:            "vendor-reasoning",
+				Description:     "reasoning model",
+				ContextWindow:   262144,
+				MaxOutputTokens: 16384,
 			},
 			wantOK: true,
 		},

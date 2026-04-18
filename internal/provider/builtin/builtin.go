@@ -4,6 +4,8 @@ import (
 	"errors"
 
 	"neo-code/internal/provider"
+	"neo-code/internal/provider/anthropic"
+	"neo-code/internal/provider/gemini"
 	"neo-code/internal/provider/openaicompat"
 )
 
@@ -19,5 +21,11 @@ func register(registry *provider.Registry) error {
 	if registry == nil {
 		return errors.New("builtin provider registry is nil")
 	}
-	return registry.Register(openaicompat.Driver())
+	if err := registry.Register(openaicompat.Driver()); err != nil {
+		return err
+	}
+	if err := registry.Register(gemini.Driver()); err != nil {
+		return err
+	}
+	return registry.Register(anthropic.Driver())
 }

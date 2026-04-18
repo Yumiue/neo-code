@@ -39,6 +39,12 @@ func TestCatalogInputFromProviderBuiltinIncludesDefaultsAndLazyDiscovery(t *test
 	if input.Identity.APIStyle != "responses" {
 		t.Fatalf("expected normalized api_style, got %+v", input.Identity)
 	}
+	if input.Identity.DiscoveryEndpointPath != providerpkg.DiscoveryEndpointPathModels {
+		t.Fatalf("expected default discovery endpoint, got %+v", input.Identity)
+	}
+	if input.Identity.DiscoveryResponseProfile != providerpkg.DiscoveryResponseProfileOpenAI {
+		t.Fatalf("expected default discovery response profile, got %+v", input.Identity)
+	}
 	if len(input.DefaultModels) != 1 || input.DefaultModels[0].ID != "server-default" {
 		t.Fatalf("expected builtin default model, got %+v", input.DefaultModels)
 	}
@@ -58,8 +64,8 @@ func TestCatalogInputFromProviderBuiltinIncludesDefaultsAndLazyDiscovery(t *test
 	if runtimeConfig.DefaultModel != "server-default" || runtimeConfig.APIKey != "secret-key" {
 		t.Fatalf("expected runtime config to resolve model and api key, got %+v", runtimeConfig)
 	}
-	if runtimeConfig.APIStyle != " Responses " {
-		t.Fatalf("expected runtime config to preserve configured api_style, got %+v", runtimeConfig)
+	if runtimeConfig.APIStyle != providerpkg.OpenAICompatibleAPIStyleResponses {
+		t.Fatalf("expected runtime config api_style to be normalized, got %+v", runtimeConfig)
 	}
 }
 
@@ -85,13 +91,27 @@ func TestCatalogInputFromProviderDefaultsOpenAICompatibleIdentityAPIStyle(t *tes
 			input.Identity,
 		)
 	}
+	if input.Identity.DiscoveryEndpointPath != providerpkg.DiscoveryEndpointPathModels {
+		t.Fatalf(
+			"expected default discovery endpoint %q, got %+v",
+			providerpkg.DiscoveryEndpointPathModels,
+			input.Identity,
+		)
+	}
+	if input.Identity.DiscoveryResponseProfile != providerpkg.DiscoveryResponseProfileOpenAI {
+		t.Fatalf(
+			"expected default discovery response profile %q, got %+v",
+			providerpkg.DiscoveryResponseProfileOpenAI,
+			input.Identity,
+		)
+	}
 
 	runtimeConfig, err := input.ResolveDiscoveryConfig()
 	if err != nil {
 		t.Fatalf("ResolveDiscoveryConfig() error = %v", err)
 	}
-	if runtimeConfig.APIStyle != "" {
-		t.Fatalf("expected runtime config to preserve original empty api_style, got %+v", runtimeConfig)
+	if runtimeConfig.APIStyle != providerpkg.OpenAICompatibleAPIStyleChatCompletions {
+		t.Fatalf("expected runtime config to inherit default api_style, got %+v", runtimeConfig)
 	}
 }
 

@@ -17,7 +17,7 @@ import (
 	providertypes "neo-code/internal/provider/types"
 )
 
-const schemaVersion = 1
+const schemaVersion = 2
 
 var ErrCatalogNotFound = errors.New("provider: model catalog not found")
 

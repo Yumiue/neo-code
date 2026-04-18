@@ -150,6 +150,157 @@ func TestDiscoverModels(t *testing.T) {
 	}
 }
 
+func TestDiscoverModelsUsesConfiguredDiscoveryEndpointPath(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/gateway/models" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"id": "gpt-4.1-mini"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	cfg := resolvedConfig(server.URL, "")
+	cfg.DiscoveryEndpointPath = "/gateway/models"
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p.client = server.Client()
+
+	models, err := p.DiscoverModels(context.Background())
+	if err != nil {
+		t.Fatalf("DiscoverModels() error = %v", err)
+	}
+	if len(models) != 1 || models[0].ID != "gpt-4.1-mini" {
+		t.Fatalf("expected configured discovery endpoint path to return one model, got %+v", models)
+	}
+}
+
+func TestDiscoverModelsParsesGeminiProfileModelList(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"models": []map[string]any{
+				{"name": "gemini-2.5-flash", "displayName": "Gemini 2.5 Flash"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	cfg := resolvedConfig(server.URL, "")
+	cfg.DiscoveryResponseProfile = provider.DiscoveryResponseProfileGemini
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p.client = server.Client()
+
+	models, err := p.DiscoverModels(context.Background())
+	if err != nil {
+		t.Fatalf("DiscoverModels() error = %v", err)
+	}
+	if len(models) != 1 || models[0].Name != "Gemini 2.5 Flash" {
+		t.Fatalf("expected gemini profile parsing, got %+v", models)
+	}
+}
+
+func TestDiscoverModelsParsesNestedContainerAndAliasFields(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"models": []map[string]any{
+					{"model_id": "qwen-plus", "displayname": "Qwen Plus"},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	cfg := resolvedConfig(server.URL, "")
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p.client = server.Client()
+
+	models, err := p.DiscoverModels(context.Background())
+	if err != nil {
+		t.Fatalf("DiscoverModels() error = %v", err)
+	}
+	if len(models) != 1 || models[0].ID != "qwen-plus" || models[0].Name != "Qwen Plus" {
+		t.Fatalf("expected nested alias payload parsing, got %+v", models)
+	}
+}
+
+func TestDiscoverModelsOpenAIProfileFallsBackToGenericListKeys(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"items": []map[string]any{
+				{"id": "thirdparty-chat", "display_name": "ThirdParty Chat"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	cfg := resolvedConfig(server.URL, "")
+	cfg.DiscoveryResponseProfile = provider.DiscoveryResponseProfileOpenAI
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p.client = server.Client()
+
+	models, err := p.DiscoverModels(context.Background())
+	if err != nil {
+		t.Fatalf("DiscoverModels() error = %v", err)
+	}
+	if len(models) != 1 || models[0].ID != "thirdparty-chat" || models[0].Name != "ThirdParty Chat" {
+		t.Fatalf("expected openai profile fallback to generic list keys, got %+v", models)
+	}
+}
+
+func TestDiscoverModelsParsesStringModelIDs(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []any{"model-alpha", "model-beta"},
+		})
+	}))
+	defer server.Close()
+
+	cfg := resolvedConfig(server.URL, "")
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p.client = server.Client()
+
+	models, err := p.DiscoverModels(context.Background())
+	if err != nil {
+		t.Fatalf("DiscoverModels() error = %v", err)
+	}
+	if len(models) != 2 || models[0].ID != "model-alpha" || models[1].ID != "model-beta" {
+		t.Fatalf("expected string model ids to be normalized, got %+v", models)
+	}
+}
+
 // --- toOpenAIMessage 转换测试 ---
 
 func TestToOpenAIMessage_BasicMessage(t *testing.T) {
@@ -777,6 +928,38 @@ func TestDiscoverModels_HTTPError(t *testing.T) {
 	}
 }
 
+func TestDiscoverModels_HTTP404ClassifiedAsNotFound(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("missing endpoint"))
+	}))
+	defer server.Close()
+
+	p, err := New(resolvedConfig(server.URL, ""))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p.client = server.Client()
+
+	_, err = p.DiscoverModels(context.Background())
+	if err == nil {
+		t.Fatal("expected error for HTTP 404 response")
+	}
+
+	var providerErr *provider.ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("expected provider error, got %T %v", err, err)
+	}
+	if providerErr.Code != provider.ErrorCodeNotFound {
+		t.Fatalf("expected error code %q, got %+v", provider.ErrorCodeNotFound, providerErr)
+	}
+	if !strings.Contains(providerErr.Message, "endpoint not found") {
+		t.Fatalf("expected not found guidance message, got %+v", providerErr)
+	}
+}
+
 func TestDiscoverModels_NetworkError(t *testing.T) {
 	t.Parallel()
 
@@ -1010,6 +1193,39 @@ data: [DONE]
 	defer server.Close()
 
 	p, err := New(resolvedConfig(server.URL+"/", config.OpenAIDefaultModel))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p.client = server.Client()
+
+	events := make(chan providertypes.StreamEvent, 4)
+	err = p.Generate(context.Background(), providertypes.GenerateRequest{
+		Model:    config.OpenAIDefaultModel,
+		Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}}},
+	}, events)
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+}
+
+func TestGenerate_UsesConfiguredChatEndpointPath(t *testing.T) {
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/gateway/chat/completions" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}
+data: [DONE]
+
+`))
+	}))
+	defer server.Close()
+
+	cfg := resolvedConfig(server.URL, config.OpenAIDefaultModel)
+	cfg.ChatEndpointPath = "/gateway/chat/completions"
+	p, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}

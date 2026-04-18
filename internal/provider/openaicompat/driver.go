@@ -24,8 +24,21 @@ func Driver() provider.DriverDefinition {
 
 // validateCatalogIdentity 复用 api_style 分流规则，在 catalog 快照与缓存路径上提前拒绝当前尚不支持的静态配置。
 func validateCatalogIdentity(identity provider.ProviderIdentity) error {
-	_, err := supportedAPIStyle(identity.APIStyle)
-	return err
+	_, err := provider.NormalizeProviderProtocolSettings(
+		identity.Driver,
+		identity.ChatProtocol,
+		identity.ChatEndpointPath,
+		identity.DiscoveryProtocol,
+		identity.DiscoveryEndpointPath,
+		identity.AuthStrategy,
+		identity.ResponseProfile,
+		identity.APIStyle,
+		identity.DiscoveryResponseProfile,
+	)
+	if err != nil {
+		return provider.NewDiscoveryConfigError(err.Error())
+	}
+	return nil
 }
 
 // driverDefinition 根据驱动名构造共享的 OpenAI-compatible 协议驱动定义。

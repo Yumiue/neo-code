@@ -122,19 +122,21 @@ type pendingImageAttachment struct {
 
 // providerAddFormState 保存添加新 provider 表单的状态。
 type providerAddFormState struct {
-	Step           int // 当前聚焦字段在“当前 driver 可见字段列表”中的索引
-	Name           string
-	Driver         string
-	BaseURL        string
-	APIStyle       string
-	DeploymentMode string
-	APIVersion     string
-	APIKeyEnv      string
-	APIKey         string
-	Error          string
-	ErrorIsHard    bool
-	Submitting     bool
-	Drivers        []string // 可选的 Driver 列表
+	Step                     int // 当前聚焦字段在“当前 driver 可见字段列表”中的索引
+	Name                     string
+	Driver                   string
+	BaseURL                  string
+	APIStyle                 string
+	DeploymentMode           string
+	APIVersion               string
+	DiscoveryEndpointPath    string
+	DiscoveryResponseProfile string
+	APIKeyEnv                string
+	APIKey                   string
+	Error                    string
+	ErrorIsHard              bool
+	Submitting               bool
+	Drivers                  []string // 可选的 Driver 列表
 }
 
 type App struct {

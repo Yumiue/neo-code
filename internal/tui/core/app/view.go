@@ -234,6 +234,26 @@ func (a App) renderProviderAddForm() string {
 			fields = append(fields, renderField{label: "Deployment Mode", value: a.providerAddForm.DeploymentMode})
 		case providerAddFieldAPIVersion:
 			fields = append(fields, renderField{label: "API Version", value: a.providerAddForm.APIVersion})
+		case providerAddFieldDiscoveryEndpointPath:
+			note := ""
+			if strings.TrimSpace(a.providerAddForm.DiscoveryEndpointPath) == "" {
+				note = "OpenAI-compatible 默认 /models"
+			}
+			fields = append(fields, renderField{
+				label: "Discovery Endpoint",
+				value: a.providerAddForm.DiscoveryEndpointPath,
+				note:  note,
+			})
+		case providerAddFieldDiscoveryResponseProfile:
+			note := "支持 openai / gemini / generic"
+			if strings.TrimSpace(a.providerAddForm.DiscoveryResponseProfile) == "" {
+				note = "OpenAI-compatible 默认 openai"
+			}
+			fields = append(fields, renderField{
+				label: "Discovery Profile",
+				value: a.providerAddForm.DiscoveryResponseProfile,
+				note:  note,
+			})
 		case providerAddFieldAPIKeyEnv:
 			fields = append(fields, renderField{label: "API Key Env", value: a.providerAddForm.APIKeyEnv, required: true})
 		case providerAddFieldAPIKey:

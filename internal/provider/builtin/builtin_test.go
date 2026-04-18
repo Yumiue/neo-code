@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"neo-code/internal/provider"
+	"neo-code/internal/provider/anthropic"
+	"neo-code/internal/provider/gemini"
 	"neo-code/internal/provider/openaicompat"
 )
 
@@ -19,6 +21,12 @@ func TestNewRegistry(t *testing.T) {
 	}
 	if !registry.Supports(openaicompat.DriverName) {
 		t.Fatalf("expected registry to include %q driver", openaicompat.DriverName)
+	}
+	if !registry.Supports(gemini.DriverName) {
+		t.Fatalf("expected registry to include %q driver", gemini.DriverName)
+	}
+	if !registry.Supports(anthropic.DriverName) {
+		t.Fatalf("expected registry to include %q driver", anthropic.DriverName)
 	}
 }
 
@@ -45,6 +53,12 @@ func TestRegister(t *testing.T) {
 		}
 		if !registry.Supports(openaicompat.DriverName) {
 			t.Fatalf("expected registry to include %q driver", openaicompat.DriverName)
+		}
+		if !registry.Supports(gemini.DriverName) {
+			t.Fatalf("expected registry to include %q driver", gemini.DriverName)
+		}
+		if !registry.Supports(anthropic.DriverName) {
+			t.Fatalf("expected registry to include %q driver", anthropic.DriverName)
 		}
 	})
 }

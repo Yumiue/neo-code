@@ -307,6 +307,8 @@ func TestCreateCustomProviderRollbackOnSaveProviderFailure(t *testing.T) {
 		apiStyle string,
 		deploymentMode string,
 		apiVersion string,
+		discoveryEndpointPath string,
+		discoveryResponseProfile string,
 	) error {
 		providerDir := filepath.Join(baseDir, "providers", name)
 		if err := os.MkdirAll(providerDir, 0o755); err != nil {
@@ -460,6 +462,98 @@ func TestLockProviderCreateCrossProcessWaitsForFreshLockUntilContextDone(t *test
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected context deadline exceeded, got %v", err)
+	}
+}
+
+func TestCreateCustomProviderRejectsInvalidDiscoverySettings(t *testing.T) {
+	restorePersist, restoreDelete, restoreLookup, restoreSave := stubUserEnvOpsForCreateProvider(t)
+	defer restorePersist()
+	defer restoreDelete()
+	defer restoreLookup()
+	defer restoreSave()
+
+	manager := newSelectionTestManager(t, testDefaultConfig())
+	service := NewService(manager, newDriverSupporterStub(), catalogMethodsStub{
+		listModels: []providertypes.ModelDescriptor{{ID: "m1", Name: "m1"}},
+	})
+
+	_, err := service.CreateCustomProvider(context.Background(), CreateCustomProviderInput{
+		Name:                  "invalid-discovery-provider",
+		Driver:                provider.DriverOpenAICompat,
+		BaseURL:               "https://llm.example.com/v1",
+		APIKeyEnv:             "INVALID_DISCOVERY_PROVIDER_API_KEY",
+		APIKey:                "key",
+		APIStyle:              provider.OpenAICompatibleAPIStyleChatCompletions,
+		DiscoveryEndpointPath: "https://llm.example.com/models",
+	})
+	if err == nil || !strings.Contains(err.Error(), "discovery endpoint path") {
+		t.Fatalf("expected invalid discovery endpoint path error, got %v", err)
+	}
+
+	_, err = service.CreateCustomProvider(context.Background(), CreateCustomProviderInput{
+		Name:                     "invalid-discovery-profile-provider",
+		Driver:                   provider.DriverOpenAICompat,
+		BaseURL:                  "https://llm.example.com/v1",
+		APIKeyEnv:                "INVALID_DISCOVERY_PROFILE_PROVIDER_API_KEY",
+		APIKey:                   "key",
+		APIStyle:                 provider.OpenAICompatibleAPIStyleChatCompletions,
+		DiscoveryEndpointPath:    "/models",
+		DiscoveryResponseProfile: "unsupported",
+	})
+	if err == nil || !strings.Contains(err.Error(), "discovery response profile") {
+		t.Fatalf("expected invalid discovery response profile error, got %v", err)
+	}
+}
+
+func TestLockProviderCreateCrossProcessCleansStaleLockBeforeAcquire(t *testing.T) {
+	baseDir := t.TempDir()
+	lockPath := filepath.Join(baseDir, providerCreateCrossProcessLockName)
+	if err := os.Mkdir(lockPath, 0o700); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	expiredAt := time.Now().Add(-providerCreateCrossProcessLockStaleThreshold - time.Second)
+	if err := os.Chtimes(lockPath, expiredAt, expiredAt); err != nil {
+		t.Fatalf("Chtimes() error = %v", err)
+	}
+
+	release, err := lockProviderCreateCrossProcess(context.Background(), baseDir)
+	if err != nil {
+		t.Fatalf("lockProviderCreateCrossProcess() error = %v", err)
+	}
+
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatalf("expected lock dir recreated and held, stat err = %v", err)
+	}
+	release()
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatalf("expected lock dir released, stat err = %v", err)
+	}
+}
+
+func TestTryReclaimStaleProviderCreateLockKeepsActiveLeaseWhenDirIsOld(t *testing.T) {
+	baseDir := t.TempDir()
+	lockPath := filepath.Join(baseDir, providerCreateCrossProcessLockName)
+	if err := os.Mkdir(lockPath, 0o700); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+
+	staleDirTime := time.Now().Add(-providerCreateCrossProcessLockStaleThreshold - time.Second)
+	if err := os.Chtimes(lockPath, staleDirTime, staleDirTime); err != nil {
+		t.Fatalf("Chtimes() dir error = %v", err)
+	}
+	if err := touchProviderCreateLockLease(lockPath, time.Now()); err != nil {
+		t.Fatalf("touchProviderCreateLockLease() error = %v", err)
+	}
+
+	reclaimed, err := tryReclaimStaleProviderCreateLock(lockPath, time.Now())
+	if err != nil {
+		t.Fatalf("tryReclaimStaleProviderCreateLock() error = %v", err)
+	}
+	if reclaimed {
+		t.Fatal("expected active lease lock not to be reclaimed")
+	}
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatalf("expected lock dir to remain, stat err = %v", err)
 	}
 }
 

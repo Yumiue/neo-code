@@ -77,7 +77,7 @@ func TestSelectionServiceListProviderOptionsUsesCatalogModels(t *testing.T) {
 	}
 }
 
-func TestSelectionServiceBuiltinUnsupportedAPIStyleFailsAcrossSnapshotPaths(t *testing.T) {
+func TestSelectionServiceBuiltinUnsupportedAPIStyleNoLongerFailsAcrossSnapshotPaths(t *testing.T) {
 	t.Parallel()
 
 	providerCfg := openAIProviderForTest()
@@ -95,14 +95,14 @@ func TestSelectionServiceBuiltinUnsupportedAPIStyleFailsAcrossSnapshotPaths(t *t
 	}
 	service := NewService(manager, newDriverSupporterStub(), catalog.NewService("", registry, nil))
 
-	if _, err := service.ListProviderOptions(context.Background()); !provider.IsDiscoveryConfigError(err) {
-		t.Fatalf("expected ListProviderOptions() to surface discovery config error, got %v", err)
+	if _, err := service.ListProviderOptions(context.Background()); err != nil {
+		t.Fatalf("expected ListProviderOptions() to remain available, got %v", err)
 	}
-	if _, err := service.SelectProvider(context.Background(), OpenAIName); !provider.IsDiscoveryConfigError(err) {
-		t.Fatalf("expected SelectProvider() to surface discovery config error, got %v", err)
+	if _, err := service.SelectProvider(context.Background(), OpenAIName); err != nil {
+		t.Fatalf("expected SelectProvider() to remain available, got %v", err)
 	}
-	if _, err := service.EnsureSelection(context.Background()); !provider.IsDiscoveryConfigError(err) {
-		t.Fatalf("expected EnsureSelection() to surface discovery config error, got %v", err)
+	if _, err := service.EnsureSelection(context.Background()); err != nil {
+		t.Fatalf("expected EnsureSelection() to remain available, got %v", err)
 	}
 
 	reloaded, err := manager.Reload(context.Background())

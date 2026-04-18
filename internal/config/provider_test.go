@@ -66,12 +66,14 @@ func TestProviderConfigIdentity(t *testing.T) {
 	t.Parallel()
 
 	cfg := ProviderConfig{
-		Name:      "test-openai",
-		Driver:    "openaicompat",
-		BaseURL:   "https://api.openai.com/v1",
-		Model:     "gpt-4o",
-		APIKeyEnv: "TEST_KEY",
-		APIStyle:  "chat_completions",
+		Name:                     "test-openai",
+		Driver:                   "openaicompat",
+		BaseURL:                  "https://api.openai.com/v1",
+		Model:                    "gpt-4o",
+		APIKeyEnv:                "TEST_KEY",
+		APIStyle:                 "chat_completions",
+		DiscoveryEndpointPath:    "models",
+		DiscoveryResponseProfile: "openai",
 	}
 
 	identity, err := cfg.Identity()
@@ -86,6 +88,12 @@ func TestProviderConfigIdentity(t *testing.T) {
 	}
 	if identity.APIStyle != "chat_completions" {
 		t.Fatalf("expected api_style chat_completions, got %q", identity.APIStyle)
+	}
+	if identity.DiscoveryEndpointPath != "/models" {
+		t.Fatalf("expected discovery endpoint /models, got %q", identity.DiscoveryEndpointPath)
+	}
+	if identity.DiscoveryResponseProfile != providerpkg.DiscoveryResponseProfileOpenAI {
+		t.Fatalf("expected discovery response profile openai, got %q", identity.DiscoveryResponseProfile)
 	}
 }
 
@@ -116,6 +124,16 @@ func TestProviderIdentityFromConfigDefaultsAPIStyleForOpenAICompat(t *testing.T)
 	if identity.APIStyle != providerpkg.OpenAICompatibleAPIStyleChatCompletions {
 		t.Fatalf("expected default api_style %q, got %q", providerpkg.OpenAICompatibleAPIStyleChatCompletions, identity.APIStyle)
 	}
+	if identity.DiscoveryEndpointPath != providerpkg.DiscoveryEndpointPathModels {
+		t.Fatalf("expected default discovery endpoint %q, got %q", providerpkg.DiscoveryEndpointPathModels, identity.DiscoveryEndpointPath)
+	}
+	if identity.DiscoveryResponseProfile != providerpkg.DiscoveryResponseProfileOpenAI {
+		t.Fatalf(
+			"expected default discovery response profile %q, got %q",
+			providerpkg.DiscoveryResponseProfileOpenAI,
+			identity.DiscoveryResponseProfile,
+		)
+	}
 }
 
 func TestQiniuProviderConfig(t *testing.T) {
@@ -139,6 +157,12 @@ func TestQiniuProviderConfig(t *testing.T) {
 	}
 	if provider.Source != ProviderSourceBuiltin {
 		t.Fatalf("expected builtin source, got %q", provider.Source)
+	}
+	if provider.DiscoveryEndpointPath != providerpkg.DiscoveryEndpointPathModels {
+		t.Fatalf("expected discovery endpoint %q, got %q", providerpkg.DiscoveryEndpointPathModels, provider.DiscoveryEndpointPath)
+	}
+	if provider.DiscoveryResponseProfile != providerpkg.DiscoveryResponseProfileOpenAI {
+		t.Fatalf("expected discovery profile openai, got %q", provider.DiscoveryResponseProfile)
 	}
 }
 
@@ -177,6 +201,29 @@ func TestProviderConfigResolveWrapsAPIKeyError(t *testing.T) {
 	_, err := cfg.Resolve()
 	if err == nil || !strings.Contains(err.Error(), "UNRESOLVABLE_API_KEY_FOR_TEST") {
 		t.Fatalf("expected unresolved API key error, got %v", err)
+	}
+}
+
+func TestProviderConfigValidateRejectsInvalidDiscoverySettings(t *testing.T) {
+	t.Parallel()
+
+	cfg := ProviderConfig{
+		Name:                  "test-openai",
+		Driver:                providerpkg.DriverOpenAICompat,
+		BaseURL:               "https://api.openai.com/v1",
+		Model:                 "gpt-4.1",
+		APIKeyEnv:             "TEST_KEY",
+		DiscoveryEndpointPath: "https://api.openai.com/models",
+		Source:                ProviderSourceBuiltin,
+	}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "discovery endpoint path") {
+		t.Fatalf("expected invalid discovery endpoint path error, got %v", err)
+	}
+
+	cfg.DiscoveryEndpointPath = "/models"
+	cfg.DiscoveryResponseProfile = "not-supported"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "discovery response profile") {
+		t.Fatalf("expected invalid discovery response profile error, got %v", err)
 	}
 }
 
@@ -367,8 +414,8 @@ func TestGeminiProviderConfig(t *testing.T) {
 	if provider.Name != GeminiName {
 		t.Fatalf("expected name %q, got %q", GeminiName, provider.Name)
 	}
-	if provider.Driver != "openaicompat" {
-		t.Fatalf("expected driver %q, got %q", "openaicompat", provider.Driver)
+	if provider.Driver != "gemini" {
+		t.Fatalf("expected driver %q, got %q", "gemini", provider.Driver)
 	}
 	if provider.BaseURL != GeminiDefaultBaseURL {
 		t.Fatalf("expected base URL %q, got %q", GeminiDefaultBaseURL, provider.BaseURL)
@@ -451,14 +498,21 @@ func TestResolvedProviderConfigToRuntimeConfig(t *testing.T) {
 
 	got := resolved.ToRuntimeConfig()
 	want := providerpkg.RuntimeConfig{
-		Name:           "company-gateway",
-		Driver:         "openaicompat",
-		BaseURL:        "https://llm.example.com/v1",
-		DefaultModel:   "server-default",
-		APIKey:         "secret-key",
-		APIStyle:       "responses",
-		DeploymentMode: "ignored",
-		APIVersion:     "ignored",
+		Name:                     "company-gateway",
+		Driver:                   "openaicompat",
+		BaseURL:                  "https://llm.example.com/v1",
+		DefaultModel:             "server-default",
+		APIKey:                   "secret-key",
+		ChatProtocol:             providerpkg.ChatProtocolOpenAIResponses,
+		ChatEndpointPath:         "/responses",
+		DiscoveryProtocol:        providerpkg.DiscoveryProtocolOpenAIModels,
+		AuthStrategy:             providerpkg.AuthStrategyBearer,
+		ResponseProfile:          providerpkg.DiscoveryResponseProfileOpenAI,
+		APIStyle:                 "responses",
+		DeploymentMode:           "ignored",
+		APIVersion:               "ignored",
+		DiscoveryEndpointPath:    providerpkg.DiscoveryEndpointPathModels,
+		DiscoveryResponseProfile: providerpkg.DiscoveryResponseProfileOpenAI,
 	}
 
 	if got != want {

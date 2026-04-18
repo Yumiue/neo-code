@@ -18,16 +18,24 @@ const (
 )
 
 type ProviderConfig struct {
-	Name           string                          `yaml:"name"`
-	Driver         string                          `yaml:"driver"`
-	BaseURL        string                          `yaml:"base_url"`
-	Model          string                          `yaml:"model"`
-	APIKeyEnv      string                          `yaml:"api_key_env"`
-	APIStyle       string                          `yaml:"-"`
-	DeploymentMode string                          `yaml:"-"`
-	APIVersion     string                          `yaml:"-"`
-	Models         []providertypes.ModelDescriptor `yaml:"-"`
-	Source         ProviderSource                  `yaml:"-"`
+	Name                     string                          `yaml:"name"`
+	Driver                   string                          `yaml:"driver"`
+	BaseURL                  string                          `yaml:"base_url"`
+	Model                    string                          `yaml:"model"`
+	APIKeyEnv                string                          `yaml:"api_key_env"`
+	ChatProtocol             string                          `yaml:"-"`
+	ChatEndpointPath         string                          `yaml:"-"`
+	DiscoveryProtocol        string                          `yaml:"-"`
+	AuthStrategy             string                          `yaml:"-"`
+	ResponseProfile          string                          `yaml:"-"`
+	APIStyle                 string                          `yaml:"-"`
+	DeploymentMode           string                          `yaml:"-"`
+	APIVersion               string                          `yaml:"-"`
+	DiscoveryEndpointPath    string                          `yaml:"-"`
+	DiscoveryResponseProfile string                          `yaml:"-"`
+	ModelFieldAliases        string                          `yaml:"-"`
+	Models                   []providertypes.ModelDescriptor `yaml:"-"`
+	Source                   ProviderSource                  `yaml:"-"`
 }
 
 type ResolvedProviderConfig struct {
@@ -68,6 +76,23 @@ func (p ProviderConfig) Validate() error {
 	if strings.TrimSpace(p.APIKeyEnv) == "" {
 		return fmt.Errorf("provider %q api_key_env is empty", p.Name)
 	}
+	normalizedProtocols, err := provider.NormalizeProviderProtocolSettings(
+		p.Driver,
+		p.ChatProtocol,
+		p.ChatEndpointPath,
+		p.DiscoveryProtocol,
+		p.DiscoveryEndpointPath,
+		p.AuthStrategy,
+		p.ResponseProfile,
+		p.APIStyle,
+		p.DiscoveryResponseProfile,
+	)
+	if err != nil {
+		return fmt.Errorf("provider %q: %w", p.Name, err)
+	}
+	if _, err := provider.NormalizeProviderDiscoveryResponseProfile(normalizedProtocols.ResponseProfile); err != nil {
+		return fmt.Errorf("provider %q: %w", p.Name, err)
+	}
 	if _, err := p.Identity(); err != nil {
 		return fmt.Errorf("provider %q: %w", p.Name, err)
 	}
@@ -85,11 +110,25 @@ func (p ProviderConfig) ResolveAPIKey() (string, error) {
 	}
 
 	value := strings.TrimSpace(os.Getenv(envName))
-	if value == "" {
-		return "", fmt.Errorf("config: environment variable %s is empty", envName)
+	if value != "" {
+		return value, nil
 	}
 
-	return value, nil
+	// 进程环境未命中时回退读取用户级环境变量（Windows 为注册表持久化），
+	// 并回填到当前进程环境，避免后续链路重复出现“变量为空”的假阴性。
+	userValue, exists, err := LookupUserEnvVar(envName)
+	if err != nil {
+		return "", fmt.Errorf("config: lookup user environment variable %s: %w", envName, err)
+	}
+	if exists {
+		trimmedUserValue := strings.TrimSpace(userValue)
+		if trimmedUserValue != "" {
+			_ = os.Setenv(envName, trimmedUserValue)
+			return trimmedUserValue, nil
+		}
+	}
+
+	return "", fmt.Errorf("config: environment variable %s is empty", envName)
 }
 
 func (p ProviderConfig) Resolve() (ResolvedProviderConfig, error) {
@@ -153,30 +192,67 @@ func normalizeProviderDriver(driver string) string {
 
 // providerIdentityFromConfig 根据 provider 配置构造用于去重与缓存的规范化连接身份。
 func providerIdentityFromConfig(cfg ProviderConfig) (provider.ProviderIdentity, error) {
-	apiStyle := cfg.APIStyle
-	if normalizeProviderDriver(cfg.Driver) == provider.DriverOpenAICompat && strings.TrimSpace(apiStyle) == "" {
-		apiStyle = provider.OpenAICompatibleAPIStyleChatCompletions
+	normalizedProtocols, err := provider.NormalizeProviderProtocolSettings(
+		cfg.Driver,
+		cfg.ChatProtocol,
+		cfg.ChatEndpointPath,
+		cfg.DiscoveryProtocol,
+		cfg.DiscoveryEndpointPath,
+		cfg.AuthStrategy,
+		cfg.ResponseProfile,
+		cfg.APIStyle,
+		cfg.DiscoveryResponseProfile,
+	)
+	if err != nil {
+		return provider.ProviderIdentity{}, err
 	}
 	return provider.NormalizeProviderIdentity(provider.ProviderIdentity{
-		Driver:         cfg.Driver,
-		BaseURL:        cfg.BaseURL,
-		APIStyle:       apiStyle,
-		DeploymentMode: cfg.DeploymentMode,
-		APIVersion:     cfg.APIVersion,
+		Driver:                   cfg.Driver,
+		BaseURL:                  cfg.BaseURL,
+		ChatProtocol:             normalizedProtocols.ChatProtocol,
+		ChatEndpointPath:         normalizedProtocols.ChatEndpointPath,
+		DiscoveryProtocol:        normalizedProtocols.DiscoveryProtocol,
+		AuthStrategy:             normalizedProtocols.AuthStrategy,
+		ResponseProfile:          normalizedProtocols.ResponseProfile,
+		APIStyle:                 normalizedProtocols.LegacyAPIStyle,
+		DeploymentMode:           cfg.DeploymentMode,
+		APIVersion:               cfg.APIVersion,
+		DiscoveryEndpointPath:    normalizedProtocols.DiscoveryEndpointPath,
+		DiscoveryResponseProfile: normalizedProtocols.ResponseProfile,
 	})
 }
 
 // ToRuntimeConfig 将解析后的 provider 配置收敛为 provider 层使用的最小运行时输入。
 func (p ResolvedProviderConfig) ToRuntimeConfig() provider.RuntimeConfig {
+	normalizedProtocols, _ := provider.NormalizeProviderProtocolSettings(
+		p.Driver,
+		p.ChatProtocol,
+		p.ChatEndpointPath,
+		p.DiscoveryProtocol,
+		p.DiscoveryEndpointPath,
+		p.AuthStrategy,
+		p.ResponseProfile,
+		p.APIStyle,
+		p.DiscoveryResponseProfile,
+	)
+
 	return provider.RuntimeConfig{
-		Name:           p.Name,
-		Driver:         p.Driver,
-		BaseURL:        p.BaseURL,
-		DefaultModel:   p.Model,
-		APIKey:         p.APIKey,
-		APIStyle:       p.APIStyle,
-		DeploymentMode: p.DeploymentMode,
-		APIVersion:     p.APIVersion,
+		Name:                     p.Name,
+		Driver:                   p.Driver,
+		BaseURL:                  p.BaseURL,
+		DefaultModel:             p.Model,
+		APIKey:                   p.APIKey,
+		ChatProtocol:             normalizedProtocols.ChatProtocol,
+		ChatEndpointPath:         normalizedProtocols.ChatEndpointPath,
+		DiscoveryProtocol:        normalizedProtocols.DiscoveryProtocol,
+		AuthStrategy:             normalizedProtocols.AuthStrategy,
+		ResponseProfile:          normalizedProtocols.ResponseProfile,
+		APIStyle:                 normalizedProtocols.LegacyAPIStyle,
+		DeploymentMode:           p.DeploymentMode,
+		APIVersion:               p.APIVersion,
+		DiscoveryEndpointPath:    normalizedProtocols.DiscoveryEndpointPath,
+		DiscoveryResponseProfile: normalizedProtocols.ResponseProfile,
+		ModelFieldAliases:        p.ModelFieldAliases,
 	}
 }
 
@@ -205,52 +281,80 @@ const (
 // OpenAIProvider returns the builtin OpenAI provider definition.
 func OpenAIProvider() ProviderConfig {
 	return ProviderConfig{
-		Name:      OpenAIName,
-		Driver:    provider.DriverOpenAICompat,
-		BaseURL:   OpenAIDefaultBaseURL,
-		Model:     OpenAIDefaultModel,
-		APIKeyEnv: OpenAIDefaultAPIKeyEnv,
-		APIStyle:  provider.OpenAICompatibleAPIStyleChatCompletions,
-		Source:    ProviderSourceBuiltin,
+		Name:                     OpenAIName,
+		Driver:                   provider.DriverOpenAICompat,
+		BaseURL:                  OpenAIDefaultBaseURL,
+		Model:                    OpenAIDefaultModel,
+		APIKeyEnv:                OpenAIDefaultAPIKeyEnv,
+		ChatProtocol:             provider.ChatProtocolOpenAIChatCompletions,
+		ChatEndpointPath:         "/chat/completions",
+		DiscoveryProtocol:        provider.DiscoveryProtocolOpenAIModels,
+		AuthStrategy:             provider.AuthStrategyBearer,
+		ResponseProfile:          provider.DiscoveryResponseProfileOpenAI,
+		APIStyle:                 provider.OpenAICompatibleAPIStyleChatCompletions,
+		DiscoveryEndpointPath:    provider.DiscoveryEndpointPathModels,
+		DiscoveryResponseProfile: provider.DiscoveryResponseProfileOpenAI,
+		Source:                   ProviderSourceBuiltin,
 	}
 }
 
 // GeminiProvider returns the builtin Gemini provider definition.
 func GeminiProvider() ProviderConfig {
 	return ProviderConfig{
-		Name:      GeminiName,
-		Driver:    provider.DriverOpenAICompat,
-		BaseURL:   GeminiDefaultBaseURL,
-		Model:     GeminiDefaultModel,
-		APIKeyEnv: GeminiDefaultAPIKeyEnv,
-		APIStyle:  provider.OpenAICompatibleAPIStyleChatCompletions,
-		Source:    ProviderSourceBuiltin,
+		Name:                     GeminiName,
+		Driver:                   provider.DriverGemini,
+		BaseURL:                  GeminiDefaultBaseURL,
+		Model:                    GeminiDefaultModel,
+		APIKeyEnv:                GeminiDefaultAPIKeyEnv,
+		ChatProtocol:             provider.ChatProtocolOpenAIChatCompletions,
+		ChatEndpointPath:         "/chat/completions",
+		DiscoveryProtocol:        provider.DiscoveryProtocolGeminiModels,
+		AuthStrategy:             provider.AuthStrategyBearer,
+		ResponseProfile:          provider.DiscoveryResponseProfileGemini,
+		APIStyle:                 provider.OpenAICompatibleAPIStyleChatCompletions,
+		DiscoveryEndpointPath:    provider.DiscoveryEndpointPathModels,
+		DiscoveryResponseProfile: provider.DiscoveryResponseProfileGemini,
+		Source:                   ProviderSourceBuiltin,
 	}
 }
 
 // OpenLLProvider returns the builtin OpenLL provider definition.
 func OpenLLProvider() ProviderConfig {
 	return ProviderConfig{
-		Name:      OpenLLName,
-		Driver:    provider.DriverOpenAICompat,
-		BaseURL:   OpenLLDefaultBaseURL,
-		Model:     OpenLLDefaultModel,
-		APIKeyEnv: OpenLLDefaultAPIKeyEnv,
-		APIStyle:  provider.OpenAICompatibleAPIStyleChatCompletions,
-		Source:    ProviderSourceBuiltin,
+		Name:                     OpenLLName,
+		Driver:                   provider.DriverOpenAICompat,
+		BaseURL:                  OpenLLDefaultBaseURL,
+		Model:                    OpenLLDefaultModel,
+		APIKeyEnv:                OpenLLDefaultAPIKeyEnv,
+		ChatProtocol:             provider.ChatProtocolOpenAIChatCompletions,
+		ChatEndpointPath:         "/chat/completions",
+		DiscoveryProtocol:        provider.DiscoveryProtocolOpenAIModels,
+		AuthStrategy:             provider.AuthStrategyBearer,
+		ResponseProfile:          provider.DiscoveryResponseProfileOpenAI,
+		APIStyle:                 provider.OpenAICompatibleAPIStyleChatCompletions,
+		DiscoveryEndpointPath:    provider.DiscoveryEndpointPathModels,
+		DiscoveryResponseProfile: provider.DiscoveryResponseProfileOpenAI,
+		Source:                   ProviderSourceBuiltin,
 	}
 }
 
 // QiniuProvider returns the builtin Qiniu provider definition.
 func QiniuProvider() ProviderConfig {
 	return ProviderConfig{
-		Name:      QiniuName,
-		Driver:    provider.DriverOpenAICompat,
-		BaseURL:   QiniuDefaultBaseURL,
-		Model:     QiniuDefaultModel,
-		APIKeyEnv: QiniuDefaultAPIKeyEnv,
-		APIStyle:  provider.OpenAICompatibleAPIStyleChatCompletions,
-		Source:    ProviderSourceBuiltin,
+		Name:                     QiniuName,
+		Driver:                   provider.DriverOpenAICompat,
+		BaseURL:                  QiniuDefaultBaseURL,
+		Model:                    QiniuDefaultModel,
+		APIKeyEnv:                QiniuDefaultAPIKeyEnv,
+		ChatProtocol:             provider.ChatProtocolOpenAIChatCompletions,
+		ChatEndpointPath:         "/chat/completions",
+		DiscoveryProtocol:        provider.DiscoveryProtocolOpenAIModels,
+		AuthStrategy:             provider.AuthStrategyBearer,
+		ResponseProfile:          provider.DiscoveryResponseProfileOpenAI,
+		APIStyle:                 provider.OpenAICompatibleAPIStyleChatCompletions,
+		DiscoveryEndpointPath:    provider.DiscoveryEndpointPathModels,
+		DiscoveryResponseProfile: provider.DiscoveryResponseProfileOpenAI,
+		Source:                   ProviderSourceBuiltin,
 	}
 }
 

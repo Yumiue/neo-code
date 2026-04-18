@@ -388,6 +388,40 @@ func TestListProviderModelsCachedUsesFreshCatalogWithoutDiscovery(t *testing.T) 
 	}
 }
 
+func TestListProviderModelsRefreshesWhenCatalogSnapshotIsEmpty(t *testing.T) {
+	t.Setenv(testAPIKeyEnv, "test-key")
+
+	store := newMemoryStore()
+	input := customGatewayProviderSource()
+	if err := store.Save(context.Background(), ModelCatalog{
+		SchemaVersion: schemaVersion,
+		Identity:      input.Identity,
+		FetchedAt:     time.Now().Add(-time.Minute),
+		ExpiresAt:     time.Now().Add(time.Hour),
+		Models:        nil,
+	}); err != nil {
+		t.Fatalf("seed empty catalog: %v", err)
+	}
+
+	var discoverCalls int32
+	registry := newRegistry(t, openaicompat.DriverName, func(ctx context.Context, cfg provider.RuntimeConfig) ([]providertypes.ModelDescriptor, error) {
+		atomic.AddInt32(&discoverCalls, 1)
+		return []providertypes.ModelDescriptor{{ID: "qwen-plus", Name: "Qwen Plus"}}, nil
+	})
+
+	service := NewService("", registry, store)
+	models, err := service.ListProviderModels(context.Background(), input)
+	if err != nil {
+		t.Fatalf("ListProviderModels() error = %v", err)
+	}
+	if len(models) != 1 || models[0].ID != "qwen-plus" {
+		t.Fatalf("expected sync refresh result from discovery, got %+v", models)
+	}
+	if atomic.LoadInt32(&discoverCalls) == 0 {
+		t.Fatal("expected discovery to be called when snapshot models are empty")
+	}
+}
+
 func TestDiscoverAndPersistFailurePaths(t *testing.T) {
 	t.Run("unsupported driver", func(t *testing.T) {
 		service := NewService("", provider.NewRegistry(), newMemoryStore())
@@ -441,6 +475,30 @@ func TestDiscoverAndPersistFailurePaths(t *testing.T) {
 		}
 		if !containsModelDescriptorID(discovered, "gpt-4.1") {
 			t.Fatalf("expected discovered model to be returned, got %+v", discovered)
+		}
+	})
+
+	t.Run("empty discovery result is not persisted", func(t *testing.T) {
+		t.Setenv(testAPIKeyEnv, "test-key")
+		store := newMemoryStore()
+		service := NewService("", newRegistry(t, openaicompat.DriverName, func(ctx context.Context, cfg provider.RuntimeConfig) ([]providertypes.ModelDescriptor, error) {
+			return nil, nil
+		}), store)
+
+		discovered, err := service.discoverAndPersist(context.Background(), customGatewayProviderSource())
+		if err != nil {
+			t.Fatalf("discoverAndPersist() error = %v", err)
+		}
+		if len(discovered) != 0 {
+			t.Fatalf("expected empty discovery result, got %+v", discovered)
+		}
+
+		identity, identityErr := customGatewayProvider().Identity()
+		if identityErr != nil {
+			t.Fatalf("Identity() error = %v", identityErr)
+		}
+		if _, loadErr := store.Load(context.Background(), identity); !errors.Is(loadErr, ErrCatalogNotFound) {
+			t.Fatalf("expected empty discovery not to be cached, got %v", loadErr)
 		}
 	})
 }

@@ -1,6 +1,9 @@
 package types
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // ModelCapabilityState 表示模型能力提示的三态枚举。
 type ModelCapabilityState string
@@ -40,22 +43,65 @@ type ModelDescriptor struct {
 
 // DescriptorFromRawModel 将原始 provider 模型对象标准化为 ModelDescriptor。
 func DescriptorFromRawModel(raw map[string]any) (ModelDescriptor, bool) {
+	return DescriptorFromRawModelWithAliases(raw, nil)
+}
+
+// DescriptorFromRawModelWithAliases 在默认字段映射基础上追加别名映射，兼容第三方返回字段差异。
+func DescriptorFromRawModelWithAliases(raw map[string]any, aliases map[string][]string) (ModelDescriptor, bool) {
+	candidates := descriptorRawCandidates(raw)
+
+	idKeys := extendAliasKeys(
+		[]string{"id", "model_id", "modelId", "model_name", "modelName", "name"},
+		aliases,
+		"id",
+		"model_id",
+		"model",
+	)
+	nameKeys := extendAliasKeys(
+		[]string{"display_name", "displayName", "displayname", "name", "model_name", "modelName"},
+		aliases,
+		"name",
+		"display_name",
+	)
+	descriptionKeys := extendAliasKeys(
+		[]string{"description", "desc", "model_description", "modelDescription"},
+		aliases,
+		"description",
+	)
+	contextWindowKeys := extendAliasKeys(
+		[]string{"context_window", "contextWindow", "contextLength", "input_token_limit", "inputTokenLimit", "max_context_tokens"},
+		aliases,
+		"context_window",
+	)
+	maxOutputKeys := extendAliasKeys(
+		[]string{"max_output_tokens", "maxOutputTokens", "output_token_limit", "outputTokenLimit", "max_tokens", "maxTokens"},
+		aliases,
+		"max_output_tokens",
+	)
+	capabilityKeys := extendAliasKeys(
+		[]string{"capabilities", "capability", "features"},
+		aliases,
+		"capabilities",
+	)
+
 	id := firstNonEmptyString(
-		stringValue(raw["id"]),
-		stringValue(raw["model"]),
-		stringValue(raw["name"]),
+		stringValueFromCandidates(candidates, idKeys...),
+		stringValue(lookupRawValue(raw, "model")),
 	)
 	if id == "" {
 		return ModelDescriptor{}, false
 	}
 
 	descriptor := ModelDescriptor{
-		ID:              id,
-		Name:            firstNonEmptyString(stringValue(raw["name"]), stringValue(raw["display_name"]), id),
-		Description:     stringValue(raw["description"]),
-		ContextWindow:   firstPositiveInt(raw["context_window"], raw["contextLength"], raw["input_token_limit"], raw["max_context_tokens"]),
-		MaxOutputTokens: firstPositiveInt(raw["max_output_tokens"], raw["output_token_limit"], raw["max_tokens"]),
-		CapabilityHints: modelCapabilityHintsFromValue(raw["capabilities"]),
+		ID: id,
+		Name: firstNonEmptyString(
+			stringValueFromCandidates(candidates, nameKeys...),
+			id,
+		),
+		Description:     stringValueFromCandidates(candidates, descriptionKeys...),
+		ContextWindow:   firstPositiveIntFromCandidates(candidates, contextWindowKeys...),
+		MaxOutputTokens: firstPositiveIntFromCandidates(candidates, maxOutputKeys...),
+		CapabilityHints: modelCapabilityHintsFromValue(lookupRawValueFromCandidates(candidates, capabilityKeys...)),
 	}
 	return normalizeModelDescriptor(descriptor), true
 }
@@ -292,7 +338,138 @@ func firstPositiveInt(values ...any) int {
 			if typed > 0 {
 				return int(typed)
 			}
+		case string:
+			parsed, err := strconv.Atoi(strings.TrimSpace(typed))
+			if err == nil && parsed > 0 {
+				return parsed
+			}
 		}
 	}
 	return 0
+}
+
+// lookupRawValue 按候选键读取字段，兼容大小写和下划线/连字符差异。
+func lookupRawValue(raw map[string]any, keys ...string) any {
+	for _, key := range keys {
+		if value, ok := raw[key]; ok {
+			return value
+		}
+	}
+
+	for _, key := range keys {
+		target := normalizeFieldAliasKey(key)
+		for currentKey, currentValue := range raw {
+			if normalizeFieldAliasKey(currentKey) == target {
+				return currentValue
+			}
+		}
+	}
+	return nil
+}
+
+// normalizeFieldAliasKey 统一字段别名比较规则：忽略大小写、下划线、连字符和空白。
+func normalizeFieldAliasKey(key string) string {
+	trimmed := strings.TrimSpace(strings.ToLower(key))
+	replacer := strings.NewReplacer("_", "", "-", "", " ", "")
+	return replacer.Replace(trimmed)
+}
+
+// descriptorRawCandidates 生成 descriptor 字段读取候选对象，优先原始对象，再回退嵌套模型对象。
+func descriptorRawCandidates(raw map[string]any) []map[string]any {
+	candidates := make([]map[string]any, 0, 5)
+	if raw != nil {
+		candidates = append(candidates, raw)
+	}
+
+	for _, key := range []string{"model", "model_info", "modelInfo", "spec", "data"} {
+		nested, ok := lookupRawValue(raw, key).(map[string]any)
+		if !ok || len(nested) == 0 {
+			continue
+		}
+		candidates = append(candidates, nested)
+	}
+	return candidates
+}
+
+// lookupRawValueFromCandidates 按候选对象顺序读取字段，支持第三方把模型元数据包装在嵌套对象中。
+func lookupRawValueFromCandidates(candidates []map[string]any, keys ...string) any {
+	for _, candidate := range candidates {
+		if candidate == nil {
+			continue
+		}
+		if value := lookupRawValue(candidate, keys...); value != nil {
+			return value
+		}
+	}
+	return nil
+}
+
+// stringValueFromCandidates 按候选对象顺序提取首个非空字符串，遇到 map/array 等非字符串值会自动跳过。
+func stringValueFromCandidates(candidates []map[string]any, keys ...string) string {
+	for _, candidate := range candidates {
+		if candidate == nil {
+			continue
+		}
+		for _, key := range keys {
+			if value := stringValue(lookupRawValue(candidate, key)); value != "" {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+// firstPositiveIntFromCandidates 按候选对象顺序提取首个正整数，兼容字符串与数字类型。
+func firstPositiveIntFromCandidates(candidates []map[string]any, keys ...string) int {
+	for _, candidate := range candidates {
+		if candidate == nil {
+			continue
+		}
+		values := make([]any, 0, len(keys))
+		for _, key := range keys {
+			values = append(values, lookupRawValue(candidate, key))
+		}
+		if result := firstPositiveInt(values...); result > 0 {
+			return result
+		}
+	}
+	return 0
+}
+
+// extendAliasKeys 在默认字段别名基础上追加配置别名，保持原有优先级并去重。
+func extendAliasKeys(defaultKeys []string, aliases map[string][]string, canonicalKeys ...string) []string {
+	combined := make([]string, 0, len(defaultKeys)+4)
+	seen := make(map[string]struct{}, len(defaultKeys)+4)
+
+	appendKey := func(key string) {
+		trimmed := strings.TrimSpace(key)
+		if trimmed == "" {
+			return
+		}
+		normalized := normalizeFieldAliasKey(trimmed)
+		if normalized == "" {
+			return
+		}
+		if _, exists := seen[normalized]; exists {
+			return
+		}
+		seen[normalized] = struct{}{}
+		combined = append(combined, trimmed)
+	}
+
+	for _, key := range defaultKeys {
+		appendKey(key)
+	}
+
+	if len(aliases) == 0 {
+		return combined
+	}
+
+	for _, canonicalKey := range canonicalKeys {
+		for _, alias := range aliases[canonicalKey] {
+			appendKey(alias)
+		}
+	}
+
+	return combined
 }

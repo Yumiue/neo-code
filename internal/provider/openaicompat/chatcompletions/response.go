@@ -10,6 +10,7 @@ import (
 
 	"neo-code/internal/provider"
 	"neo-code/internal/provider/openaicompat/shared"
+	"neo-code/internal/provider/streaming/sse"
 	providertypes "neo-code/internal/provider/types"
 )
 
@@ -19,7 +20,7 @@ func (p *Provider) ConsumeStream(
 	body io.Reader,
 	events chan<- providertypes.StreamEvent,
 ) error {
-	reader := NewBoundedSSEReader(body)
+	reader := sse.NewBoundedReader(body)
 
 	var (
 		finishReason string

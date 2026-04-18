@@ -2187,6 +2187,8 @@ const (
 	providerAddFieldAPIStyle
 	providerAddFieldDeploymentMode
 	providerAddFieldAPIVersion
+	providerAddFieldDiscoveryEndpointPath
+	providerAddFieldDiscoveryResponseProfile
 	providerAddFieldAPIKeyEnv
 	providerAddFieldAPIKey
 )
@@ -2207,6 +2209,7 @@ func providerAddVisibleFields(driver string) []providerAddFieldID {
 		fields = append(fields, providerAddFieldAPIVersion)
 	}
 
+	fields = append(fields, providerAddFieldDiscoveryEndpointPath, providerAddFieldDiscoveryResponseProfile)
 	fields = append(fields, providerAddFieldAPIKeyEnv, providerAddFieldAPIKey)
 	return fields
 }
@@ -2242,18 +2245,20 @@ func currentProviderAddField(form *providerAddFormState) providerAddFieldID {
 
 func (a *App) startProviderAddForm() {
 	a.providerAddForm = &providerAddFormState{
-		Step:           0,
-		Name:           "",
-		Driver:         provider.DriverOpenAICompat,
-		BaseURL:        "",
-		APIStyle:       provider.OpenAICompatibleAPIStyleChatCompletions,
-		DeploymentMode: "",
-		APIVersion:     "",
-		APIKeyEnv:      "",
-		APIKey:         "",
-		Error:          "",
-		ErrorIsHard:    false,
-		Drivers:        []string{provider.DriverOpenAICompat, provider.DriverGemini, provider.DriverAnthropic},
+		Step:                     0,
+		Name:                     "",
+		Driver:                   provider.DriverOpenAICompat,
+		BaseURL:                  "",
+		APIStyle:                 provider.OpenAICompatibleAPIStyleChatCompletions,
+		DeploymentMode:           "",
+		APIVersion:               "",
+		DiscoveryEndpointPath:    provider.DiscoveryEndpointPathModels,
+		DiscoveryResponseProfile: provider.DiscoveryResponseProfileOpenAI,
+		APIKeyEnv:                "",
+		APIKey:                   "",
+		Error:                    "",
+		ErrorIsHard:              false,
+		Drivers:                  []string{provider.DriverOpenAICompat, provider.DriverGemini, provider.DriverAnthropic},
 	}
 	a.state.ActivePicker = pickerProviderAdd
 	a.state.StatusText = "Add new provider"
@@ -2296,6 +2301,10 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.providerAddForm.DeploymentMode = trimLastRune(a.providerAddForm.DeploymentMode)
 		case providerAddFieldAPIVersion:
 			a.providerAddForm.APIVersion = trimLastRune(a.providerAddForm.APIVersion)
+		case providerAddFieldDiscoveryEndpointPath:
+			a.providerAddForm.DiscoveryEndpointPath = trimLastRune(a.providerAddForm.DiscoveryEndpointPath)
+		case providerAddFieldDiscoveryResponseProfile:
+			a.providerAddForm.DiscoveryResponseProfile = trimLastRune(a.providerAddForm.DiscoveryResponseProfile)
 		case providerAddFieldAPIKeyEnv:
 			a.providerAddForm.APIKeyEnv = trimLastRune(a.providerAddForm.APIKeyEnv)
 		case providerAddFieldAPIKey:
@@ -2344,6 +2353,10 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					a.providerAddForm.DeploymentMode += cleanInput
 				case providerAddFieldAPIVersion:
 					a.providerAddForm.APIVersion += cleanInput
+				case providerAddFieldDiscoveryEndpointPath:
+					a.providerAddForm.DiscoveryEndpointPath += cleanInput
+				case providerAddFieldDiscoveryResponseProfile:
+					a.providerAddForm.DiscoveryResponseProfile += cleanInput
 				case providerAddFieldAPIKeyEnv:
 					a.providerAddForm.APIKeyEnv += cleanInput
 				case providerAddFieldAPIKey:
@@ -2383,14 +2396,16 @@ func (a *App) submitProviderAddForm() tea.Cmd {
 }
 
 type providerAddRequest struct {
-	Name           string
-	Driver         string
-	BaseURL        string
-	APIStyle       string
-	DeploymentMode string
-	APIVersion     string
-	APIKeyEnv      string
-	APIKey         string
+	Name                     string
+	Driver                   string
+	BaseURL                  string
+	APIStyle                 string
+	DeploymentMode           string
+	APIVersion               string
+	DiscoveryEndpointPath    string
+	DiscoveryResponseProfile string
+	APIKeyEnv                string
+	APIKey                   string
 }
 
 type providerAddResultMsg struct {
@@ -2402,14 +2417,16 @@ type providerAddResultMsg struct {
 
 func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, string) {
 	request := providerAddRequest{
-		Name:           normalizeProviderAddFieldValue(form.Name),
-		Driver:         provider.NormalizeProviderDriver(normalizeProviderAddFieldValue(form.Driver)),
-		BaseURL:        normalizeProviderAddFieldValue(form.BaseURL),
-		APIStyle:       normalizeProviderAddFieldValue(form.APIStyle),
-		DeploymentMode: normalizeProviderAddFieldValue(form.DeploymentMode),
-		APIVersion:     normalizeProviderAddFieldValue(form.APIVersion),
-		APIKeyEnv:      normalizeProviderAddFieldValue(form.APIKeyEnv),
-		APIKey:         normalizeProviderAddFieldValue(form.APIKey),
+		Name:                     normalizeProviderAddFieldValue(form.Name),
+		Driver:                   provider.NormalizeProviderDriver(normalizeProviderAddFieldValue(form.Driver)),
+		BaseURL:                  normalizeProviderAddFieldValue(form.BaseURL),
+		APIStyle:                 normalizeProviderAddFieldValue(form.APIStyle),
+		DeploymentMode:           normalizeProviderAddFieldValue(form.DeploymentMode),
+		APIVersion:               normalizeProviderAddFieldValue(form.APIVersion),
+		DiscoveryEndpointPath:    normalizeProviderAddFieldValue(form.DiscoveryEndpointPath),
+		DiscoveryResponseProfile: normalizeProviderAddFieldValue(form.DiscoveryResponseProfile),
+		APIKeyEnv:                normalizeProviderAddFieldValue(form.APIKeyEnv),
+		APIKey:                   normalizeProviderAddFieldValue(form.APIKey),
 	}
 
 	if request.Name == "" {
@@ -2461,6 +2478,27 @@ func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, str
 		request.DeploymentMode = ""
 		request.APIVersion = ""
 	}
+	normalizedProtocols, err := provider.NormalizeProviderProtocolSettings(
+		request.Driver,
+		"",
+		"",
+		"",
+		request.DiscoveryEndpointPath,
+		"",
+		"",
+		request.APIStyle,
+		request.DiscoveryResponseProfile,
+	)
+	if err != nil {
+		return providerAddRequest{}, err.Error()
+	}
+	if request.Driver == provider.DriverOpenAICompat {
+		request.APIStyle = normalizedProtocols.LegacyAPIStyle
+	} else {
+		request.APIStyle = ""
+	}
+	request.DiscoveryEndpointPath = normalizedProtocols.DiscoveryEndpointPath
+	request.DiscoveryResponseProfile = normalizedProtocols.ResponseProfile
 
 	return request, ""
 }
@@ -2526,14 +2564,16 @@ func (a *App) runProviderAddFlow(request providerAddRequest) tea.Cmd {
 		defer cancel()
 
 		selection, err := providerSvc.CreateCustomProvider(ctx, configstate.CreateCustomProviderInput{
-			Name:           request.Name,
-			Driver:         request.Driver,
-			BaseURL:        request.BaseURL,
-			APIStyle:       request.APIStyle,
-			DeploymentMode: request.DeploymentMode,
-			APIVersion:     request.APIVersion,
-			APIKeyEnv:      request.APIKeyEnv,
-			APIKey:         request.APIKey,
+			Name:                     request.Name,
+			Driver:                   request.Driver,
+			BaseURL:                  request.BaseURL,
+			APIStyle:                 request.APIStyle,
+			DeploymentMode:           request.DeploymentMode,
+			APIVersion:               request.APIVersion,
+			DiscoveryEndpointPath:    request.DiscoveryEndpointPath,
+			DiscoveryResponseProfile: request.DiscoveryResponseProfile,
+			APIKeyEnv:                request.APIKeyEnv,
+			APIKey:                   request.APIKey,
 		})
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {

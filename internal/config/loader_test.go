@@ -262,6 +262,8 @@ models:
 openai_compatible:
   base_url: https://llm.example.com/v1
   api_style: chat_completions
+  discovery_endpoint_path: /gateway/models
+  discovery_response_profile: generic
 `
 	customDir := filepath.Join(loader.BaseDir(), providersDirName, "company-gateway")
 	if err := os.WriteFile(filepath.Join(customDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
@@ -294,6 +296,16 @@ openai_compatible:
 	}
 	if customProvider.BaseURL != "https://llm.example.com/v1" {
 		t.Fatalf("expected base url https://llm.example.com/v1, got %q", customProvider.BaseURL)
+	}
+	if customProvider.DiscoveryEndpointPath != "/gateway/models" {
+		t.Fatalf("expected discovery endpoint /gateway/models, got %q", customProvider.DiscoveryEndpointPath)
+	}
+	if customProvider.DiscoveryResponseProfile != provider.DiscoveryResponseProfileGeneric {
+		t.Fatalf(
+			"expected discovery response profile %q, got %q",
+			provider.DiscoveryResponseProfileGeneric,
+			customProvider.DiscoveryResponseProfile,
+		)
 	}
 	if customProvider.Model != "" {
 		t.Fatalf("expected custom provider default model to be empty, got %q", customProvider.Model)
@@ -359,6 +371,32 @@ func TestLoaderRejectsMalformedCustomProviderYAML(t *testing.T) {
 	_, err := loader.Load(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "parse") {
 		t.Fatalf("expected malformed custom provider parse error, got %v", err)
+	}
+}
+
+func TestLoaderRejectsTopLevelDiscoverySettingsForKnownDriver(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	customDir := filepath.Join(loader.BaseDir(), providersDirName, "company-gateway")
+	if err := os.MkdirAll(customDir, 0o755); err != nil {
+		t.Fatalf("mkdir custom provider dir: %v", err)
+	}
+
+	providerYAML := `
+name: company-gateway
+driver: openaicompat
+api_key_env: COMPANY_GATEWAY_API_KEY
+discovery_endpoint_path: /models
+openai_compatible:
+  base_url: https://llm.example.com/v1
+`
+	if err := os.WriteFile(filepath.Join(customDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
+		t.Fatalf("write provider.yaml: %v", err)
+	}
+
+	if _, err := loader.Load(context.Background()); err == nil || !strings.Contains(err.Error(), "openai_compatible") {
+		t.Fatalf("expected known driver top-level discovery placement error, got %v", err)
 	}
 }
 
@@ -861,25 +899,39 @@ func TestSaveCustomProviderPersistsDriverSpecificSettings(t *testing.T) {
 
 	baseDir := t.TempDir()
 	tests := []struct {
-		name           string
-		driver         string
-		baseURL        string
-		apiStyle       string
-		deploymentMode string
-		apiVersion     string
-		assert         func(t *testing.T, cfg ProviderConfig)
+		name                     string
+		driver                   string
+		baseURL                  string
+		apiStyle                 string
+		deploymentMode           string
+		apiVersion               string
+		discoveryEndpointPath    string
+		discoveryResponseProfile string
+		assert                   func(t *testing.T, cfg ProviderConfig)
 	}{
 		{
-			name:           "openaicompat settings",
-			driver:         provider.DriverOpenAICompat,
-			baseURL:        "https://llm.example.com/v1",
-			apiStyle:       provider.OpenAICompatibleAPIStyleResponses,
-			deploymentMode: "ignored",
-			apiVersion:     "ignored",
+			name:                     "openaicompat settings",
+			driver:                   provider.DriverOpenAICompat,
+			baseURL:                  "https://llm.example.com/v1",
+			apiStyle:                 provider.OpenAICompatibleAPIStyleResponses,
+			deploymentMode:           "ignored",
+			apiVersion:               "ignored",
+			discoveryEndpointPath:    "/gateway/models",
+			discoveryResponseProfile: provider.DiscoveryResponseProfileGeneric,
 			assert: func(t *testing.T, cfg ProviderConfig) {
 				t.Helper()
 				if cfg.APIStyle != provider.OpenAICompatibleAPIStyleResponses {
 					t.Fatalf("expected APIStyle=%q, got %q", provider.OpenAICompatibleAPIStyleResponses, cfg.APIStyle)
+				}
+				if cfg.DiscoveryEndpointPath != "/gateway/models" {
+					t.Fatalf("expected DiscoveryEndpointPath=/gateway/models, got %q", cfg.DiscoveryEndpointPath)
+				}
+				if cfg.DiscoveryResponseProfile != provider.DiscoveryResponseProfileGeneric {
+					t.Fatalf(
+						"expected DiscoveryResponseProfile=%q, got %q",
+						provider.DiscoveryResponseProfileGeneric,
+						cfg.DiscoveryResponseProfile,
+					)
 				}
 				if cfg.DeploymentMode != "" || cfg.APIVersion != "" {
 					t.Fatalf("expected non-openai specific settings to be empty, got %+v", cfg)
@@ -887,33 +939,57 @@ func TestSaveCustomProviderPersistsDriverSpecificSettings(t *testing.T) {
 			},
 		},
 		{
-			name:           "gemini settings",
-			driver:         provider.DriverGemini,
-			baseURL:        "https://generativelanguage.googleapis.com/v1beta/openai",
-			apiStyle:       "ignored",
-			deploymentMode: "vertex",
-			apiVersion:     "ignored",
+			name:                     "gemini settings",
+			driver:                   provider.DriverGemini,
+			baseURL:                  "https://generativelanguage.googleapis.com/v1beta/openai",
+			apiStyle:                 "ignored",
+			deploymentMode:           "vertex",
+			apiVersion:               "ignored",
+			discoveryEndpointPath:    "/models",
+			discoveryResponseProfile: provider.DiscoveryResponseProfileGemini,
 			assert: func(t *testing.T, cfg ProviderConfig) {
 				t.Helper()
 				if cfg.DeploymentMode != "vertex" {
 					t.Fatalf("expected DeploymentMode=vertex, got %q", cfg.DeploymentMode)
 				}
-				if cfg.APIStyle != "" || cfg.APIVersion != "" {
-					t.Fatalf("expected non-gemini specific settings to be empty, got %+v", cfg)
+				if cfg.DiscoveryEndpointPath != "/models" {
+					t.Fatalf("expected DiscoveryEndpointPath=/models, got %q", cfg.DiscoveryEndpointPath)
+				}
+				if cfg.DiscoveryResponseProfile != provider.DiscoveryResponseProfileGemini {
+					t.Fatalf(
+						"expected DiscoveryResponseProfile=%q, got %q",
+						provider.DiscoveryResponseProfileGemini,
+						cfg.DiscoveryResponseProfile,
+					)
+				}
+				if cfg.APIStyle != provider.OpenAICompatibleAPIStyleChatCompletions || cfg.APIVersion != "" {
+					t.Fatalf("expected gemini legacy api_style and empty api_version, got %+v", cfg)
 				}
 			},
 		},
 		{
-			name:           "anthropic settings",
-			driver:         provider.DriverAnthropic,
-			baseURL:        "https://api.anthropic.com/v1",
-			apiStyle:       "ignored",
-			deploymentMode: "ignored",
-			apiVersion:     "2023-06-01",
+			name:                     "anthropic settings",
+			driver:                   provider.DriverAnthropic,
+			baseURL:                  "https://api.anthropic.com/v1",
+			apiStyle:                 "ignored",
+			deploymentMode:           "ignored",
+			apiVersion:               "2023-06-01",
+			discoveryEndpointPath:    "/models",
+			discoveryResponseProfile: provider.DiscoveryResponseProfileGeneric,
 			assert: func(t *testing.T, cfg ProviderConfig) {
 				t.Helper()
 				if cfg.APIVersion != "2023-06-01" {
 					t.Fatalf("expected APIVersion=2023-06-01, got %q", cfg.APIVersion)
+				}
+				if cfg.DiscoveryEndpointPath != "/models" {
+					t.Fatalf("expected DiscoveryEndpointPath=/models, got %q", cfg.DiscoveryEndpointPath)
+				}
+				if cfg.DiscoveryResponseProfile != provider.DiscoveryResponseProfileGeneric {
+					t.Fatalf(
+						"expected DiscoveryResponseProfile=%q, got %q",
+						provider.DiscoveryResponseProfileGeneric,
+						cfg.DiscoveryResponseProfile,
+					)
 				}
 				if cfg.APIStyle != "" || cfg.DeploymentMode != "" {
 					t.Fatalf("expected non-anthropic specific settings to be empty, got %+v", cfg)
@@ -921,16 +997,28 @@ func TestSaveCustomProviderPersistsDriverSpecificSettings(t *testing.T) {
 			},
 		},
 		{
-			name:           "unknown driver keeps top-level base url",
-			driver:         "custom-driver",
-			baseURL:        "https://custom.example.com/v1",
-			apiStyle:       "responses",
-			deploymentMode: "vertex",
-			apiVersion:     "2023-06-01",
+			name:                     "unknown driver keeps top-level base url",
+			driver:                   "custom-driver",
+			baseURL:                  "https://custom.example.com/v1",
+			apiStyle:                 "responses",
+			deploymentMode:           "vertex",
+			apiVersion:               "2023-06-01",
+			discoveryEndpointPath:    "/catalog/models",
+			discoveryResponseProfile: provider.DiscoveryResponseProfileGeneric,
 			assert: func(t *testing.T, cfg ProviderConfig) {
 				t.Helper()
 				if cfg.BaseURL != "https://custom.example.com/v1" {
 					t.Fatalf("expected BaseURL=https://custom.example.com/v1, got %q", cfg.BaseURL)
+				}
+				if cfg.DiscoveryEndpointPath != "/catalog/models" {
+					t.Fatalf("expected DiscoveryEndpointPath=/catalog/models, got %q", cfg.DiscoveryEndpointPath)
+				}
+				if cfg.DiscoveryResponseProfile != provider.DiscoveryResponseProfileGeneric {
+					t.Fatalf(
+						"expected DiscoveryResponseProfile=%q, got %q",
+						provider.DiscoveryResponseProfileGeneric,
+						cfg.DiscoveryResponseProfile,
+					)
 				}
 				if cfg.APIStyle != "" || cfg.DeploymentMode != "" || cfg.APIVersion != "" {
 					t.Fatalf("expected unknown driver protocol settings to be empty, got %+v", cfg)
@@ -955,6 +1043,8 @@ func TestSaveCustomProviderPersistsDriverSpecificSettings(t *testing.T) {
 				tt.apiStyle,
 				tt.deploymentMode,
 				tt.apiVersion,
+				tt.discoveryEndpointPath,
+				tt.discoveryResponseProfile,
 			); err != nil {
 				t.Fatalf("SaveCustomProvider() error = %v", err)
 			}
@@ -999,6 +1089,8 @@ func TestSaveCustomProviderRejectsUnsafeProviderName(t *testing.T) {
 			"https://llm.example.com/v1",
 			"CUSTOM_API_KEY",
 			provider.OpenAICompatibleAPIStyleChatCompletions,
+			"",
+			"",
 			"",
 			"",
 		)
@@ -1150,6 +1242,8 @@ func TestSaveCustomProviderFileSystemErrors(t *testing.T) {
 			provider.OpenAICompatibleAPIStyleChatCompletions,
 			"",
 			"",
+			"",
+			"",
 		)
 		if err == nil {
 			t.Fatal("expected create provider dir error")
@@ -1170,6 +1264,8 @@ func TestSaveCustomProviderFileSystemErrors(t *testing.T) {
 			"https://llm.example.com/v1",
 			"TEAM_GATEWAY_API_KEY",
 			provider.OpenAICompatibleAPIStyleChatCompletions,
+			"",
+			"",
 			"",
 			"",
 		)

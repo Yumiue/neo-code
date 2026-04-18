@@ -2,8 +2,10 @@ package openaicompat
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"neo-code/internal/provider"
@@ -57,18 +59,15 @@ func New(cfg provider.RuntimeConfig, opts ...buildOption) (*Provider, error) {
 
 // DiscoverModels 通过 /models 端点查询可用模型列表。
 func (p *Provider) DiscoverModels(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
-	if _, err := supportedAPIStyle(p.cfg.APIStyle); err != nil {
-		return nil, err
-	}
-
 	rawModels, err := p.fetchModels(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	descriptors := make([]providertypes.ModelDescriptor, 0, len(rawModels))
+	fieldAliases := decodeModelFieldAliases(p.cfg.ModelFieldAliases)
 	for _, raw := range rawModels {
-		descriptor, ok := providertypes.DescriptorFromRawModel(raw)
+		descriptor, ok := providertypes.DescriptorFromRawModelWithAliases(raw, fieldAliases)
 		if !ok {
 			continue
 		}
@@ -80,7 +79,7 @@ func (p *Provider) DiscoverModels(ctx context.Context) ([]providertypes.ModelDes
 // Generate 发起 SSE 流式生成请求。
 // 流中途断连或协议错误时直接返回错误，由上层调用方决定重试策略。
 func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
-	if _, err := supportedAPIStyle(p.cfg.APIStyle); err != nil {
+	if _, err := supportedChatProtocol(p.cfg); err != nil {
 		return err
 	}
 
@@ -100,18 +99,61 @@ func normalizedAPIStyle(apiStyle string) string {
 	return normalized
 }
 
-func supportedAPIStyle(apiStyle string) (string, error) {
-	normalized := normalizedAPIStyle(apiStyle)
-	switch normalized {
-	case provider.OpenAICompatibleAPIStyleChatCompletions:
-		return normalized, nil
+// normalizedChatProtocol 统一解析 chat protocol，优先新字段并兼容旧 api_style 配置。
+func normalizedChatProtocol(cfg provider.RuntimeConfig) string {
+	if normalized := provider.NormalizeProviderChatProtocol(cfg.ChatProtocol); normalized != "" {
+		return normalized
+	}
+
+	normalizedLegacyAPIStyle := normalizedAPIStyle(cfg.APIStyle)
+	switch normalizedLegacyAPIStyle {
 	case provider.OpenAICompatibleAPIStyleResponses:
+		return provider.ChatProtocolOpenAIResponses
+	case provider.OpenAICompatibleAPIStyleChatCompletions, "":
+		return provider.ChatProtocolOpenAIChatCompletions
+	default:
+		return normalizedLegacyAPIStyle
+	}
+}
+
+// supportedChatProtocol 校验 openaicompat 当前支持的聊天协议。
+func supportedChatProtocol(cfg provider.RuntimeConfig) (string, error) {
+	normalized := normalizedChatProtocol(cfg)
+	usingLegacyAPIStyle := strings.TrimSpace(cfg.APIStyle) != ""
+	switch normalized {
+	case provider.ChatProtocolOpenAIChatCompletions:
+		return normalized, nil
+	case provider.ChatProtocolOpenAIResponses:
+		if usingLegacyAPIStyle {
+			return "", provider.NewDiscoveryConfigError(
+				fmt.Sprintf("openaicompat provider: api_style %q is not supported yet", provider.OpenAICompatibleAPIStyleResponses),
+			)
+		}
 		return "", provider.NewDiscoveryConfigError(
-			fmt.Sprintf("openaicompat provider: api_style %q is not supported yet", normalized),
+			fmt.Sprintf("openaicompat provider: chat_protocol %q is not supported yet", normalized),
 		)
 	default:
+		if usingLegacyAPIStyle {
+			return "", provider.NewDiscoveryConfigError(
+				fmt.Sprintf("openaicompat provider: unsupported api_style %q", normalizedAPIStyle(cfg.APIStyle)),
+			)
+		}
 		return "", provider.NewDiscoveryConfigError(
-			fmt.Sprintf("openaicompat provider: unsupported api_style %q", normalized),
+			fmt.Sprintf("openaicompat provider: unsupported chat_protocol %q", normalized),
 		)
 	}
+}
+
+// decodeModelFieldAliases 解析配置中的字段别名映射字符串，解析失败时静默回退到默认映射。
+func decodeModelFieldAliases(encoded string) map[string][]string {
+	trimmed := strings.TrimSpace(encoded)
+	if trimmed == "" {
+		return nil
+	}
+
+	var aliases map[string][]string
+	if err := json.Unmarshal([]byte(trimmed), &aliases); err != nil {
+		return nil
+	}
+	return aliases
 }

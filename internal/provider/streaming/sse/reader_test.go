@@ -1,4 +1,4 @@
-package chatcompletions
+package sse
 
 import (
 	"errors"
@@ -9,7 +9,7 @@ import (
 	"neo-code/internal/provider"
 )
 
-func TestBoundedSSEReaderAndTrimLineEnding(t *testing.T) {
+func TestBoundedReaderAndTrimLineEnding(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -29,7 +29,7 @@ func TestBoundedSSEReaderAndTrimLineEnding(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			reader := NewBoundedSSEReader(strings.NewReader(tt.input))
+			reader := NewBoundedReader(strings.NewReader(tt.input))
 			got, err := reader.ReadLine()
 			if got != tt.want {
 				t.Fatalf("ReadLine() = %q, want %q", got, tt.want)
@@ -46,7 +46,7 @@ func TestBoundedSSEReaderAndTrimLineEnding(t *testing.T) {
 		})
 	}
 
-	reader := NewBoundedSSEReader(strings.NewReader("line1\nline2\n\nline4\n"))
+	reader := NewBoundedReader(strings.NewReader("line1\nline2\n\nline4\n"))
 	for _, want := range []string{"line1", "line2", "", "line4"} {
 		got, err := reader.ReadLine()
 		if err != nil || got != want {
@@ -57,27 +57,27 @@ func TestBoundedSSEReaderAndTrimLineEnding(t *testing.T) {
 		t.Fatalf("expected io.EOF, got %v", err)
 	}
 
-	if _, err := NewBoundedSSEReader(strings.NewReader(strings.Repeat("x", MaxSSELineSize+1) + "\n")).ReadLine(); !errors.Is(err, provider.ErrLineTooLong) {
+	if _, err := NewBoundedReader(strings.NewReader(strings.Repeat("x", DefaultMaxLineSize+1) + "\n")).ReadLine(); !errors.Is(err, provider.ErrLineTooLong) {
 		t.Fatalf("expected ErrLineTooLong, got %v", err)
 	}
-	if got, err := NewBoundedSSEReader(strings.NewReader(strings.Repeat("a", MaxSSELineSize) + "\n")).ReadLine(); err != nil || len(got) != MaxSSELineSize {
+	if got, err := NewBoundedReader(strings.NewReader(strings.Repeat("a", DefaultMaxLineSize) + "\n")).ReadLine(); err != nil || len(got) != DefaultMaxLineSize {
 		t.Fatalf("expected exact limit to pass, got len=%d err=%v", len(got), err)
 	}
-	if got, err := NewBoundedSSEReader(strings.NewReader(strings.Repeat("b", MaxSSELineSize))).ReadLine(); !errors.Is(err, io.EOF) || len(got) != MaxSSELineSize {
+	if got, err := NewBoundedReader(strings.NewReader(strings.Repeat("b", DefaultMaxLineSize))).ReadLine(); !errors.Is(err, io.EOF) || len(got) != DefaultMaxLineSize {
 		t.Fatalf("expected exact limit EOF read, got len=%d err=%v", len(got), err)
 	}
-	if _, err := NewBoundedSSEReader(strings.NewReader(strings.Repeat("c", MaxSSELineSize+1))).ReadLine(); !errors.Is(err, provider.ErrLineTooLong) {
+	if _, err := NewBoundedReader(strings.NewReader(strings.Repeat("c", DefaultMaxLineSize+1))).ReadLine(); !errors.Is(err, provider.ErrLineTooLong) {
 		t.Fatalf("expected ErrLineTooLong for oversized EOF line, got %v", err)
 	}
 
 	line := strings.Repeat("x", 1024) + "\n"
 	lineSize := int64(len(line))
 	var builder strings.Builder
-	for i := 0; i < int(MaxStreamTotalSize/lineSize)+1; i++ {
+	for i := 0; i < int(DefaultMaxStreamTotalSize/lineSize)+1; i++ {
 		builder.WriteString(line)
 	}
-	reader = NewBoundedSSEReader(strings.NewReader(builder.String()))
-	for i := 0; i < int(MaxStreamTotalSize/lineSize); i++ {
+	reader = NewBoundedReader(strings.NewReader(builder.String()))
+	for i := 0; i < int(DefaultMaxStreamTotalSize/lineSize); i++ {
 		if _, err := reader.ReadLine(); err != nil {
 			t.Fatalf("unexpected error before size limit: %v", err)
 		}
@@ -86,7 +86,7 @@ func TestBoundedSSEReaderAndTrimLineEnding(t *testing.T) {
 		t.Fatalf("expected ErrStreamTooLarge, got %v", err)
 	}
 
-	if _, err := NewBoundedSSEReader(&readerErr{err: io.ErrClosedPipe}).ReadLine(); !errors.Is(err, io.ErrClosedPipe) {
+	if _, err := NewBoundedReader(&readerErr{err: io.ErrClosedPipe}).ReadLine(); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("expected io.ErrClosedPipe, got %v", err)
 	}
 

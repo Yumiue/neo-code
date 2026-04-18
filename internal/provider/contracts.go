@@ -8,14 +8,22 @@ import (
 
 // RuntimeConfig 表示 provider 构建与模型发现使用的最小运行时输入。
 type RuntimeConfig struct {
-	Name           string
-	Driver         string
-	BaseURL        string
-	DefaultModel   string
-	APIKey         string
-	APIStyle       string
-	DeploymentMode string
-	APIVersion     string
+	Name                     string
+	Driver                   string
+	BaseURL                  string
+	DefaultModel             string
+	APIKey                   string
+	ChatProtocol             string
+	ChatEndpointPath         string
+	DiscoveryProtocol        string
+	AuthStrategy             string
+	ResponseProfile          string
+	APIStyle                 string
+	DeploymentMode           string
+	APIVersion               string
+	DiscoveryEndpointPath    string
+	DiscoveryResponseProfile string
+	ModelFieldAliases        string
 }
 
 // Provider 定义模型生成能力，通过 channel 推送流式事件给上层消费。

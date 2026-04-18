@@ -158,7 +158,7 @@ func TestRegistrySupports(t *testing.T) {
 func TestRegistryValidateCatalogIdentity(t *testing.T) {
 	t.Parallel()
 
-	t.Run("openaicompat rejects unsupported api_style", func(t *testing.T) {
+	t.Run("openaicompat catalog identity allows chat-only api_style drift", func(t *testing.T) {
 		t.Parallel()
 
 		registry := newTestRegistry(t)
@@ -167,8 +167,8 @@ func TestRegistryValidateCatalogIdentity(t *testing.T) {
 			BaseURL:  config.OpenAIDefaultBaseURL,
 			APIStyle: "responses",
 		})
-		if !provider.IsDiscoveryConfigError(err) {
-			t.Fatalf("expected discovery config error, got %v", err)
+		if err != nil {
+			t.Fatalf("expected catalog identity validation to pass, got %v", err)
 		}
 	})
 

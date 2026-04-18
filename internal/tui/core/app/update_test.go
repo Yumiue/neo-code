@@ -2372,7 +2372,7 @@ func TestCurrentProviderAddFieldAndInputHandling(t *testing.T) {
 		t.Fatalf("expected name field append, got %q", app.providerAddForm.Name)
 	}
 
-	app.providerAddForm.Step = 4 // api key env
+	app.providerAddForm.Step = 6 // api key env
 	model, cmd = app.handleProviderAddFormInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'\x00', 'D', 'E', 'E', 'P'}})
 	if cmd != nil {
 		t.Fatalf("expected nil cmd for env key rune input")
@@ -2518,6 +2518,12 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		if req.APIStyle != provider.OpenAICompatibleAPIStyleChatCompletions {
 			t.Fatalf("expected default api style")
 		}
+		if req.DiscoveryEndpointPath != provider.DiscoveryEndpointPathModels {
+			t.Fatalf("expected default discovery endpoint, got %q", req.DiscoveryEndpointPath)
+		}
+		if req.DiscoveryResponseProfile != provider.DiscoveryResponseProfileOpenAI {
+			t.Fatalf("expected default discovery response profile, got %q", req.DiscoveryResponseProfile)
+		}
 	})
 
 	t.Run("strips control chars from env key before validation", func(t *testing.T) {
@@ -2561,6 +2567,30 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		}
 		if req.BaseURL != config.GeminiDefaultBaseURL || req.APIStyle != "" || req.APIVersion != "" {
 			t.Fatalf("expected gemini normalization, got %+v", req)
+		}
+	})
+
+	t.Run("rejects invalid discovery endpoint path", func(t *testing.T) {
+		if _, err := buildProviderAddRequest(providerAddFormState{
+			Name:                  "openai-compat",
+			Driver:                provider.DriverOpenAICompat,
+			APIKey:                "k",
+			APIKeyEnv:             "OPENAI_COMPAT_API_KEY",
+			DiscoveryEndpointPath: "https://api.example.com/models",
+		}); !strings.Contains(err, "relative path") {
+			t.Fatalf("expected invalid discovery endpoint path error, got %q", err)
+		}
+	})
+
+	t.Run("rejects invalid discovery response profile", func(t *testing.T) {
+		if _, err := buildProviderAddRequest(providerAddFormState{
+			Name:                     "openai-compat",
+			Driver:                   provider.DriverOpenAICompat,
+			APIKey:                   "k",
+			APIKeyEnv:                "OPENAI_COMPAT_API_KEY",
+			DiscoveryResponseProfile: "unsupported-profile",
+		}); !strings.Contains(err, "unsupported") {
+			t.Fatalf("expected invalid discovery response profile error, got %q", err)
 		}
 	})
 

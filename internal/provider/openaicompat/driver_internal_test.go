@@ -58,13 +58,13 @@ func TestDriverClosuresAndAPIStyle(t *testing.T) {
 	if got := normalizedAPIStyle(" Responses "); got != "responses" {
 		t.Fatalf("expected normalized responses style, got %q", got)
 	}
-	if got, err := supportedAPIStyle(""); err != nil || got != provider.OpenAICompatibleAPIStyleChatCompletions {
-		t.Fatalf("expected supported default api style, got style=%q err=%v", got, err)
+	if got, err := supportedChatProtocol(provider.RuntimeConfig{}); err != nil || got != provider.ChatProtocolOpenAIChatCompletions {
+		t.Fatalf("expected default chat protocol, got protocol=%q err=%v", got, err)
 	}
-	if _, err := supportedAPIStyle(" Responses "); err == nil || !strings.Contains(err.Error(), `api_style "responses" is not supported yet`) {
+	if _, err := supportedChatProtocol(provider.RuntimeConfig{APIStyle: " Responses "}); err == nil || !strings.Contains(err.Error(), `api_style "responses" is not supported yet`) {
 		t.Fatalf("expected unsupported responses api_style, got %v", err)
 	}
-	if _, err := supportedAPIStyle("custom_style"); err == nil || !strings.Contains(err.Error(), `unsupported api_style "custom_style"`) {
+	if _, err := supportedChatProtocol(provider.RuntimeConfig{APIStyle: "custom_style"}); err == nil || !strings.Contains(err.Error(), `unsupported api_style "custom_style"`) {
 		t.Fatalf("expected unsupported custom api_style, got %v", err)
 	}
 }
@@ -83,6 +83,20 @@ func TestFetchModelsAndGenerateExtraBranches(t *testing.T) {
 	}
 	if _, err := p.fetchModels(context.Background()); err == nil || !strings.Contains(err.Error(), "build models request") {
 		t.Fatalf("expected build models request error, got %v", err)
+	}
+
+	p = &Provider{
+		cfg: provider.RuntimeConfig{
+			Name:                  DriverName,
+			Driver:                DriverName,
+			BaseURL:               "https://api.example.com/v1",
+			APIKey:                "test-key",
+			DiscoveryEndpointPath: "https://api.example.com/models",
+		},
+		client: &http.Client{},
+	}
+	if _, err := p.fetchModels(context.Background()); err == nil || !provider.IsDiscoveryConfigError(err) {
+		t.Fatalf("expected discovery config error, got %v", err)
 	}
 
 	var auth string
@@ -127,10 +141,18 @@ func TestFetchModelsAndGenerateExtraBranches(t *testing.T) {
 		t.Fatalf("expected unsupported api_style error, got %v", err)
 	}
 
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{},
+		})
+	}))
+	defer server.Close()
+
 	p, err = New(provider.RuntimeConfig{
 		Name:         DriverName,
 		Driver:       DriverName,
-		BaseURL:      "https://api.example.com/v1",
+		BaseURL:      server.URL,
 		DefaultModel: "gpt-4.1",
 		APIKey:       "test-key",
 		APIStyle:     "responses",
@@ -138,14 +160,15 @@ func TestFetchModelsAndGenerateExtraBranches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	if _, err := p.DiscoverModels(context.Background()); err == nil || !strings.Contains(err.Error(), `api_style "responses" is not supported yet`) {
-		t.Fatalf("expected discovery to reject responses api_style, got %v", err)
+	p.client = server.Client()
+	if _, err := p.DiscoverModels(context.Background()); err != nil {
+		t.Fatalf("expected discovery to ignore chat-only api_style, got %v", err)
 	}
 
 	p, err = New(provider.RuntimeConfig{
 		Name:         DriverName,
 		Driver:       DriverName,
-		BaseURL:      "https://api.example.com/v1",
+		BaseURL:      server.URL,
 		DefaultModel: "gpt-4.1",
 		APIKey:       "test-key",
 		APIStyle:     "custom_style",
@@ -153,7 +176,32 @@ func TestFetchModelsAndGenerateExtraBranches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	if _, err := p.DiscoverModels(context.Background()); err == nil || !strings.Contains(err.Error(), `unsupported api_style "custom_style"`) {
-		t.Fatalf("expected discovery to reject custom api_style, got %v", err)
+	p.client = server.Client()
+	if _, err := p.DiscoverModels(context.Background()); err != nil {
+		t.Fatalf("expected discovery to ignore unknown chat-only api_style, got %v", err)
+	}
+}
+
+func TestValidateCatalogIdentityRejectsInvalidDiscoverySettings(t *testing.T) {
+	t.Parallel()
+
+	err := validateCatalogIdentity(provider.ProviderIdentity{
+		Driver:                DriverName,
+		BaseURL:               "https://api.example.com/v1",
+		APIStyle:              provider.OpenAICompatibleAPIStyleChatCompletions,
+		DiscoveryEndpointPath: "https://api.example.com/models",
+	})
+	if err == nil || !provider.IsDiscoveryConfigError(err) {
+		t.Fatalf("expected discovery config error for endpoint path, got %v", err)
+	}
+
+	err = validateCatalogIdentity(provider.ProviderIdentity{
+		Driver:                   DriverName,
+		BaseURL:                  "https://api.example.com/v1",
+		APIStyle:                 provider.OpenAICompatibleAPIStyleChatCompletions,
+		DiscoveryResponseProfile: "unsupported",
+	})
+	if err == nil || !provider.IsDiscoveryConfigError(err) {
+		t.Fatalf("expected discovery config error for response profile, got %v", err)
 	}
 }

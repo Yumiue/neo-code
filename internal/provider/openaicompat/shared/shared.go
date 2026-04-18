@@ -6,9 +6,10 @@ import (
 	"strings"
 
 	"neo-code/internal/provider"
+	"neo-code/internal/provider/discovery"
 )
 
-// ErrorPrefix 统一收敛 OpenAI 兼容 provider 的错误前缀，避免历史命名残留继续扩散。
+// ErrorPrefix 统一收敛 OpenAI 兼容 provider 的错误前缀
 const ErrorPrefix = "openaicompat provider: "
 
 func ValidateRuntimeConfig(cfg provider.RuntimeConfig) error {
@@ -22,25 +23,14 @@ func ValidateRuntimeConfig(cfg provider.RuntimeConfig) error {
 }
 
 func Endpoint(baseURL string, path string) string {
-	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	if path == "" {
-		return baseURL
-	}
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	return baseURL + path
+	return discovery.ResolveEndpoint(baseURL, path)
 }
 
 func SetBearerAuthorization(header http.Header, apiKey string) {
-	if header == nil {
-		return
-	}
+	provider.ApplyAuthHeaders(header, provider.AuthStrategyBearer, apiKey, "")
+}
 
-	apiKey = strings.TrimSpace(apiKey)
-	if apiKey == "" {
-		return
-	}
-
-	header.Set("Authorization", "Bearer "+apiKey)
+// ApplyAuthHeaders 根据 runtime 配置中的 auth strategy 写入鉴权头。
+func ApplyAuthHeaders(header http.Header, cfg provider.RuntimeConfig) {
+	provider.ApplyAuthHeaders(header, cfg.AuthStrategy, cfg.APIKey, cfg.APIVersion)
 }

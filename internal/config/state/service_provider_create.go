@@ -28,25 +28,29 @@ const providerCreateCrossProcessLockHeartbeatInterval = 2 * time.Second
 
 // CreateCustomProviderInput 定义新增自定义 Provider 所需的输入参数。
 type CreateCustomProviderInput struct {
-	Name           string
-	Driver         string
-	BaseURL        string
-	APIKeyEnv      string
-	APIKey         string
-	APIStyle       string
-	DeploymentMode string
-	APIVersion     string
+	Name                     string
+	Driver                   string
+	BaseURL                  string
+	APIKeyEnv                string
+	APIKey                   string
+	APIStyle                 string
+	DeploymentMode           string
+	APIVersion               string
+	DiscoveryEndpointPath    string
+	DiscoveryResponseProfile string
 }
 
 type createCustomProviderNormalizedInput struct {
-	Name           string
-	Driver         string
-	BaseURL        string
-	APIKeyEnv      string
-	APIKey         string
-	APIStyle       string
-	DeploymentMode string
-	APIVersion     string
+	Name                     string
+	Driver                   string
+	BaseURL                  string
+	APIKeyEnv                string
+	APIKey                   string
+	APIStyle                 string
+	DeploymentMode           string
+	APIVersion               string
+	DiscoveryEndpointPath    string
+	DiscoveryResponseProfile string
 }
 
 type providerConfigSnapshot struct {
@@ -94,6 +98,7 @@ func (s *Service) CreateCustomProvider(ctx context.Context, input CreateCustomPr
 		return Selection{}, fmt.Errorf("selection: snapshot provider config: %w", err)
 	}
 
+	providerSaveAttempted := false
 	providerSaved := false
 	userEnvPersisted := false
 	processEnvApplied := false
@@ -106,7 +111,7 @@ func (s *Service) CreateCustomProvider(ctx context.Context, input CreateCustomPr
 			previousProcessEnvValue,
 			hadPreviousUserEnv,
 			previousUserEnvValue,
-			providerSaved,
+			providerSaveAttempted,
 			userEnvPersisted,
 			processEnvApplied,
 			providerSnapshot,
@@ -122,7 +127,7 @@ func (s *Service) CreateCustomProvider(ctx context.Context, input CreateCustomPr
 		return rolledErr
 	}
 
-	providerSaved = true
+	providerSaveAttempted = true
 	if err := saveCustomProviderForCreate(
 		s.manager.BaseDir(),
 		normalized.Name,
@@ -132,9 +137,12 @@ func (s *Service) CreateCustomProvider(ctx context.Context, input CreateCustomPr
 		normalized.APIStyle,
 		normalized.DeploymentMode,
 		normalized.APIVersion,
+		normalized.DiscoveryEndpointPath,
+		normalized.DiscoveryResponseProfile,
 	); err != nil {
 		return Selection{}, rollback(fmt.Errorf("selection: save provider config: %w", err))
 	}
+	providerSaved = true
 
 	if err := persistUserEnvVarForCreate(normalized.APIKeyEnv, normalized.APIKey); err != nil {
 		return Selection{}, rollback(fmt.Errorf("selection: persist user env: %w", err))
@@ -161,14 +169,16 @@ func (s *Service) CreateCustomProvider(ctx context.Context, input CreateCustomPr
 // normalizeCreateCustomProviderInput 统一裁剪新增 Provider 输入并执行基础字段校验。
 func normalizeCreateCustomProviderInput(input CreateCustomProviderInput) (createCustomProviderNormalizedInput, error) {
 	normalized := createCustomProviderNormalizedInput{
-		Name:           strings.TrimSpace(input.Name),
-		Driver:         strings.TrimSpace(input.Driver),
-		BaseURL:        strings.TrimSpace(input.BaseURL),
-		APIKeyEnv:      strings.TrimSpace(input.APIKeyEnv),
-		APIKey:         strings.TrimSpace(input.APIKey),
-		APIStyle:       strings.TrimSpace(input.APIStyle),
-		DeploymentMode: strings.TrimSpace(input.DeploymentMode),
-		APIVersion:     strings.TrimSpace(input.APIVersion),
+		Name:                     strings.TrimSpace(input.Name),
+		Driver:                   strings.TrimSpace(input.Driver),
+		BaseURL:                  strings.TrimSpace(input.BaseURL),
+		APIKeyEnv:                strings.TrimSpace(input.APIKeyEnv),
+		APIKey:                   strings.TrimSpace(input.APIKey),
+		APIStyle:                 strings.TrimSpace(input.APIStyle),
+		DeploymentMode:           strings.TrimSpace(input.DeploymentMode),
+		APIVersion:               strings.TrimSpace(input.APIVersion),
+		DiscoveryEndpointPath:    strings.TrimSpace(input.DiscoveryEndpointPath),
+		DiscoveryResponseProfile: strings.TrimSpace(input.DiscoveryResponseProfile),
 	}
 
 	if err := config.ValidateCustomProviderName(normalized.Name); err != nil {
@@ -186,6 +196,27 @@ func normalizeCreateCustomProviderInput(input CreateCustomProviderInput) (create
 	if config.IsProtectedEnvVarName(normalized.APIKeyEnv) {
 		return createCustomProviderNormalizedInput{}, fmt.Errorf("selection: env key %q is protected", normalized.APIKeyEnv)
 	}
+	normalizedProtocols, err := provider.NormalizeProviderProtocolSettings(
+		normalized.Driver,
+		"",
+		"",
+		"",
+		normalized.DiscoveryEndpointPath,
+		"",
+		"",
+		normalized.APIStyle,
+		normalized.DiscoveryResponseProfile,
+	)
+	if err != nil {
+		return createCustomProviderNormalizedInput{}, err
+	}
+	if normalized.Driver == provider.DriverOpenAICompat {
+		normalized.APIStyle = normalizedProtocols.LegacyAPIStyle
+	} else {
+		normalized.APIStyle = ""
+	}
+	normalized.DiscoveryEndpointPath = normalizedProtocols.DiscoveryEndpointPath
+	normalized.DiscoveryResponseProfile = normalizedProtocols.ResponseProfile
 
 	return normalized, nil
 }
@@ -238,7 +269,7 @@ func rollbackCreateCustomProvider(
 	previousProcessEnvValue string,
 	hadPreviousUserEnv bool,
 	previousUserEnvValue string,
-	providerSaved bool,
+	providerSaveAttempted bool,
 	userEnvPersisted bool,
 	processEnvApplied bool,
 	providerSnapshot providerConfigSnapshot,
@@ -266,7 +297,7 @@ func rollbackCreateCustomProvider(
 		}
 	}
 
-	if providerSaved {
+	if providerSaveAttempted {
 		if err := restoreProviderConfigSnapshot(baseDir, providerName, providerSnapshot); err != nil {
 			rollbackErrs = append(rollbackErrs, fmt.Errorf("restore provider config: %w", err))
 		}

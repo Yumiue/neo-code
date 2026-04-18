@@ -21,10 +21,14 @@ func TestJSONStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewProviderIdentity() error = %v", err)
 	}
+	normalizedIdentity, err := provider.NormalizeProviderIdentity(identity)
+	if err != nil {
+		t.Fatalf("NormalizeProviderIdentity() error = %v", err)
+	}
 
 	expected := ModelCatalog{
 		SchemaVersion: schemaVersion,
-		Identity:      identity,
+		Identity:      normalizedIdentity,
 		FetchedAt:     time.Date(2026, 4, 2, 10, 0, 0, 0, time.UTC),
 		ExpiresAt:     time.Date(2026, 4, 3, 10, 0, 0, 0, time.UTC),
 		Models: []providertypes.ModelDescriptor{
@@ -148,6 +152,10 @@ func TestJSONStoreSaveReplacesExistingCatalogWithoutTempLeak(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewProviderIdentity() error = %v", err)
 	}
+	normalizedIdentity, err := provider.NormalizeProviderIdentity(identity)
+	if err != nil {
+		t.Fatalf("NormalizeProviderIdentity() error = %v", err)
+	}
 
 	first := ModelCatalog{
 		SchemaVersion: schemaVersion,
@@ -191,7 +199,7 @@ func TestJSONStoreSaveReplacesExistingCatalogWithoutTempLeak(t *testing.T) {
 		t.Fatalf("expected no temp files to remain, got %+v", matches)
 	}
 
-	data, err := os.ReadFile(store.catalogPath(identity))
+	data, err := os.ReadFile(store.catalogPath(normalizedIdentity))
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
@@ -254,11 +262,15 @@ func TestJSONStoreLoadRejectsInvalidJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewProviderIdentity() error = %v", err)
 	}
+	normalizedIdentity, err := provider.NormalizeProviderIdentity(identity)
+	if err != nil {
+		t.Fatalf("NormalizeProviderIdentity() error = %v", err)
+	}
 
-	if err := os.MkdirAll(filepath.Dir(store.catalogPath(identity)), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(store.catalogPath(normalizedIdentity)), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	if err := os.WriteFile(store.catalogPath(identity), []byte("{not-json"), 0o644); err != nil {
+	if err := os.WriteFile(store.catalogPath(normalizedIdentity), []byte("{not-json"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 

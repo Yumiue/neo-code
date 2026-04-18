@@ -48,12 +48,12 @@ func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateReque
 		return fmt.Errorf("%smarshal request: %w", shared.ErrorPrefix, err)
 	}
 
-	endpoint := shared.Endpoint(p.cfg.BaseURL, "/chat/completions")
+	endpoint := shared.Endpoint(p.cfg.BaseURL, resolveChatEndpointPath(p.cfg))
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("%sbuild request: %w", shared.ErrorPrefix, err)
 	}
-	shared.SetBearerAuthorization(httpReq.Header, p.cfg.APIKey)
+	shared.ApplyAuthHeaders(httpReq.Header, p.cfg)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
 
@@ -72,4 +72,13 @@ func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateReque
 	}
 
 	return p.ConsumeStream(ctx, resp.Body, events)
+}
+
+// resolveChatEndpointPath 统一解析聊天端点路径，优先使用 runtime 配置并在缺省时回退默认值。
+func resolveChatEndpointPath(cfg provider.RuntimeConfig) string {
+	normalizedPath, err := provider.NormalizeProviderChatEndpointPath(cfg.ChatEndpointPath)
+	if err != nil || normalizedPath == "" {
+		return "/chat/completions"
+	}
+	return normalizedPath
 }
