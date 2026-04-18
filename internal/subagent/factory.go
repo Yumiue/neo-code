@@ -22,11 +22,7 @@ type WorkerFactory struct {
 // NewWorkerFactory 创建 WorkerFactory；当 builder 为空时使用默认引擎。
 func NewWorkerFactory(builder EngineBuilder, opts ...FactoryOption) *WorkerFactory {
 	factory := &WorkerFactory{builder: builder}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(factory)
-		}
-	}
+	applyFactoryOptions(factory, opts...)
 	return factory
 }
 
@@ -47,6 +43,15 @@ func WithToolExecutor(executor ToolExecutor) FactoryOption {
 			return
 		}
 		factory.execCtx.ToolExecutor = executor
+	}
+}
+
+// applyFactoryOptions 按顺序应用工厂选项，忽略空选项以简化调用方处理。
+func applyFactoryOptions(factory *WorkerFactory, opts ...FactoryOption) {
+	for _, opt := range opts {
+		if opt != nil {
+			opt(factory)
+		}
 	}
 }
 

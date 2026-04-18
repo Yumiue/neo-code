@@ -158,16 +158,10 @@ func ensureAssistantRole(message providertypes.Message) providertypes.Message {
 // resolveSettings 读取当前 runtime 配置，并解析子代理调用 provider 所需参数。
 func (e runtimeSubAgentEngine) resolveSettings() (config.ResolvedProviderConfig, string, time.Duration, error) {
 	if e.service == nil || e.service.configManager == nil {
-		return config.ResolvedProviderConfig{}, "", 0, fmt.Errorf(
-			"%w: service or config manager is nil",
-			errSubAgentRuntimeUnavailable,
-		)
+		return config.ResolvedProviderConfig{}, "", 0, runtimeUnavailableError("service or config manager is nil")
 	}
 	if e.service.providerFactory == nil {
-		return config.ResolvedProviderConfig{}, "", 0, fmt.Errorf(
-			"%w: provider factory is nil",
-			errSubAgentRuntimeUnavailable,
-		)
+		return config.ResolvedProviderConfig{}, "", 0, runtimeUnavailableError("provider factory is nil")
 	}
 	cfg := e.service.configManager.Get()
 	resolvedProvider, err := config.ResolveSelectedProvider(cfg)
@@ -186,6 +180,11 @@ func (e runtimeSubAgentEngine) resolveSettings() (config.ResolvedProviderConfig,
 		timeout = defaultSubAgentToolTimeout
 	}
 	return resolvedProvider, model, timeout, nil
+}
+
+// runtimeUnavailableError 封装 runtime 依赖缺失错误，保持错误类型与消息结构一致。
+func runtimeUnavailableError(detail string) error {
+	return fmt.Errorf("%w: %s", errSubAgentRuntimeUnavailable, strings.TrimSpace(detail))
 }
 
 // buildProvider 基于解析后的 provider 配置创建单步内复用的模型实例。

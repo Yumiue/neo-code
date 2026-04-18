@@ -135,12 +135,12 @@ func (w *worker) Step(ctx context.Context) (StepResult, error) {
 	if w.budget.Timeout > 0 && time.Since(w.startedAt) >= w.budget.Timeout {
 		result := w.finishLocked(StateFailed, StopReasonTimeout, Output{}, errorsf("worker timeout"))
 		w.mu.Unlock()
-		return StepResult{State: result.State, Done: true, Step: result.StepCount}, nil
+		return terminalStepResult(result, ""), nil
 	}
 	if w.stepCount >= w.budget.MaxSteps {
 		result := w.finishLocked(StateFailed, StopReasonMaxSteps, Output{}, errorsf("worker reached max steps"))
 		w.mu.Unlock()
-		return StepResult{State: result.State, Done: true, Step: result.StepCount}, nil
+		return terminalStepResult(result, ""), nil
 	}
 
 	input := StepInput{
@@ -165,16 +165,16 @@ func (w *worker) Step(ctx context.Context) (StepResult, error) {
 		if errors.Is(err, context.DeadlineExceeded) {
 			result := w.finishLocked(StateFailed, StopReasonTimeout, Output{}, err)
 			w.mu.Unlock()
-			return StepResult{State: result.State, Done: true, Step: result.StepCount}, err
+			return terminalStepResult(result, ""), err
 		}
 		if errors.Is(err, context.Canceled) {
 			result := w.finishLocked(StateCanceled, StopReasonCanceled, Output{}, nil)
 			w.mu.Unlock()
-			return StepResult{State: result.State, Done: true, Step: result.StepCount}, err
+			return terminalStepResult(result, ""), err
 		}
 		result := w.finishLocked(StateFailed, StopReasonError, Output{}, err)
 		w.mu.Unlock()
-		return StepResult{State: result.State, Done: true, Step: result.StepCount}, err
+		return terminalStepResult(result, ""), err
 	}
 
 	w.mu.Lock()
@@ -192,15 +192,15 @@ func (w *worker) Step(ctx context.Context) (StepResult, error) {
 	if stepOutput.Done {
 		if err := validateOutputContract(w.policy, stepOutput.Output); err != nil {
 			result := w.finishLocked(StateFailed, StopReasonError, Output{}, err)
-			return StepResult{State: result.State, Done: true, Step: result.StepCount, Delta: delta}, err
+			return terminalStepResult(result, delta), err
 		}
 		result := w.finishLocked(StateSucceeded, StopReasonCompleted, stepOutput.Output, nil)
-		return StepResult{State: result.State, Done: true, Step: result.StepCount, Delta: delta}, nil
+		return terminalStepResult(result, delta), nil
 	}
 
 	if w.stepCount >= w.budget.MaxSteps {
 		result := w.finishLocked(StateFailed, StopReasonMaxSteps, Output{}, errorsf("worker reached max steps"))
-		return StepResult{State: result.State, Done: true, Step: result.StepCount, Delta: delta}, nil
+		return terminalStepResult(result, delta), nil
 	}
 
 	return StepResult{
@@ -209,6 +209,16 @@ func (w *worker) Step(ctx context.Context) (StepResult, error) {
 		Step:  w.stepCount,
 		Delta: delta,
 	}, nil
+}
+
+// terminalStepResult 将 worker 终态结果映射为单步返回，确保终态字段构造一致。
+func terminalStepResult(result Result, delta string) StepResult {
+	return StepResult{
+		State: result.State,
+		Done:  true,
+		Step:  result.StepCount,
+		Delta: delta,
+	}
 }
 
 // bindCapabilityToPolicy 将 capability 约束在角色策略允许的工具集合内。

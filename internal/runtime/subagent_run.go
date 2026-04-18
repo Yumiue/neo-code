@@ -48,22 +48,12 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 	factory := s.SubAgentFactory()
 	worker, err := factory.Create(input.Role)
 	if err != nil {
-		_ = s.emit(ctx, EventSubAgentFailed, input.RunID, input.SessionID, SubAgentEventPayload{
-			Role:   input.Role,
-			TaskID: input.Task.ID,
-			State:  subagent.StateFailed,
-			Error:  err.Error(),
-		})
+		emitSubAgentFailed(s, ctx, input.RunID, input.SessionID, input.Role, input.Task.ID, err)
 		return subagent.Result{}, err
 	}
 
 	if err := worker.Start(task, input.Budget, input.Capability); err != nil {
-		_ = s.emit(ctx, EventSubAgentFailed, input.RunID, input.SessionID, SubAgentEventPayload{
-			Role:   input.Role,
-			TaskID: input.Task.ID,
-			State:  subagent.StateFailed,
-			Error:  err.Error(),
-		})
+		emitSubAgentFailed(s, ctx, input.RunID, input.SessionID, input.Role, input.Task.ID, err)
 		return subagent.Result{}, err
 	}
 
@@ -85,13 +75,7 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 				_ = worker.Stop(subagent.StopReasonTimeout)
 				result, resultErr := worker.Result()
 				if resultErr != nil {
-					result = subagent.Result{
-						Role:       input.Role,
-						TaskID:     task.ID,
-						State:      subagent.StateFailed,
-						StopReason: subagent.StopReasonTimeout,
-						Error:      errorText(stepErr),
-					}
+					result = fallbackSubAgentResult(input.Role, task.ID, subagent.StateFailed, subagent.StopReasonTimeout, stepErr)
 				}
 				emitSubAgentTerminal(s, ctx, input, result)
 				return result, stepErr
@@ -100,13 +84,7 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 				_ = worker.Stop(subagent.StopReasonCanceled)
 				result, resultErr := worker.Result()
 				if resultErr != nil {
-					result = subagent.Result{
-						Role:       input.Role,
-						TaskID:     task.ID,
-						State:      subagent.StateCanceled,
-						StopReason: subagent.StopReasonCanceled,
-						Error:      errorText(stepErr),
-					}
+					result = fallbackSubAgentResult(input.Role, task.ID, subagent.StateCanceled, subagent.StopReasonCanceled, stepErr)
 				}
 				emitSubAgentTerminal(s, ctx, input, result)
 				return result, stepErr
@@ -114,12 +92,7 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 
 			result, resultErr := worker.Result()
 			if resultErr != nil {
-				_ = s.emit(ctx, EventSubAgentFailed, input.RunID, input.SessionID, SubAgentEventPayload{
-					Role:   input.Role,
-					TaskID: task.ID,
-					State:  subagent.StateFailed,
-					Error:  stepErr.Error(),
-				})
+				emitSubAgentFailed(s, ctx, input.RunID, input.SessionID, input.Role, task.ID, stepErr)
 				return subagent.Result{}, stepErr
 			}
 			emitSubAgentTerminal(s, ctx, input, result)
@@ -132,12 +105,7 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 
 		result, err := worker.Result()
 		if err != nil {
-			_ = s.emit(ctx, EventSubAgentFailed, input.RunID, input.SessionID, SubAgentEventPayload{
-				Role:   input.Role,
-				TaskID: task.ID,
-				State:  subagent.StateFailed,
-				Error:  err.Error(),
-			})
+			emitSubAgentFailed(s, ctx, input.RunID, input.SessionID, input.Role, task.ID, err)
 			return subagent.Result{}, err
 		}
 		emitSubAgentTerminal(s, ctx, input, result)
@@ -146,6 +114,27 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 		}
 		return result, subAgentResultError(result)
 	}
+}
+
+// emitSubAgentFailed 统一发射子代理失败事件，避免重复构造相同载荷。
+func emitSubAgentFailed(
+	s *Service,
+	ctx context.Context,
+	runID string,
+	sessionID string,
+	role subagent.Role,
+	taskID string,
+	err error,
+) {
+	if s == nil {
+		return
+	}
+	_ = s.emit(ctx, EventSubAgentFailed, runID, sessionID, SubAgentEventPayload{
+		Role:   role,
+		TaskID: taskID,
+		State:  subagent.StateFailed,
+		Error:  errorText(err),
+	})
 }
 
 // emitSubAgentProgress 非阻塞发射进度事件，避免慢消费者反压执行路径。
@@ -199,6 +188,17 @@ func emitSubAgentTerminal(s *Service, ctx context.Context, input SubAgentTaskInp
 		_ = s.emit(ctx, EventSubAgentCanceled, input.RunID, input.SessionID, payload)
 	default:
 		_ = s.emit(ctx, EventSubAgentFailed, input.RunID, input.SessionID, payload)
+	}
+}
+
+// fallbackSubAgentResult 在 worker 结果不可用时构造保底终态，确保调用方拿到稳定字段。
+func fallbackSubAgentResult(role subagent.Role, taskID string, state subagent.State, reason subagent.StopReason, err error) subagent.Result {
+	return subagent.Result{
+		Role:       role,
+		TaskID:     taskID,
+		State:      state,
+		StopReason: reason,
+		Error:      errorText(err),
 	}
 }
 

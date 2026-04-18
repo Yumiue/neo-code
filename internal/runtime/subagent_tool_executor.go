@@ -11,9 +11,11 @@ import (
 	"neo-code/internal/tools"
 )
 
-const subAgentToolDecisionPending = "pending"
-const stringPermissionDecisionAsk = "ask"
-const defaultSubAgentToolTimeout = 20 * time.Second
+const (
+	subAgentToolDecisionPending = "pending"
+	stringPermissionDecisionAsk = "ask"
+	defaultSubAgentToolTimeout  = 20 * time.Second
+)
 
 // subAgentRuntimeToolExecutor 将 subagent 工具调用桥接到 runtime 的统一执行链路。
 type subAgentRuntimeToolExecutor struct {
@@ -56,23 +58,29 @@ func (e *subAgentRuntimeToolExecutor) ExecuteTool(
 	if timeout <= 0 {
 		timeout = defaultSubAgentToolTimeout
 	}
+	runID := strings.TrimSpace(input.RunID)
+	sessionID := strings.TrimSpace(input.SessionID)
+	taskID := strings.TrimSpace(input.TaskID)
+	agentID := strings.TrimSpace(input.AgentID)
+	workdir := strings.TrimSpace(input.Workdir)
+	callName := strings.TrimSpace(input.Call.Name)
 
 	payload := SubAgentToolCallEventPayload{
 		Role:      input.Role,
-		TaskID:    strings.TrimSpace(input.TaskID),
-		ToolName:  strings.TrimSpace(input.Call.Name),
+		TaskID:    taskID,
+		ToolName:  callName,
 		Decision:  subAgentToolDecisionPending,
 		ElapsedMS: 0,
 	}
-	e.emit(input.RunID, input.SessionID, EventSubAgentToolCallStarted, payload)
+	e.emit(runID, sessionID, EventSubAgentToolCallStarted, payload)
 
 	result, execErr := e.service.executeToolCallWithPermission(ctx, permissionExecutionInput{
-		RunID:       strings.TrimSpace(input.RunID),
-		SessionID:   strings.TrimSpace(input.SessionID),
-		TaskID:      strings.TrimSpace(input.TaskID),
-		AgentID:     strings.TrimSpace(input.AgentID),
+		RunID:       runID,
+		SessionID:   sessionID,
+		TaskID:      taskID,
+		AgentID:     agentID,
 		Call:        input.Call,
-		Workdir:     strings.TrimSpace(input.Workdir),
+		Workdir:     workdir,
 		ToolTimeout: timeout,
 	})
 
@@ -91,14 +99,8 @@ func (e *subAgentRuntimeToolExecutor) ExecuteTool(
 		output.Name = strings.TrimSpace(result.Name)
 	}
 
-	decision := permissionDecisionAllow
+	decision := resolveToolExecutionDecision(execErr)
 	if execErr != nil {
-		var permissionErr *tools.PermissionDecisionError
-		if errors.As(execErr, &permissionErr) {
-			decision = permissionErr.Decision()
-		} else {
-			decision = "error"
-		}
 		output.Decision = decision
 		if strings.TrimSpace(output.Content) == "" {
 			output.Content = strings.TrimSpace(execErr.Error())
@@ -108,7 +110,7 @@ func (e *subAgentRuntimeToolExecutor) ExecuteTool(
 
 	eventPayload := SubAgentToolCallEventPayload{
 		Role:      input.Role,
-		TaskID:    strings.TrimSpace(input.TaskID),
+		TaskID:    taskID,
 		ToolName:  output.Name,
 		Decision:  decision,
 		ElapsedMS: elapsedMilliseconds(startedAt),
@@ -122,8 +124,20 @@ func (e *subAgentRuntimeToolExecutor) ExecuteTool(
 	if strings.EqualFold(decision, permissionDecisionDeny) || strings.EqualFold(decision, stringPermissionDecisionAsk) {
 		eventType = EventSubAgentToolCallDenied
 	}
-	e.emit(input.RunID, input.SessionID, eventType, eventPayload)
+	e.emit(runID, sessionID, eventType, eventPayload)
 	return output, execErr
+}
+
+// resolveToolExecutionDecision 根据工具执行错误映射统一的权限决策结果。
+func resolveToolExecutionDecision(execErr error) string {
+	if execErr == nil {
+		return permissionDecisionAllow
+	}
+	var permissionErr *tools.PermissionDecisionError
+	if errors.As(execErr, &permissionErr) {
+		return permissionErr.Decision()
+	}
+	return "error"
 }
 
 // emit 发出子代理工具调用事件，失败路径按 best-effort 忽略。
