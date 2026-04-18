@@ -268,6 +268,41 @@ func TestFileStoreLoadTopicAndListTopicsFallbackToLegacyProjectPath(t *testing.T
 	}
 }
 
+func TestFileStoreListTopicsMergesScopedAndLegacyProjectTopics(t *testing.T) {
+	store, legacyDir := newLegacyProjectStore(t)
+	scopedTopicsDir := store.topicsDir(ScopeProject)
+	legacyTopicsDir := filepath.Join(legacyDir, topicsDirName)
+	if err := os.MkdirAll(scopedTopicsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(scoped topics) error = %v", err)
+	}
+	if err := os.MkdirAll(legacyTopicsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(legacy topics) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(scopedTopicsDir, "scoped.md"), []byte("scoped"), 0o644); err != nil {
+		t.Fatalf("WriteFile(scoped topic) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyTopicsDir, "legacy.md"), []byte("legacy"), 0o644); err != nil {
+		t.Fatalf("WriteFile(legacy topic) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyTopicsDir, "scoped.md"), []byte("legacy dup"), 0o644); err != nil {
+		t.Fatalf("WriteFile(legacy duplicate topic) error = %v", err)
+	}
+
+	topics, err := store.ListTopics(context.Background(), ScopeProject)
+	if err != nil {
+		t.Fatalf("ListTopics() error = %v", err)
+	}
+	want := []string{"legacy.md", "scoped.md"}
+	if len(topics) != len(want) {
+		t.Fatalf("len(topics) = %d, want %d, topics = %#v", len(topics), len(want), topics)
+	}
+	for i := range want {
+		if topics[i] != want[i] {
+			t.Fatalf("topics[%d] = %q, want %q (topics=%#v)", i, topics[i], want[i], topics)
+		}
+	}
+}
+
 func TestFileStoreSaveIndexMigratesLegacyProjectData(t *testing.T) {
 	store, legacyDir := newLegacyProjectStore(t)
 	legacyTopicsDir := filepath.Join(legacyDir, topicsDirName)

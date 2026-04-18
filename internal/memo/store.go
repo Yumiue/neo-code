@@ -184,6 +184,7 @@ func (s *FileStore) ListTopics(ctx context.Context, scope Scope) ([]string, erro
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	seen := make(map[string]struct{})
 	for _, dir := range s.topicsDirs(scope) {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
@@ -192,14 +193,22 @@ func (s *FileStore) ListTopics(ctx context.Context, scope Scope) ([]string, erro
 			}
 			return nil, fmt.Errorf("memo: list topics: %w", err)
 		}
-		if names := collectTopicNames(entries); len(names) > 0 {
-			return names, nil
+		for _, name := range collectTopicNames(entries) {
+			seen[name] = struct{}{}
 		}
 	}
-	return nil, nil
+	if len(seen) == 0 {
+		return nil, nil
+	}
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
-// collectTopicNames 将目录项过滤为 topic 文件名列表，并按字典序排序保证稳定输出。
+// collectTopicNames 将目录项过滤为 topic 文件名列表。
 func collectTopicNames(entries []os.DirEntry) []string {
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
@@ -208,7 +217,6 @@ func collectTopicNames(entries []os.DirEntry) []string {
 		}
 		names = append(names, entry.Name())
 	}
-	sort.Strings(names)
 	return names
 }
 
