@@ -28,6 +28,7 @@ type panel = tuistate.Panel
 const (
 	panelTranscript panel = tuistate.PanelTranscript
 	panelActivity   panel = tuistate.PanelActivity
+	panelTodo       panel = tuistate.PanelTodo
 	panelInput      panel = tuistate.PanelInput
 )
 
@@ -84,6 +85,7 @@ type appComponents struct {
 	progress         progress.Model
 	transcript       viewport.Model
 	activity         viewport.Model
+	todo             viewport.Model
 	input            textarea.Model
 	markdownRenderer markdownContentRenderer
 }
@@ -101,6 +103,11 @@ type appRuntimeState struct {
 	pasteMode               bool
 	activeMessages          []providertypes.Message
 	activities              []tuistate.ActivityEntry
+	todoItems               []todoViewItem
+	todoFilter              todoFilter
+	todoSelectedIndex       int
+	todoPanelVisible        bool
+	todoCollapsed           bool
 	fileCandidates          []string
 	modelRefreshID          string
 	focus                   panel
@@ -111,6 +118,10 @@ type appRuntimeState struct {
 	pendingPermission       *permissionPromptState
 	pendingImageAttachments []pendingImageAttachment
 	providerAddForm         *providerAddFormState
+	layoutCached            bool
+	cachedWidth             int
+	cachedHeight            int
+	viewDirty               bool
 }
 
 type pendingImageAttachment struct {
@@ -265,6 +276,7 @@ func newApp(container tuibootstrap.Container) (App, error) {
 			progress:         progressBar,
 			transcript:       viewport.New(0, 0),
 			activity:         viewport.New(0, 0),
+			todo:             viewport.New(0, 0),
 			input:            input,
 			markdownRenderer: markdownRenderer,
 		},
@@ -272,6 +284,10 @@ func newApp(container tuibootstrap.Container) (App, error) {
 			codeCopyBlocks: make(map[int]string),
 			nowFn:          time.Now,
 			focus:          panelInput,
+			todoFilter:     todoFilterAll,
+			layoutCached:   true,
+			cachedWidth:    128,
+			cachedHeight:   40,
 		},
 		width:  128,
 		height: 40,
@@ -299,11 +315,16 @@ func newApp(container tuibootstrap.Container) (App, error) {
 	return app, nil
 }
 
+type tickMsg time.Time
+
 func (a App) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		ListenForRuntimeEvent(a.runtime.Events()),
 		textarea.Blink,
 		a.spinner.Tick,
+		tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+			return tickMsg(t)
+		}),
 	}
 	if cmd := runModelCatalogRefresh(a.providerSvc, a.modelRefreshID); cmd != nil {
 		cmds = append(cmds, cmd)
