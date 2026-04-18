@@ -13,7 +13,6 @@ import (
 	"github.com/spf13/viper"
 
 	"neo-code/internal/app"
-	"neo-code/internal/config"
 	"neo-code/internal/updater"
 	"neo-code/internal/version"
 )
@@ -115,12 +114,12 @@ func defaultRootProgramLauncher(ctx context.Context, opts app.BootstrapOptions) 
 	return err
 }
 
-// defaultGlobalPreload runs lightweight startup preloads such as persisted env.
+// defaultGlobalPreload 负责执行启动前预检查，避免在命令执行前遗漏上下文取消信号。
 func defaultGlobalPreload(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return config.LoadPersistedEnv("")
+	return nil
 }
 
 // defaultSilentUpdateCheck 在后台异步检查新版本并缓存退出后提示文案。

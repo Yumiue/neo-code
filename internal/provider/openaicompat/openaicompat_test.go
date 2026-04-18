@@ -838,6 +838,59 @@ func TestFetchModelsDecodeError(t *testing.T) {
 	}
 }
 
+func TestFetchModelsAcceptsObjectData(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"id":   "gpt-4o-mini",
+				"name": "GPT-4o Mini",
+			},
+		})
+	}))
+	defer server.Close()
+
+	p, err := New(resolvedConfig(server.URL, "decode-key"))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p.client = server.Client()
+
+	models, err := p.fetchModels(context.Background())
+	if err != nil {
+		t.Fatalf("fetchModels() error = %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("expected 1 model, got %d", len(models))
+	}
+	if id, _ := models[0]["id"].(string); id != "gpt-4o-mini" {
+		t.Fatalf("expected model id %q, got %#v", "gpt-4o-mini", models[0]["id"])
+	}
+}
+
+func TestFetchModelsRejectsUnsupportedDataType(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": "unexpected"})
+	}))
+	defer server.Close()
+
+	p, err := New(resolvedConfig(server.URL, "decode-key"))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p.client = server.Client()
+
+	_, err = p.fetchModels(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "decode models response") {
+		t.Fatalf("expected decode models response error, got %v", err)
+	}
+}
+
 func TestDiscoverModelsSkipsInvalidEntriesAndDedupes(t *testing.T) {
 	t.Parallel()
 

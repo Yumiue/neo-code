@@ -13,7 +13,6 @@
 
 - 自动清理旧版 `providers` / `provider_overrides`
 - 自动兼容 `workdir`、`default_workdir` 等旧字段
-- 自动加载 `.env`
 
 ## 配置文件位置
 

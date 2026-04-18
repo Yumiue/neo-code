@@ -32,6 +32,8 @@ type stubProviderService struct {
 	selectErr      error
 	selectDelay    time.Duration
 	selectResponse configstate.Selection
+	createErr      error
+	createResponse configstate.Selection
 }
 
 func (s stubProviderService) ListProviderOptions(ctx context.Context) ([]configstate.ProviderOption, error) {
@@ -76,6 +78,23 @@ func (s stubProviderService) SetCurrentModel(ctx context.Context, modelID string
 		providerID = s.providers[0].ID
 	}
 	return configstate.Selection{ProviderID: providerID, ModelID: modelID}, nil
+}
+
+func (s stubProviderService) CreateCustomProvider(
+	ctx context.Context,
+	input configstate.CreateCustomProviderInput,
+) (configstate.Selection, error) {
+	if s.createErr != nil {
+		return configstate.Selection{}, s.createErr
+	}
+	if strings.TrimSpace(s.createResponse.ProviderID) != "" || strings.TrimSpace(s.createResponse.ModelID) != "" {
+		return s.createResponse, nil
+	}
+	modelID := ""
+	if len(s.models) > 0 {
+		modelID = s.models[0].ID
+	}
+	return configstate.Selection{ProviderID: input.Name, ModelID: modelID}, nil
 }
 
 type stubRuntime struct {
@@ -273,6 +292,7 @@ func TestSubmitProviderAddFormRequiresAnthropicBaseURL(t *testing.T) {
 
 	app.providerAddForm.Name = "anthropic-gateway"
 	app.providerAddForm.Driver = provider.DriverAnthropic
+	app.providerAddForm.APIKeyEnv = "ANTHROPIC_GATEWAY_API_KEY"
 	app.providerAddForm.APIKey = "test-key"
 	app.providerAddForm.BaseURL = ""
 
@@ -286,9 +306,9 @@ func TestSubmitProviderAddFormRequiresAnthropicBaseURL(t *testing.T) {
 }
 
 func TestSubmitProviderAddFormAsyncSuccess(t *testing.T) {
-	restorePersistUserEnv := persistProviderUserEnvVar
-	persistProviderUserEnvVar = func(key string, value string) error { return nil }
-	t.Cleanup(func() { persistProviderUserEnvVar = restorePersistUserEnv })
+	prevSupportsUserEnvPersistence := supportsUserEnvPersistence
+	supportsUserEnvPersistence = func() bool { return false }
+	t.Cleanup(func() { supportsUserEnvPersistence = prevSupportsUserEnvPersistence })
 
 	providerName := "team-gateway"
 	modelID := "gateway-model"
@@ -303,7 +323,7 @@ func TestSubmitProviderAddFormAsyncSuccess(t *testing.T) {
 			},
 		},
 		models: []providertypes.ModelDescriptor{{ID: modelID, Name: modelID}},
-		selectResponse: configstate.Selection{
+		createResponse: configstate.Selection{
 			ProviderID: providerName,
 			ModelID:    modelID,
 		},
@@ -314,6 +334,7 @@ func TestSubmitProviderAddFormAsyncSuccess(t *testing.T) {
 	app.providerAddForm.Name = providerName
 	app.providerAddForm.Driver = provider.DriverOpenAICompat
 	app.providerAddForm.BaseURL = "https://team-gateway.example.com/v1"
+	app.providerAddForm.APIKeyEnv = "TEAM_GATEWAY_API_KEY"
 	app.providerAddForm.APIKey = "sk-test-123"
 	app.providerAddForm.APIStyle = provider.OpenAICompatibleAPIStyleChatCompletions
 
@@ -325,25 +346,16 @@ func TestSubmitProviderAddFormAsyncSuccess(t *testing.T) {
 		t.Fatalf("expected form to enter submitting state")
 	}
 
-	envName := providerAddAPIKeyEnv(providerName)
-	defer os.Unsetenv(envName)
-
 	msg := cmd()
-	if _, ok := msg.(providerAddResultMsg); !ok {
+	result, ok := msg.(providerAddResultMsg)
+	if !ok {
 		t.Fatalf("expected providerAddResultMsg, got %T", msg)
 	}
-	if got := strings.TrimSpace(os.Getenv(envName)); got != "sk-test-123" {
-		t.Fatalf("expected API key in env %s, got %q", envName, got)
-	}
-	envData, readErr := os.ReadFile(config.EnvFilePath(app.configManager.BaseDir()))
-	if readErr != nil {
-		t.Fatalf("expected persisted env file, read error = %v", readErr)
-	}
-	if !strings.Contains(string(envData), envName+"=sk-test-123") {
-		t.Fatalf("expected env file to persist API key, got %q", string(envData))
+	if !strings.Contains(result.Warning, "current process only") {
+		t.Fatalf("expected non-persistent env warning, got %q", result.Warning)
 	}
 
-	next, _ := app.Update(msg)
+	next, _ := app.Update(result)
 	app = next.(App)
 	if app.providerAddForm != nil {
 		t.Fatalf("expected provider add form to close on success")
@@ -354,16 +366,22 @@ func TestSubmitProviderAddFormAsyncSuccess(t *testing.T) {
 	if app.state.CurrentModel != modelID {
 		t.Fatalf("expected current model %q, got %q", modelID, app.state.CurrentModel)
 	}
+	var foundPersistenceNotice bool
+	for _, entry := range app.activities {
+		if entry.Title == "Provider key persistence" && strings.Contains(entry.Detail, "current process only") {
+			foundPersistenceNotice = true
+			break
+		}
+	}
+	if !foundPersistenceNotice {
+		t.Fatal("expected provider key persistence activity notice")
+	}
 }
 
 func TestSubmitProviderAddFormRedactsSensitiveError(t *testing.T) {
-	restorePersistUserEnv := persistProviderUserEnvVar
-	persistProviderUserEnvVar = func(key string, value string) error { return nil }
-	t.Cleanup(func() { persistProviderUserEnvVar = restorePersistUserEnv })
-
 	secretKey := "sk-secret-456"
 	service := stubProviderService{
-		selectErr: errors.New("authentication failed for key " + secretKey),
+		createErr: errors.New("authentication failed for key " + secretKey),
 	}
 	app, _ := newTestAppWithProviderService(t, service)
 	app.startProviderAddForm()
@@ -371,6 +389,7 @@ func TestSubmitProviderAddFormRedactsSensitiveError(t *testing.T) {
 	app.providerAddForm.Name = "redact-gateway"
 	app.providerAddForm.Driver = provider.DriverOpenAICompat
 	app.providerAddForm.BaseURL = "https://redact-gateway.example.com/v1"
+	app.providerAddForm.APIKeyEnv = "REDACT_GATEWAY_API_KEY"
 	app.providerAddForm.APIKey = secretKey
 
 	cmd := app.submitProviderAddForm()
@@ -390,213 +409,39 @@ func TestSubmitProviderAddFormRedactsSensitiveError(t *testing.T) {
 	}
 }
 
-func TestSubmitProviderAddFormRollsBackPersistedStateOnSelectFailure(t *testing.T) {
-	restorePersistUserEnv := persistProviderUserEnvVar
-	restoreDeleteUserEnv := deleteProviderUserEnvVar
-	persistProviderUserEnvVar = func(key string, value string) error { return nil }
-	deleteProviderUserEnvVar = func(key string) error { return nil }
-	t.Cleanup(func() { persistProviderUserEnvVar = restorePersistUserEnv })
-	t.Cleanup(func() { deleteProviderUserEnvVar = restoreDeleteUserEnv })
-
-	providerName := "rollback-gateway"
-	envName := providerAddAPIKeyEnv(providerName)
-	restoreEnv := captureEnv(t, envName)
-	defer restoreEnv()
-	if err := os.Setenv(envName, "previous-value"); err != nil {
-		t.Fatalf("Setenv() error = %v", err)
-	}
-
-	service := stubProviderService{
-		selectErr: errors.New("select failed"),
-	}
-	app, _ := newTestAppWithProviderService(t, service)
-	app.startProviderAddForm()
-	app.providerAddForm.Name = providerName
-	app.providerAddForm.Driver = provider.DriverOpenAICompat
-	app.providerAddForm.BaseURL = "https://rollback.example.com/v1"
-	app.providerAddForm.APIKey = "sk-failed-rollback"
-	app.providerAddForm.APIStyle = provider.OpenAICompatibleAPIStyleChatCompletions
-
-	cmd := app.submitProviderAddForm()
-	if cmd == nil {
-		t.Fatalf("expected async command")
-	}
-	msg := cmd()
-	result, ok := msg.(providerAddResultMsg)
-	if !ok {
-		t.Fatalf("expected providerAddResultMsg, got %T", msg)
-	}
-	if strings.TrimSpace(result.Error) == "" {
-		t.Fatalf("expected failure result")
-	}
-
-	if got := os.Getenv(envName); got != "previous-value" {
-		t.Fatalf("expected process env restored, got %q", got)
-	}
-
-	envData, readErr := os.ReadFile(config.EnvFilePath(app.configManager.BaseDir()))
-	if readErr != nil && !os.IsNotExist(readErr) {
-		t.Fatalf("read env file: %v", readErr)
-	}
-	if strings.Contains(string(envData), envName+"=") {
-		t.Fatalf("expected persisted env key rollback, got %q", string(envData))
-	}
-
-	providerPath := filepath.Join(app.configManager.BaseDir(), "providers", providerName)
-	if _, err := os.Stat(providerPath); !os.IsNotExist(err) {
-		t.Fatalf("expected provider dir rollback, stat err = %v", err)
-	}
-}
-
-func TestSubmitProviderAddFormRollsBackOnUserEnvPersistFailure(t *testing.T) {
-	restorePersistUserEnv := persistProviderUserEnvVar
-	restoreDeleteUserEnv := deleteProviderUserEnvVar
-	persistProviderUserEnvVar = func(key string, value string) error { return errors.New("user env failed") }
-	deleteProviderUserEnvVar = func(key string) error { return nil }
-	t.Cleanup(func() { persistProviderUserEnvVar = restorePersistUserEnv })
-	t.Cleanup(func() { deleteProviderUserEnvVar = restoreDeleteUserEnv })
-
-	providerName := "user-env-fail"
-	envName := providerAddAPIKeyEnv(providerName)
-	restoreEnv := captureEnv(t, envName)
-	defer restoreEnv()
-	_ = os.Unsetenv(envName)
-
+func TestSubmitProviderAddFormRequiresAPIKeyEnv(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.startProviderAddForm()
-	app.providerAddForm.Name = providerName
+	app.providerAddForm.Name = "gateway"
 	app.providerAddForm.Driver = provider.DriverOpenAICompat
-	app.providerAddForm.BaseURL = "https://rollback.example.com/v1"
-	app.providerAddForm.APIKey = "sk-failed"
-	app.providerAddForm.APIStyle = provider.OpenAICompatibleAPIStyleChatCompletions
+	app.providerAddForm.BaseURL = "https://example.com/v1"
+	app.providerAddForm.APIKey = "test-key"
+	app.providerAddForm.APIKeyEnv = ""
 
 	cmd := app.submitProviderAddForm()
-	if cmd == nil {
-		t.Fatalf("expected async command")
+	if cmd != nil {
+		t.Fatalf("expected nil command for invalid env key")
 	}
-	msg := cmd()
-	result, ok := msg.(providerAddResultMsg)
-	if !ok {
-		t.Fatalf("expected providerAddResultMsg, got %T", msg)
-	}
-	if strings.TrimSpace(result.Error) == "" {
-		t.Fatalf("expected failure result")
-	}
-
-	if got := os.Getenv(envName); got != "" {
-		t.Fatalf("expected process env to stay unset, got %q", got)
-	}
-
-	envData, readErr := os.ReadFile(config.EnvFilePath(app.configManager.BaseDir()))
-	if readErr != nil && !os.IsNotExist(readErr) {
-		t.Fatalf("read env file: %v", readErr)
-	}
-	if strings.Contains(string(envData), envName+"=") {
-		t.Fatalf("expected persisted env key rollback, got %q", string(envData))
-	}
-
-	providerPath := filepath.Join(app.configManager.BaseDir(), "providers", providerName)
-	if _, err := os.Stat(providerPath); !os.IsNotExist(err) {
-		t.Fatalf("expected provider dir rollback, stat err = %v", err)
+	if !strings.Contains(app.providerAddForm.Error, "API Key Env is required") {
+		t.Fatalf("expected env key validation error, got %q", app.providerAddForm.Error)
 	}
 }
 
-func TestSubmitProviderAddFormRestoresExistingStateOnSelectFailure(t *testing.T) {
-	restorePersistUserEnv := persistProviderUserEnvVar
-	restoreDeleteUserEnv := deleteProviderUserEnvVar
-	restoreLookupUserEnv := lookupProviderUserEnvVar
-	userEnvStore := map[string]string{}
-	persistProviderUserEnvVar = func(key string, value string) error {
-		userEnvStore[key] = value
-		return nil
-	}
-	deleteProviderUserEnvVar = func(key string) error {
-		delete(userEnvStore, key)
-		return nil
-	}
-	lookupProviderUserEnvVar = func(key string) (string, bool, error) {
-		value, ok := userEnvStore[key]
-		return value, ok, nil
-	}
-	t.Cleanup(func() { persistProviderUserEnvVar = restorePersistUserEnv })
-	t.Cleanup(func() { deleteProviderUserEnvVar = restoreDeleteUserEnv })
-	t.Cleanup(func() { lookupProviderUserEnvVar = restoreLookupUserEnv })
-
-	providerName := "restore-existing-provider"
-	envName := providerAddAPIKeyEnv(providerName)
-	restoreEnv := captureEnv(t, envName)
-	defer restoreEnv()
-
-	app, _ := newTestAppWithProviderService(t, stubProviderService{
-		selectErr: errors.New("select failed"),
-	})
-
-	if err := config.SaveCustomProvider(
-		app.configManager.BaseDir(),
-		providerName,
-		provider.DriverOpenAICompat,
-		"https://old.example.com/v1",
-		envName,
-		provider.OpenAICompatibleAPIStyleChatCompletions,
-		"",
-		"",
-	); err != nil {
-		t.Fatalf("SaveCustomProvider() error = %v", err)
-	}
-	if err := config.PersistEnvVar(app.configManager.BaseDir(), envName, "old-file-key"); err != nil {
-		t.Fatalf("PersistEnvVar() error = %v", err)
-	}
-	if err := os.Setenv(envName, "old-process-key"); err != nil {
-		t.Fatalf("Setenv() error = %v", err)
-	}
-	userEnvStore[envName] = "old-user-key"
-
+func TestSubmitProviderAddFormRejectsProtectedAPIKeyEnv(t *testing.T) {
+	app, _ := newTestApp(t)
 	app.startProviderAddForm()
-	app.providerAddForm.Name = providerName
+	app.providerAddForm.Name = "gateway"
 	app.providerAddForm.Driver = provider.DriverOpenAICompat
-	app.providerAddForm.BaseURL = "https://new.example.com/v1"
-	app.providerAddForm.APIKey = "new-key"
-	app.providerAddForm.APIStyle = provider.OpenAICompatibleAPIStyleChatCompletions
+	app.providerAddForm.BaseURL = "https://example.com/v1"
+	app.providerAddForm.APIKey = "test-key"
+	app.providerAddForm.APIKeyEnv = "PATH"
 
 	cmd := app.submitProviderAddForm()
-	if cmd == nil {
-		t.Fatalf("expected async command")
+	if cmd != nil {
+		t.Fatalf("expected nil command for protected env key")
 	}
-	msg := cmd()
-	result, ok := msg.(providerAddResultMsg)
-	if !ok {
-		t.Fatalf("expected providerAddResultMsg, got %T", msg)
-	}
-	if strings.TrimSpace(result.Error) == "" {
-		t.Fatalf("expected failure result")
-	}
-
-	if got := os.Getenv(envName); got != "old-process-key" {
-		t.Fatalf("expected process env restored, got %q", got)
-	}
-	if got := userEnvStore[envName]; got != "old-user-key" {
-		t.Fatalf("expected user env restored, got %q", got)
-	}
-
-	envData, readErr := os.ReadFile(config.EnvFilePath(app.configManager.BaseDir()))
-	if readErr != nil {
-		t.Fatalf("read env file: %v", readErr)
-	}
-	if !strings.Contains(string(envData), envName+"=old-file-key") {
-		t.Fatalf("expected persisted env restored, got %q", string(envData))
-	}
-
-	providerPath := filepath.Join(app.configManager.BaseDir(), "providers", providerName, "provider.yaml")
-	providerData, readProviderErr := os.ReadFile(providerPath)
-	if readProviderErr != nil {
-		t.Fatalf("read provider config: %v", readProviderErr)
-	}
-	providerText := string(providerData)
-	if !strings.Contains(providerText, "https://old.example.com/v1") {
-		t.Fatalf("expected provider config restored, got %q", providerText)
-	}
-	if strings.Contains(providerText, "https://new.example.com/v1") {
-		t.Fatalf("expected new provider config to be rolled back, got %q", providerText)
+	if !strings.Contains(app.providerAddForm.Error, "is protected") {
+		t.Fatalf("expected protected env key validation error, got %q", app.providerAddForm.Error)
 	}
 }
 
@@ -609,101 +454,6 @@ func TestTrimLastRune(t *testing.T) {
 	}
 	if got := trimLastRune("你好"); got != "你" {
 		t.Fatalf("trimLastRune(utf8) = %q, want 你", got)
-	}
-}
-
-func TestLoadAndRestoreEnvFileSnapshot(t *testing.T) {
-	tmp := t.TempDir()
-	envPath := filepath.Join(tmp, ".env")
-
-	missingSnapshot, err := loadFileSnapshot(envPath)
-	if err != nil {
-		t.Fatalf("loadFileSnapshot(missing) error = %v", err)
-	}
-	if missingSnapshot.Exists {
-		t.Fatalf("expected missing snapshot")
-	}
-
-	if err := os.WriteFile(envPath, []byte("A=1\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-	existingSnapshot, err := loadFileSnapshot(envPath)
-	if err != nil {
-		t.Fatalf("loadFileSnapshot(existing) error = %v", err)
-	}
-	if !existingSnapshot.Exists {
-		t.Fatalf("expected existing snapshot")
-	}
-
-	if err := os.WriteFile(envPath, []byte("A=2\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-	if err := restoreEnvFileSnapshot(envPath, existingSnapshot); err != nil {
-		t.Fatalf("restoreEnvFileSnapshot(existing) error = %v", err)
-	}
-	data, err := os.ReadFile(envPath)
-	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
-	}
-	if string(data) != "A=1\n" {
-		t.Fatalf("expected snapshot content restored, got %q", string(data))
-	}
-
-	if err := restoreEnvFileSnapshot(envPath, missingSnapshot); err != nil {
-		t.Fatalf("restoreEnvFileSnapshot(missing) error = %v", err)
-	}
-	if _, err := os.Stat(envPath); !os.IsNotExist(err) {
-		t.Fatalf("expected env file removed for missing snapshot, stat err = %v", err)
-	}
-}
-
-func TestRestoreProviderConfigSnapshot(t *testing.T) {
-	baseDir := t.TempDir()
-	providerName := "snapshot-provider"
-	providerPath := filepath.Join(baseDir, "providers", providerName, "provider.yaml")
-	if err := os.MkdirAll(filepath.Dir(providerPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	if err := os.WriteFile(providerPath, []byte("name: old\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	snapshot, err := loadFileSnapshot(providerPath)
-	if err != nil {
-		t.Fatalf("loadFileSnapshot() error = %v", err)
-	}
-	if err := os.WriteFile(providerPath, []byte("name: new\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-	if err := restoreProviderConfigSnapshot(baseDir, providerName, snapshot); err != nil {
-		t.Fatalf("restoreProviderConfigSnapshot(existing) error = %v", err)
-	}
-	data, err := os.ReadFile(providerPath)
-	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
-	}
-	if string(data) != "name: old\n" {
-		t.Fatalf("expected provider snapshot restored, got %q", string(data))
-	}
-
-	missingSnapshot := fileSnapshot{}
-	if err := restoreProviderConfigSnapshot(baseDir, providerName, missingSnapshot); err != nil {
-		t.Fatalf("restoreProviderConfigSnapshot(missing) error = %v", err)
-	}
-	if _, err := os.Stat(filepath.Dir(providerPath)); !os.IsNotExist(err) {
-		t.Fatalf("expected provider dir removed for missing snapshot, stat err = %v", err)
-	}
-}
-
-func captureEnv(t *testing.T, key string) func() {
-	t.Helper()
-	value, exists := os.LookupEnv(key)
-	return func() {
-		if exists {
-			_ = os.Setenv(key, value)
-			return
-		}
-		_ = os.Unsetenv(key)
 	}
 }
 
@@ -2622,6 +2372,20 @@ func TestCurrentProviderAddFieldAndInputHandling(t *testing.T) {
 		t.Fatalf("expected name field append, got %q", app.providerAddForm.Name)
 	}
 
+	app.providerAddForm.Step = 4 // api key env
+	model, cmd = app.handleProviderAddFormInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'\x00', 'D', 'E', 'E', 'P'}})
+	if cmd != nil {
+		t.Fatalf("expected nil cmd for env key rune input")
+	}
+	ptr, ok = model.(*App)
+	if !ok {
+		t.Fatalf("expected *App model, got %T", model)
+	}
+	app = *ptr
+	if app.providerAddForm.APIKeyEnv != "DEEP" {
+		t.Fatalf("expected control chars filtered from env key, got %q", app.providerAddForm.APIKeyEnv)
+	}
+
 	model, _ = app.handleProviderAddFormInput(tea.KeyMsg{Type: tea.KeyTab})
 	ptr, ok = model.(*App)
 	if !ok {
@@ -2728,13 +2492,22 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		if _, err := buildProviderAddRequest(providerAddFormState{Name: "demo", Driver: provider.DriverGemini}); !strings.Contains(err, "API Key is required") {
 			t.Fatalf("expected missing key error, got %q", err)
 		}
+		if _, err := buildProviderAddRequest(providerAddFormState{
+			Name:      "demo",
+			Driver:    provider.DriverGemini,
+			APIKey:    "k",
+			APIKeyEnv: "",
+		}); !strings.Contains(err, "API Key Env is required") {
+			t.Fatalf("expected missing env key error, got %q", err)
+		}
 	})
 
 	t.Run("openai compat applies defaults", func(t *testing.T) {
 		req, err := buildProviderAddRequest(providerAddFormState{
-			Name:   "openai-compat",
-			Driver: provider.DriverOpenAICompat,
-			APIKey: "k",
+			Name:      "openai-compat",
+			Driver:    provider.DriverOpenAICompat,
+			APIKey:    "k",
+			APIKeyEnv: "OPENAI_COMPAT_API_KEY",
 		})
 		if err != "" {
 			t.Fatalf("unexpected error: %s", err)
@@ -2747,11 +2520,38 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		}
 	})
 
+	t.Run("strips control chars from env key before validation", func(t *testing.T) {
+		req, err := buildProviderAddRequest(providerAddFormState{
+			Name:      "openai-compat",
+			Driver:    provider.DriverOpenAICompat,
+			APIKey:    "k",
+			APIKeyEnv: "\x00OPENAI_COMPAT_API_KEY",
+		})
+		if err != "" {
+			t.Fatalf("unexpected error: %s", err)
+		}
+		if req.APIKeyEnv != "OPENAI_COMPAT_API_KEY" {
+			t.Fatalf("expected sanitized env key, got %q", req.APIKeyEnv)
+		}
+	})
+
+	t.Run("rejects protected env key", func(t *testing.T) {
+		if _, err := buildProviderAddRequest(providerAddFormState{
+			Name:      "openai-compat",
+			Driver:    provider.DriverOpenAICompat,
+			APIKey:    "k",
+			APIKeyEnv: "PATH",
+		}); !strings.Contains(err, "protected") {
+			t.Fatalf("expected protected env key error, got %q", err)
+		}
+	})
+
 	t.Run("gemini applies defaults and clears unrelated fields", func(t *testing.T) {
 		req, err := buildProviderAddRequest(providerAddFormState{
 			Name:           "gemini",
 			Driver:         provider.DriverGemini,
 			APIKey:         "k",
+			APIKeyEnv:      "GEMINI_GATEWAY_API_KEY",
 			APIStyle:       "x",
 			APIVersion:     "v",
 			DeploymentMode: "d",
@@ -2766,18 +2566,20 @@ func TestBuildProviderAddRequest(t *testing.T) {
 
 	t.Run("anthropic/custom require base url", func(t *testing.T) {
 		if _, err := buildProviderAddRequest(providerAddFormState{
-			Name:   "anthropic",
-			Driver: provider.DriverAnthropic,
-			APIKey: "k",
+			Name:      "anthropic",
+			Driver:    provider.DriverAnthropic,
+			APIKey:    "k",
+			APIKeyEnv: "ANTHROPIC_GATEWAY_API_KEY",
 		}); !strings.Contains(err, "Base URL is required") {
 			t.Fatalf("expected anthropic base url error, got %q", err)
 		}
 
 		if _, err := buildProviderAddRequest(providerAddFormState{
-			Name:    "custom",
-			Driver:  "custom-driver",
-			APIKey:  "k",
-			BaseURL: "",
+			Name:      "custom",
+			Driver:    "custom-driver",
+			APIKey:    "k",
+			APIKeyEnv: "CUSTOM_DRIVER_API_KEY",
+			BaseURL:   "",
 		}); !strings.Contains(err, "Base URL is required for custom driver") {
 			t.Fatalf("expected custom base url error, got %q", err)
 		}

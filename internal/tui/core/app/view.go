@@ -234,6 +234,8 @@ func (a App) renderProviderAddForm() string {
 			fields = append(fields, renderField{label: "Deployment Mode", value: a.providerAddForm.DeploymentMode})
 		case providerAddFieldAPIVersion:
 			fields = append(fields, renderField{label: "API Version", value: a.providerAddForm.APIVersion})
+		case providerAddFieldAPIKeyEnv:
+			fields = append(fields, renderField{label: "API Key Env", value: a.providerAddForm.APIKeyEnv, required: true})
 		case providerAddFieldAPIKey:
 			fields = append(fields, renderField{label: "API Key", value: maskedSecret(a.providerAddForm.APIKey), required: true})
 		}

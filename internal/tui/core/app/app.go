@@ -58,6 +58,7 @@ type ProviderController interface {
 	ListModels(ctx context.Context) ([]providertypes.ModelDescriptor, error)
 	ListModelsSnapshot(ctx context.Context) ([]providertypes.ModelDescriptor, error)
 	SetCurrentModel(ctx context.Context, modelID string) (configstate.Selection, error)
+	CreateCustomProvider(ctx context.Context, input configstate.CreateCustomProviderInput) (configstate.Selection, error)
 }
 
 // appServices 聚合 App 需要的服务依赖，避免与渲染状态混在同一层级。
@@ -128,6 +129,7 @@ type providerAddFormState struct {
 	APIStyle       string
 	DeploymentMode string
 	APIVersion     string
+	APIKeyEnv      string
 	APIKey         string
 	Error          string
 	ErrorIsHard    bool
