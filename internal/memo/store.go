@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 
 	agentsession "neo-code/internal/session"
@@ -44,12 +45,11 @@ func (s *FileStore) LoadIndex(ctx context.Context, scope Scope) (*Index, error) 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	path := filepath.Join(s.scopeDir(scope), memoFileName)
-	data, err := os.ReadFile(path)
+	data, err := readFirstExistingFile(s.indexPaths(scope))
+	if errors.Is(err, os.ErrNotExist) {
+		return &Index{}, nil
+	}
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return &Index{}, nil
-		}
 		return nil, fmt.Errorf("memo: read index: %w", err)
 	}
 	return ParseIndex(string(data))
@@ -69,6 +69,10 @@ func (s *FileStore) SaveIndex(ctx context.Context, scope Scope, index *Index) er
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if err := s.migrateLegacyProjectScopeLocked(scope); err != nil {
+		return err
+	}
 
 	dir := s.scopeDir(scope)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -103,7 +107,7 @@ func (s *FileStore) LoadTopic(ctx context.Context, scope Scope, filename string)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	data, err := os.ReadFile(s.topicPath(scope, filename))
+	data, err := readFirstExistingFile(s.topicPaths(scope, filename))
 	if err != nil {
 		return "", fmt.Errorf("memo: read topic %s: %w", filename, err)
 	}
@@ -121,6 +125,10 @@ func (s *FileStore) SaveTopic(ctx context.Context, scope Scope, filename string,
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if err := s.migrateLegacyProjectScopeLocked(scope); err != nil {
+		return err
+	}
 
 	dir := s.topicsDir(scope)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -153,6 +161,10 @@ func (s *FileStore) DeleteTopic(ctx context.Context, scope Scope, filename strin
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := s.migrateLegacyProjectScopeLocked(scope); err != nil {
+		return err
+	}
+
 	path := s.topicPath(scope, filename)
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("memo: delete topic %s: %w", filename, err)
@@ -172,14 +184,23 @@ func (s *FileStore) ListTopics(ctx context.Context, scope Scope) ([]string, erro
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	entries, err := os.ReadDir(s.topicsDir(scope))
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+	for _, dir := range s.topicsDirs(scope) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, fmt.Errorf("memo: list topics: %w", err)
 		}
-		return nil, fmt.Errorf("memo: list topics: %w", err)
+		if names := collectTopicNames(entries); len(names) > 0 {
+			return names, nil
+		}
 	}
+	return nil, nil
+}
 
+// collectTopicNames 将目录项过滤为 topic 文件名列表，并按字典序排序保证稳定输出。
+func collectTopicNames(entries []os.DirEntry) []string {
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".md" {
@@ -187,7 +208,22 @@ func (s *FileStore) ListTopics(ctx context.Context, scope Scope) ([]string, erro
 		}
 		names = append(names, entry.Name())
 	}
-	return names, nil
+	sort.Strings(names)
+	return names
+}
+
+// readFirstExistingFile 按顺序读取候选路径，返回首个存在文件内容；若均不存在则返回 os.ErrNotExist。
+func readFirstExistingFile(paths []string) ([]byte, error) {
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			return data, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+	}
+	return nil, os.ErrNotExist
 }
 
 // scopeDir 返回指定 memo 分层的根目录。
@@ -198,14 +234,117 @@ func (s *FileStore) scopeDir(scope Scope) string {
 	return filepath.Join(projectMemoDirectory(s.baseDir, s.workspaceRoot), string(scope))
 }
 
+// scopeDirLegacy 返回旧版本 project scope 的根目录，仅用于兼容迁移。
+func (s *FileStore) scopeDirLegacy(scope Scope) string {
+	if scope == ScopeProject {
+		return projectMemoDirectory(s.baseDir, s.workspaceRoot)
+	}
+	return ""
+}
+
+// indexPaths 返回读取索引时的候选路径，顺序为新路径优先、旧路径兜底。
+func (s *FileStore) indexPaths(scope Scope) []string {
+	paths := []string{filepath.Join(s.scopeDir(scope), memoFileName)}
+	if legacy := s.scopeDirLegacy(scope); legacy != "" {
+		paths = append(paths, filepath.Join(legacy, memoFileName))
+	}
+	return paths
+}
+
 // topicsDir 返回指定 memo 分层的 topics 目录。
 func (s *FileStore) topicsDir(scope Scope) string {
 	return filepath.Join(s.scopeDir(scope), topicsDirName)
 }
 
+// topicsDirs 返回读取 topics 时的候选目录，顺序为新路径优先、旧路径兜底。
+func (s *FileStore) topicsDirs(scope Scope) []string {
+	dirs := []string{s.topicsDir(scope)}
+	if legacy := s.scopeDirLegacy(scope); legacy != "" {
+		dirs = append(dirs, filepath.Join(legacy, topicsDirName))
+	}
+	return dirs
+}
+
 // topicPath 生成指定分层下 topic 文件的安全路径，防止目录穿越。
 func (s *FileStore) topicPath(scope Scope, filename string) string {
 	return filepath.Join(s.topicsDir(scope), filepath.Base(filename))
+}
+
+// topicPaths 返回读取 topic 时的候选路径，顺序为新路径优先、旧路径兜底。
+func (s *FileStore) topicPaths(scope Scope, filename string) []string {
+	base := filepath.Base(filename)
+	paths := []string{filepath.Join(s.topicsDir(scope), base)}
+	if legacy := s.scopeDirLegacy(scope); legacy != "" {
+		paths = append(paths, filepath.Join(legacy, topicsDirName, base))
+	}
+	return paths
+}
+
+// migrateLegacyProjectScopeLocked 在首次写入前把旧版 project 目录迁移到新目录，避免历史数据不可见。
+func (s *FileStore) migrateLegacyProjectScopeLocked(scope Scope) error {
+	if scope != ScopeProject {
+		return nil
+	}
+
+	legacyDir := s.scopeDirLegacy(scope)
+	if legacyDir == "" {
+		return nil
+	}
+
+	if err := os.MkdirAll(s.scopeDir(scope), 0o755); err != nil {
+		return fmt.Errorf("memo: create scoped dir for migration: %w", err)
+	}
+
+	legacyMemo := filepath.Join(legacyDir, memoFileName)
+	targetMemo := filepath.Join(s.scopeDir(scope), memoFileName)
+	if err := moveFileIfDstMissing(legacyMemo, targetMemo); err != nil {
+		return fmt.Errorf("memo: migrate legacy index: %w", err)
+	}
+
+	legacyTopics := filepath.Join(legacyDir, topicsDirName)
+	legacyEntries, err := os.ReadDir(legacyTopics)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("memo: list legacy topics: %w", err)
+	}
+	if len(legacyEntries) == 0 {
+		return nil
+	}
+
+	newTopics := s.topicsDir(scope)
+	if err := os.MkdirAll(newTopics, 0o755); err != nil {
+		return fmt.Errorf("memo: create scoped topics dir for migration: %w", err)
+	}
+	for _, entry := range legacyEntries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".md" {
+			continue
+		}
+		oldPath := filepath.Join(legacyTopics, entry.Name())
+		newPath := filepath.Join(newTopics, entry.Name())
+		if err := moveFileIfDstMissing(oldPath, newPath); err != nil {
+			return fmt.Errorf("memo: migrate legacy topic %s: %w", entry.Name(), err)
+		}
+	}
+
+	return nil
+}
+
+// moveFileIfDstMissing 在源文件存在且目标文件不存在时执行迁移重命名。
+func moveFileIfDstMissing(src string, dst string) error {
+	if _, err := os.Stat(src); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if _, err := os.Stat(dst); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return os.Rename(src, dst)
 }
 
 // memoDirectory 根据工作区根目录计算记忆分桶目录，复用 session 包的工作区哈希。
