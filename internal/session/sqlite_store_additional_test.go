@@ -723,3 +723,32 @@ func TestCleanupExpiredSessionAssetsStopsOnCanceledContext(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildSessionFromRowInfersLegacySubAgentExecutor(t *testing.T) {
+	t.Parallel()
+
+	nowMS := toUnixMillis(time.Now().UTC())
+	row := sqliteSessionRow{
+		ID:            "session_legacy_executor",
+		Title:         "legacy",
+		CreatedAtMS:   nowMS,
+		UpdatedAtMS:   nowMS,
+		TaskStateJSON: "{}",
+		ActivatedJSON: "[]",
+		TodosJSON:     `[{"id":"todo-1","content":"legacy subagent","status":"in_progress","owner_type":"subagent","revision":1}]`,
+	}
+
+	session, err := buildSessionFromRow(row, nil)
+	if err != nil {
+		t.Fatalf("buildSessionFromRow() error = %v", err)
+	}
+	if len(session.Todos) != 1 {
+		t.Fatalf("todos len = %d, want 1", len(session.Todos))
+	}
+	if session.Todos[0].Executor != TodoExecutorSubAgent {
+		t.Fatalf("legacy todo executor = %q, want %q", session.Todos[0].Executor, TodoExecutorSubAgent)
+	}
+	if session.TodoVersion != CurrentTodoVersion {
+		t.Fatalf("todo_version = %d, want %d", session.TodoVersion, CurrentTodoVersion)
+	}
+}

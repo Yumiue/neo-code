@@ -49,9 +49,9 @@ func (s *Service) dispatchTodos(ctx context.Context, state *runState, snapshot t
 			DefaultBudget: subagent.Budget{
 				Timeout: defaultSubAgentDispatchTaskTimeout,
 			},
-			FailureMode:    subagent.SchedulerFailureContinueOnError,
-			RecoveryMode:   subagent.SchedulerRecoveryRetry,
-			MaxRetries:     defaultSubAgentDispatchMaxRetries,
+			FailureMode:  subagent.SchedulerFailureContinueOnError,
+			RecoveryMode: subagent.SchedulerRecoveryRetry,
+			MaxRetries:   defaultSubAgentDispatchMaxRetries,
 			Backoff: func(_ int) time.Duration {
 				// runtime 的 dispatch 采用单轮推进，重试不等待 wall-clock，避免 blocked 停在当前轮次之外。
 				return 0
@@ -140,9 +140,9 @@ func (s *Service) emitSubAgentSchedulerEvent(ctx context.Context, state *runStat
 	}
 
 	payload := SubAgentEventPayload{
-		TaskID: strings.TrimSpace(event.TaskID),
-		Step:   event.Attempt,
-		Reason: strings.TrimSpace(event.Reason),
+		TaskID:    strings.TrimSpace(event.TaskID),
+		Step:      event.Attempt,
+		Reason:    strings.TrimSpace(event.Reason),
 		QueueSize: event.QueueSize,
 		Running:   event.Running,
 	}
@@ -152,6 +152,8 @@ func (s *Service) emitSubAgentSchedulerEvent(ctx context.Context, state *runStat
 		_ = s.emitRunScoped(ctx, EventSubAgentRetried, state, payload)
 	case subagent.SchedulerEventBlocked:
 		_ = s.emitRunScoped(ctx, EventSubAgentBlocked, state, payload)
+	case subagent.SchedulerEventSubAgentFailed:
+		_ = s.emitRunScoped(ctx, EventSubAgentFailed, state, payload)
 	case subagent.SchedulerEventFinished:
 		payload.TaskID = ""
 		payload.Step = 0

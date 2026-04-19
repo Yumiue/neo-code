@@ -392,6 +392,18 @@ func TestTodoInternalHelpers(t *testing.T) {
 	if normalized.RetryCount != 0 || normalized.RetryLimit != 0 {
 		t.Fatalf("negative retry fields should be normalized to 0, got count=%d limit=%d", normalized.RetryCount, normalized.RetryLimit)
 	}
+
+	legacySubAgent, err := normalizeTodoItem(TodoItem{
+		ID:        "legacy-subagent",
+		Content:   "legacy",
+		OwnerType: TodoOwnerTypeSubAgent,
+	})
+	if err != nil {
+		t.Fatalf("normalizeTodoItem(legacy-subagent) error = %v", err)
+	}
+	if legacySubAgent.Executor != TodoExecutorSubAgent {
+		t.Fatalf("legacy executor = %q, want %q", legacySubAgent.Executor, TodoExecutorSubAgent)
+	}
 }
 
 func TestApplyTodoPatchCoverage(t *testing.T) {

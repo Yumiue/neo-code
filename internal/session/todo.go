@@ -413,7 +413,7 @@ func normalizeTodoItem(item TodoItem) (TodoItem, error) {
 	item.Dependencies = normalizeTodoDependencies(item.Dependencies)
 	item.Executor = normalizeTodoExecutor(item.Executor)
 	if item.Executor == "" {
-		item.Executor = TodoExecutorAgent
+		item.Executor = inferLegacyTodoExecutor(item)
 	}
 	item.OwnerType = normalizeTodoOwnerType(item.OwnerType)
 	item.OwnerID = strings.TrimSpace(item.OwnerID)
@@ -456,6 +456,14 @@ func normalizeTodoItem(item TodoItem) (TodoItem, error) {
 		item.NextRetryAt = time.Time{}
 	}
 	return item, nil
+}
+
+// inferLegacyTodoExecutor 基于旧字段推断缺失 executor 的历史任务执行归属，避免升级后改变既有调度行为。
+func inferLegacyTodoExecutor(item TodoItem) string {
+	if normalizeTodoOwnerType(item.OwnerType) == TodoOwnerTypeSubAgent {
+		return TodoExecutorSubAgent
+	}
+	return TodoExecutorAgent
 }
 
 // normalizeTodoDependencies 对依赖列表做去空白、去重并保持顺序。

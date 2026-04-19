@@ -606,19 +606,27 @@ func TestEmitSubAgentSchedulerEventEmitsOnlySchedulerSpecificEvents(t *testing.T
 		Attempt: 1,
 	})
 	service.emitSubAgentSchedulerEvent(context.Background(), &state, subagent.SchedulerEvent{
-		Type:    subagent.SchedulerEventSubAgentRetried,
-		TaskID:  "task-1",
-		Attempt: 2,
-		Reason:  "retry_after_failure",
+		Type:      subagent.SchedulerEventSubAgentRetried,
+		TaskID:    "task-1",
+		Attempt:   2,
+		Reason:    "retry_after_failure",
 		QueueSize: 5,
 		Running:   1,
 	})
 	service.emitSubAgentSchedulerEvent(context.Background(), &state, subagent.SchedulerEvent{
-		Type:   subagent.SchedulerEventBlocked,
-		TaskID: "task-2",
-		Reason: "dependency_unmet",
+		Type:      subagent.SchedulerEventBlocked,
+		TaskID:    "task-2",
+		Reason:    "dependency_unmet",
 		QueueSize: 4,
 		Running:   2,
+	})
+	service.emitSubAgentSchedulerEvent(context.Background(), &state, subagent.SchedulerEvent{
+		Type:      subagent.SchedulerEventSubAgentFailed,
+		TaskID:    "task-3",
+		Attempt:   1,
+		Reason:    "dependency_failed",
+		QueueSize: 3,
+		Running:   0,
 	})
 	service.emitSubAgentSchedulerEvent(context.Background(), &state, subagent.SchedulerEvent{
 		Type:      subagent.SchedulerEventFinished,
@@ -627,11 +635,12 @@ func TestEmitSubAgentSchedulerEventEmitsOnlySchedulerSpecificEvents(t *testing.T
 	})
 
 	events := collectRuntimeEvents(service.Events())
-	if len(events) != 3 {
-		t.Fatalf("event count = %d, want 3", len(events))
+	if len(events) != 4 {
+		t.Fatalf("event count = %d, want 4", len(events))
 	}
 	assertEventContains(t, events, EventSubAgentRetried)
 	assertEventContains(t, events, EventSubAgentBlocked)
+	assertEventContains(t, events, EventSubAgentFailed)
 	assertEventContains(t, events, EventSubAgentFinished)
 
 	for _, event := range events {
@@ -647,6 +656,16 @@ func TestEmitSubAgentSchedulerEventEmitsOnlySchedulerSpecificEvents(t *testing.T
 		case EventSubAgentBlocked:
 			if payload.QueueSize != 4 || payload.Running != 2 {
 				t.Fatalf("blocked payload queue/running = %d/%d, want 4/2", payload.QueueSize, payload.Running)
+			}
+		case EventSubAgentFailed:
+			if payload.TaskID != "task-3" || payload.Step != 1 {
+				t.Fatalf("failed payload task/step = %q/%d, want task-3/1", payload.TaskID, payload.Step)
+			}
+			if payload.Reason != "dependency_failed" {
+				t.Fatalf("failed payload reason = %q, want dependency_failed", payload.Reason)
+			}
+			if payload.QueueSize != 3 || payload.Running != 0 {
+				t.Fatalf("failed payload queue/running = %d/%d, want 3/0", payload.QueueSize, payload.Running)
 			}
 		case EventSubAgentFinished:
 			if payload.TaskID != "" {
