@@ -189,6 +189,22 @@ func TestNormalizeCreateCustomProviderInputRejectsInvalidModelSource(t *testing.
 	}
 }
 
+func TestNormalizeCreateCustomProviderInputAllowsAnthropicDriver(t *testing.T) {
+	normalized, err := normalizeCreateCustomProviderInput(CreateCustomProviderInput{
+		Name:      "anthropic-provider",
+		Driver:    provider.DriverAnthropic,
+		BaseURL:   "https://api.anthropic.com/v1",
+		APIKeyEnv: "ANTHROPIC_PROVIDER_API_KEY",
+		APIKey:    "test-key",
+	})
+	if err != nil {
+		t.Fatalf("expected anthropic driver to be allowed, got %v", err)
+	}
+	if normalized.Driver != provider.DriverAnthropic {
+		t.Fatalf("expected normalized driver %q, got %q", provider.DriverAnthropic, normalized.Driver)
+	}
+}
+
 func TestNormalizeCreateCustomProviderInputManualSkipsDiscoveryFieldValidation(t *testing.T) {
 	normalized, err := normalizeCreateCustomProviderInput(CreateCustomProviderInput{
 		Name:             "manual-no-discovery-validation",

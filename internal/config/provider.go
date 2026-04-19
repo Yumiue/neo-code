@@ -27,7 +27,6 @@ type ProviderConfig struct {
 	ModelSource           string                          `yaml:"-"`
 	ChatEndpointPath      string                          `yaml:"-"`
 	DiscoveryEndpointPath string                          `yaml:"-"`
-	ModelFieldAliases     string                          `yaml:"-"`
 	Models                []providertypes.ModelDescriptor `yaml:"-"`
 	Source                ProviderSource                  `yaml:"-"`
 }
@@ -220,9 +219,9 @@ func (p ResolvedProviderConfig) ToRuntimeConfig() (provider.RuntimeConfig, error
 		DefaultModel:          p.Model,
 		APIKey:                p.APIKey,
 		SessionAssetLimits:    p.SessionAssetLimits,
+		ChatProtocol:          normalizedProtocols.ChatProtocol,
 		ChatEndpointPath:      normalizedProtocols.ChatEndpointPath,
 		DiscoveryEndpointPath: normalizedProtocols.DiscoveryEndpointPath,
-		ModelFieldAliases:     p.ModelFieldAliases,
 	}, nil
 }
 
@@ -265,9 +264,11 @@ const (
 	OpenAIDefaultAPIKeyEnv = "OPENAI_API_KEY"
 
 	GeminiName             = "gemini"
-	GeminiDefaultBaseURL   = "https://generativelanguage.googleapis.com/v1beta/openai"
+	GeminiDefaultBaseURL   = "https://generativelanguage.googleapis.com/v1beta"
 	GeminiDefaultModel     = "gemini-2.5-flash"
 	GeminiDefaultAPIKeyEnv = "GEMINI_API_KEY"
+
+	AnthropicDefaultBaseURL = "https://api.anthropic.com/v1"
 
 	OpenLLName             = "openll"
 	OpenLLDefaultBaseURL   = "https://www.openll.top/v1"
@@ -304,7 +305,7 @@ func GeminiProvider() ProviderConfig {
 		Model:                 GeminiDefaultModel,
 		APIKeyEnv:             GeminiDefaultAPIKeyEnv,
 		ModelSource:           provider.ModelSourceDiscover,
-		ChatEndpointPath:      "/chat/completions",
+		ChatEndpointPath:      "/models",
 		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 		Source:                ProviderSourceBuiltin,
 	}

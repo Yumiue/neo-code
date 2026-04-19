@@ -14,6 +14,7 @@ import (
 
 	"neo-code/internal/provider"
 	"neo-code/internal/provider/discovery"
+	providertypes "neo-code/internal/provider/types"
 )
 
 const maxDiscoveryResponseBodyBytes int64 = 2 * 1024 * 1024
@@ -26,7 +27,7 @@ var (
 	openAIKeyLikeIDPattern = regexp.MustCompile(`\bsk-[a-zA-Z0-9]{8,}\b`)
 )
 
-// RequestConfig 描述通用 HTTP discovery 请求的必要输入。
+// RequestConfig 描述通用 HTTP discovery 请求所需参数。
 type RequestConfig struct {
 	BaseURL           string
 	EndpointPath      string
@@ -37,7 +38,29 @@ type RequestConfig struct {
 	APIVersion        string
 }
 
-// DiscoverRawModels 通过通用 HTTP discovery 协议拉取模型列表并输出标准化的原始模型对象切片。
+// RequestConfigFromRuntime 基于运行时配置生成 discovery/http 请求参数。
+func RequestConfigFromRuntime(cfg provider.RuntimeConfig) (RequestConfig, error) {
+	discoveryProtocol, discoveryEndpointPath, responseProfile, err := provider.ResolveDriverDiscoveryConfig(
+		cfg.Driver,
+		cfg.DiscoveryEndpointPath,
+	)
+	if err != nil {
+		return RequestConfig{}, provider.NewDiscoveryConfigError(err.Error())
+	}
+	authStrategy, apiVersion := provider.ResolveDriverAuthConfig(cfg.Driver)
+
+	return RequestConfig{
+		BaseURL:           cfg.BaseURL,
+		EndpointPath:      discoveryEndpointPath,
+		DiscoveryProtocol: discoveryProtocol,
+		ResponseProfile:   responseProfile,
+		AuthStrategy:      authStrategy,
+		APIKey:            cfg.APIKey,
+		APIVersion:        apiVersion,
+	}, nil
+}
+
+// DiscoverRawModels 通过通用 HTTP discovery 拉取并提取原始模型数组。
 func DiscoverRawModels(ctx context.Context, client *http.Client, cfg RequestConfig) ([]map[string]any, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -64,7 +87,11 @@ func DiscoverRawModels(ctx context.Context, client *http.Client, cfg RequestConf
 		return nil, provider.NewDiscoveryConfigError(err.Error())
 	}
 
-	endpoint := discovery.ResolveEndpoint(cfg.BaseURL, endpointPath)
+	endpoint := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
+	if endpointPath != "" {
+		endpoint += endpointPath
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("provider discovery: build models request: %w", err)
@@ -108,7 +135,29 @@ func DiscoverRawModels(ctx context.Context, client *http.Client, cfg RequestConf
 	return rawModels, nil
 }
 
-// resolveResponseProfile 根据 discovery protocol 与显式配置决定响应提取策略。
+// DiscoverModelDescriptors 通过通用 discovery 流程返回标准化模型描述。
+func DiscoverModelDescriptors(
+	ctx context.Context,
+	client *http.Client,
+	cfg RequestConfig,
+) ([]providertypes.ModelDescriptor, error) {
+	rawModels, err := DiscoverRawModels(ctx, client, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	descriptors := make([]providertypes.ModelDescriptor, 0, len(rawModels))
+	for _, raw := range rawModels {
+		descriptor, ok := providertypes.DescriptorFromRawModel(raw)
+		if !ok {
+			continue
+		}
+		descriptors = append(descriptors, descriptor)
+	}
+	return providertypes.MergeModelDescriptors(descriptors), nil
+}
+
+// resolveResponseProfile 根据 discovery protocol 与显式配置确定响应提取策略。
 func resolveResponseProfile(discoveryProtocol string, profile string) (string, error) {
 	normalizedProfile, err := provider.NormalizeProviderDiscoveryResponseProfile(profile)
 	if err != nil {
@@ -137,7 +186,7 @@ func parseHTTPError(resp *http.Response) error {
 	return provider.NewProviderErrorFromStatus(resp.StatusCode, message)
 }
 
-// httpErrorMessage 为 discovery 请求生成可操作错误文案，便于用户区分端点、鉴权与上游异常。
+// httpErrorMessage 生成 discovery 请求对应的可操作错误文案。
 func httpErrorMessage(statusCode int) string {
 	switch statusCode {
 	case http.StatusNotFound:
@@ -153,7 +202,7 @@ func httpErrorMessage(statusCode int) string {
 	return fmt.Sprintf("provider discovery: models endpoint request failed (status=%d)", statusCode)
 }
 
-// wrapTransportError 统一归类 discovery 传输层失败，区分 timeout 与 network 错误。
+// wrapTransportError 统一归类 discovery 传输错误。
 func wrapTransportError(err error) error {
 	message := strings.TrimSpace(err.Error())
 	if message == "" {
@@ -165,7 +214,7 @@ func wrapTransportError(err error) error {
 	return provider.NewNetworkProviderError("provider discovery: send models request: " + message)
 }
 
-// readHTTPErrorSummary 读取并清洗受限长度的响应体摘要，用于保留上游可观测上下文。
+// readHTTPErrorSummary 读取并清洗受限长度的响应体摘要。
 func readHTTPErrorSummary(body io.Reader, limit int64) string {
 	if body == nil || limit <= 0 {
 		return ""
@@ -189,7 +238,7 @@ func readHTTPErrorSummary(body io.Reader, limit int64) string {
 	return summary
 }
 
-// sanitizePrintableText 清洗不可打印字符并折叠空白，避免错误消息污染终端输出。
+// sanitizePrintableText 清理不可打印字符并压缩空白。
 func sanitizePrintableText(payload []byte) string {
 	var b strings.Builder
 	lastWasSpace := false
@@ -212,7 +261,7 @@ func sanitizePrintableText(payload []byte) string {
 	return strings.TrimSpace(b.String())
 }
 
-// redactSensitiveSummary 对错误摘要中的密钥和令牌执行脱敏，降低日志与事件链路泄漏风险。
+// redactSensitiveSummary 脱敏错误摘要中的密钥与令牌。
 func redactSensitiveSummary(summary string) string {
 	if strings.TrimSpace(summary) == "" {
 		return ""
@@ -225,7 +274,7 @@ func redactSensitiveSummary(summary string) string {
 	return redacted
 }
 
-// redactJSONSecretField 保留 JSON 字段名并清空敏感字段值，避免破坏可读性。
+// redactJSONSecretField 保留 JSON 字段名并清空敏感值。
 func redactJSONSecretField(matched string) string {
 	idx := strings.Index(matched, ":")
 	if idx < 0 {
@@ -234,7 +283,7 @@ func redactJSONSecretField(matched string) string {
 	return matched[:idx+1] + ` "[REDACTED]"`
 }
 
-// isTimeoutTransportError 判断网络错误是否由超时触发。
+// isTimeoutTransportError 判断传输错误是否由超时触发。
 func isTimeoutTransportError(err error) bool {
 	if err == nil {
 		return false

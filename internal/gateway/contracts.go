@@ -196,4 +196,3 @@ type Gateway interface {
 	// Close 优雅关闭网关服务。
 	Close(ctx context.Context) error
 }
-

@@ -24,6 +24,9 @@ func TestApplyAuthHeaders(t *testing.T) {
 		if got := header.Get("X-API-Key"); got != "test-key" {
 			t.Fatalf("expected x-api-key header, got %q", got)
 		}
+		if got := header.Get("x-goog-api-key"); got != "test-key" {
+			t.Fatalf("expected x-goog-api-key header, got %q", got)
+		}
 	})
 
 	t.Run("anthropic", func(t *testing.T) {

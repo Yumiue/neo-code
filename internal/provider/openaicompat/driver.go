@@ -22,7 +22,7 @@ func Driver() provider.DriverDefinition {
 	return driverDefinition(DriverName)
 }
 
-// validateCatalogIdentity 复用 api_style 分流规则，在 catalog 快照与缓存路径上提前拒绝当前尚不支持的静态配置。
+// validateCatalogIdentity 在 catalog 快照与缓存路径上复用协议归一化校验，避免无效静态配置进入选择流程。
 func validateCatalogIdentity(identity provider.ProviderIdentity) error {
 	_, err := provider.NormalizeProviderProtocolSettings(
 		identity.Driver,
@@ -32,8 +32,8 @@ func validateCatalogIdentity(identity provider.ProviderIdentity) error {
 		identity.DiscoveryEndpointPath,
 		identity.AuthStrategy,
 		identity.ResponseProfile,
-		identity.APIStyle,
-		identity.DiscoveryResponseProfile,
+		"",
+		"",
 	)
 	if err != nil {
 		return provider.NewDiscoveryConfigError(err.Error())
@@ -46,10 +46,18 @@ func driverDefinition(name string) provider.DriverDefinition {
 	return provider.DriverDefinition{
 		Name: name,
 		Build: func(ctx context.Context, cfg provider.RuntimeConfig) (provider.Provider, error) {
-			return New(cfg, withTransport(defaultRetryTransport()))
+			return New(
+				cfg,
+				withTransport(defaultRetryTransport()),
+				withExecutionMode(resolveExecutionModeFromEnv()),
+			)
 		},
 		Discover: func(ctx context.Context, cfg provider.RuntimeConfig) ([]providertypes.ModelDescriptor, error) {
-			p, err := New(cfg, withTransport(defaultRetryTransport()))
+			p, err := New(
+				cfg,
+				withTransport(defaultRetryTransport()),
+				withExecutionMode(resolveExecutionModeFromEnv()),
+			)
 			if err != nil {
 				return nil, err
 			}

@@ -284,15 +284,16 @@ func DefaultProviders() []ProviderConfig {
 ```yaml
 name: company-gateway
 driver: openaicompat
+base_url: https://llm.example.com/v1
 api_key_env: COMPANY_GATEWAY_API_KEY
+model_source: discover
+chat_endpoint_path: /chat/completions
+discovery_endpoint_path: /models
 models:
   - id: deepseek-coder
     name: DeepSeek Coder
     context_window: 131072
     max_output_tokens: 8192
-openai_compatible:
-  base_url: https://llm.example.com/v1
-  api_style: chat_completions
 ```
 
 约束如下：

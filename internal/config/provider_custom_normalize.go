@@ -1,0 +1,124 @@
+package config
+
+import (
+	"fmt"
+	"strings"
+
+	"neo-code/internal/provider"
+	providertypes "neo-code/internal/provider/types"
+)
+
+// NormalizeCustomProviderInput 统一归一化 custom provider 的输入字段，并执行协议/模型来源的组合校验。
+func NormalizeCustomProviderInput(input SaveCustomProviderInput) (SaveCustomProviderInput, error) {
+	normalized := SaveCustomProviderInput{
+		Name:                  strings.TrimSpace(input.Name),
+		Driver:                normalizeProviderDriver(strings.TrimSpace(input.Driver)),
+		BaseURL:               strings.TrimSpace(input.BaseURL),
+		ChatEndpointPath:      strings.TrimSpace(input.ChatEndpointPath),
+		APIKeyEnv:             strings.TrimSpace(input.APIKeyEnv),
+		DiscoveryEndpointPath: strings.TrimSpace(input.DiscoveryEndpointPath),
+	}
+
+	if err := validateCustomProviderName(normalized.Name); err != nil {
+		return SaveCustomProviderInput{}, err
+	}
+	if normalized.Driver == "" {
+		return SaveCustomProviderInput{}, fmt.Errorf("config: provider %q driver is empty", normalized.Name)
+	}
+
+	rawModelSource := strings.TrimSpace(input.ModelSource)
+	normalized.ModelSource = provider.NormalizeModelSource(rawModelSource)
+	if rawModelSource != "" && normalized.ModelSource == "" {
+		return SaveCustomProviderInput{}, fmt.Errorf(
+			"config: provider %q unsupported model_source %q",
+			normalized.Name,
+			rawModelSource,
+		)
+	}
+	if normalized.ModelSource == "" {
+		normalized.ModelSource = provider.ModelSourceDiscover
+	}
+
+	models, err := NormalizeCustomProviderModels(input.Models)
+	if err != nil {
+		return SaveCustomProviderInput{}, err
+	}
+	normalized.Models = models
+
+	normalizedDiscoveryEndpointPath := normalized.DiscoveryEndpointPath
+	if normalized.ModelSource == provider.ModelSourceManual {
+		normalizedDiscoveryEndpointPath = ""
+	}
+
+	normalizedProtocols, err := provider.NormalizeProviderProtocolSettings(
+		normalized.Driver,
+		"",
+		normalized.ChatEndpointPath,
+		"",
+		normalizedDiscoveryEndpointPath,
+		"",
+		"",
+		"",
+		"",
+	)
+	if err != nil {
+		return SaveCustomProviderInput{}, fmt.Errorf("config: normalize provider protocol settings: %w", err)
+	}
+
+	normalized.ChatEndpointPath = normalizedProtocols.ChatEndpointPath
+	if normalized.ModelSource == provider.ModelSourceManual {
+		if len(normalized.Models) == 0 {
+			return SaveCustomProviderInput{}, fmt.Errorf(
+				"config: provider %q manual model source requires non-empty models",
+				normalized.Name,
+			)
+		}
+		normalized.DiscoveryEndpointPath = ""
+		return normalized, nil
+	}
+
+	normalized.DiscoveryEndpointPath = normalizedProtocols.DiscoveryEndpointPath
+	return normalized, nil
+}
+
+// NormalizeCustomProviderModels 统一归一化 custom provider 的模型描述并校验必填字段和边界条件。
+func NormalizeCustomProviderModels(models []providertypes.ModelDescriptor) ([]providertypes.ModelDescriptor, error) {
+	if len(models) == 0 {
+		return nil, nil
+	}
+
+	normalized := make([]providertypes.ModelDescriptor, 0, len(models))
+	seen := make(map[string]struct{}, len(models))
+	for index, model := range models {
+		id := strings.TrimSpace(model.ID)
+		if id == "" {
+			return nil, fmt.Errorf("config: models[%d].id is empty", index)
+		}
+		name := strings.TrimSpace(model.Name)
+		if name == "" {
+			return nil, fmt.Errorf("config: models[%d].name is empty", index)
+		}
+		if model.ContextWindow < 0 {
+			return nil, fmt.Errorf("config: models[%d].context_window must be greater than 0", index)
+		}
+		if model.MaxOutputTokens < 0 {
+			return nil, fmt.Errorf("config: models[%d].max_output_tokens must be greater than 0", index)
+		}
+
+		key := provider.NormalizeKey(id)
+		if _, exists := seen[key]; exists {
+			return nil, fmt.Errorf("config: models[%d].id %q is duplicated", index, id)
+		}
+		seen[key] = struct{}{}
+
+		normalized = append(normalized, providertypes.ModelDescriptor{
+			ID:              id,
+			Name:            name,
+			Description:     strings.TrimSpace(model.Description),
+			ContextWindow:   model.ContextWindow,
+			MaxOutputTokens: model.MaxOutputTokens,
+			CapabilityHints: model.CapabilityHints,
+		})
+	}
+	return normalized, nil
+}

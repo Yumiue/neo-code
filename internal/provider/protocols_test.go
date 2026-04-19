@@ -169,7 +169,7 @@ func TestNormalizeProviderProtocolSettingsDefaults(t *testing.T) {
 			discoveryProtocol:     DiscoveryProtocolGeminiModels,
 			wantChatEndpoint:      "",
 			wantDiscoveryEndpoint: "/models",
-			wantAuthStrategy:      AuthStrategyBearer,
+			wantAuthStrategy:      AuthStrategyXAPIKey,
 			wantResponseProfile:   DiscoveryResponseProfileGemini,
 		},
 	}
@@ -228,5 +228,27 @@ func TestNormalizeProviderProtocolSettingsPreservesExplicitChatEndpointPath(t *t
 	}
 	if settings.ChatEndpointPath != "/v1/text/chatcompletion_v2" {
 		t.Fatalf("expected explicit chat endpoint to be preserved, got %q", settings.ChatEndpointPath)
+	}
+}
+
+func TestNormalizeProviderProtocolSettingsInfersChatProtocolFromOpenAIEndpointPath(t *testing.T) {
+	t.Parallel()
+
+	settings, err := NormalizeProviderProtocolSettings(
+		DriverOpenAICompat,
+		"",
+		"/responses",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+	)
+	if err != nil {
+		t.Fatalf("NormalizeProviderProtocolSettings() error = %v", err)
+	}
+	if settings.ChatProtocol != ChatProtocolOpenAIResponses {
+		t.Fatalf("expected chat protocol %q, got %q", ChatProtocolOpenAIResponses, settings.ChatProtocol)
 	}
 }

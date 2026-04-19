@@ -300,7 +300,7 @@ func TestRenderProviderAddFormMasksAPIKeyAndShowsHints(t *testing.T) {
 func TestRenderProviderAddFormPromptLabel(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.startProviderAddForm()
-	app.providerAddForm.Driver = "anthropic"
+	app.providerAddForm.Driver = "custom-driver"
 	app.providerAddForm.Error = "continue input"
 	app.providerAddForm.ErrorIsHard = false
 

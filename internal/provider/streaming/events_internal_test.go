@@ -1,4 +1,4 @@
-package chatcompletions
+package streaming
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	providertypes "neo-code/internal/provider/types"
 )
 
-func TestEmitStreamEvent_NilEventsChannel(t *testing.T) {
+func TestEmitStreamEventNilEventsChannel(t *testing.T) {
 	t.Parallel()
 
 	event := providertypes.NewTextDeltaStreamEvent("test")
@@ -17,7 +17,7 @@ func TestEmitStreamEvent_NilEventsChannel(t *testing.T) {
 	}
 }
 
-func TestEmitStreamEvent_NormalSend(t *testing.T) {
+func TestEmitStreamEventNormalSend(t *testing.T) {
 	t.Parallel()
 
 	events := make(chan providertypes.StreamEvent, 1)
@@ -32,7 +32,7 @@ func TestEmitStreamEvent_NormalSend(t *testing.T) {
 	}
 }
 
-func TestEmitStreamEvent_NilContext(t *testing.T) {
+func TestEmitStreamEventNilContext(t *testing.T) {
 	t.Parallel()
 
 	events := make(chan providertypes.StreamEvent, 1)
@@ -47,7 +47,7 @@ func TestEmitStreamEvent_NilContext(t *testing.T) {
 	}
 }
 
-func TestEmitStreamEvent_ContextCancelled(t *testing.T) {
+func TestEmitStreamEventContextCancelled(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithCancel(context.Background())

@@ -10,7 +10,7 @@ import (
 	"net/http"
 
 	"neo-code/internal/provider"
-	"neo-code/internal/provider/openaicompat/shared"
+	"neo-code/internal/provider/openaicompat/wire"
 	providertypes "neo-code/internal/provider/types"
 )
 
@@ -22,11 +22,11 @@ type Provider struct {
 
 // New 基于共享运行时配置与 HTTP client 创建 Chat Completions provider。
 func New(cfg provider.RuntimeConfig, client *http.Client) (*Provider, error) {
-	if err := shared.ValidateRuntimeConfig(cfg); err != nil {
+	if err := validateRuntimeConfig(cfg); err != nil {
 		return nil, err
 	}
 	if client == nil {
-		return nil, fmt.Errorf("%sclient is nil", shared.ErrorPrefix)
+		return nil, fmt.Errorf("%sclient is nil", errorPrefix)
 	}
 
 	return &Provider{
@@ -45,34 +45,34 @@ func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateReque
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("%smarshal request: %w", shared.ErrorPrefix, err)
+		return fmt.Errorf("%smarshal request: %w", errorPrefix, err)
 	}
 
 	endpoint, err := provider.ResolveChatEndpointURL(p.cfg.BaseURL, p.cfg.ChatEndpointPath)
 	if err != nil {
-		return fmt.Errorf("%sinvalid chat endpoint configuration: %w", shared.ErrorPrefix, err)
+		return fmt.Errorf("%sinvalid chat endpoint configuration: %w", errorPrefix, err)
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("%sbuild request: %w", shared.ErrorPrefix, err)
+		return fmt.Errorf("%sbuild request: %w", errorPrefix, err)
 	}
-	shared.ApplyAuthHeaders(httpReq.Header, p.cfg)
+	applyAuthHeaders(httpReq.Header, p.cfg)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return fmt.Errorf("%ssend request: %w", shared.ErrorPrefix, err)
+		return fmt.Errorf("%ssend request: %w", errorPrefix, err)
 	}
 	defer func(body io.ReadCloser) {
 		if closeErr := body.Close(); closeErr != nil {
-			log.Printf("%sclose response body: %v", shared.ErrorPrefix, closeErr)
+			log.Printf("%sclose response body: %v", errorPrefix, closeErr)
 		}
 	}(resp.Body)
 
 	if resp.StatusCode >= http.StatusBadRequest {
-		return ParseError(resp)
+		return wire.ParseError(resp)
 	}
 
-	return p.ConsumeStream(ctx, resp.Body, events)
+	return wire.ConsumeStream(ctx, resp.Body, events)
 }

@@ -16,9 +16,9 @@ func TestResolveDriverProtocolDefaults(t *testing.T) {
 		{
 			name:             "gemini defaults",
 			driver:           DriverGemini,
-			wantChat:         ChatProtocolOpenAIChatCompletions,
+			wantChat:         ChatProtocolGeminiNative,
 			wantDiscovery:    DiscoveryProtocolGeminiModels,
-			wantAuthStrategy: AuthStrategyBearer,
+			wantAuthStrategy: AuthStrategyXAPIKey,
 			wantProfile:      DiscoveryResponseProfileGemini,
 		},
 		{

@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"neo-code/internal/provider"
+	"neo-code/internal/provider/openaicompat/wire"
+	"neo-code/internal/provider/streaming"
 	providertypes "neo-code/internal/provider/types"
 )
 
@@ -497,7 +499,7 @@ func TestResolveSessionAssetDataURLVariants(t *testing.T) {
 func TestParseErrorVariants(t *testing.T) {
 	t.Parallel()
 
-	if err := ParseError(&http.Response{
+	if err := wire.ParseError(&http.Response{
 		Status:     "400 Bad Request",
 		StatusCode: http.StatusBadRequest,
 		Body:       &failingReadCloser{err: errors.New("broken body")},
@@ -505,7 +507,7 @@ func TestParseErrorVariants(t *testing.T) {
 		t.Fatalf("expected body read error, got %v", err)
 	}
 
-	if err := ParseError(&http.Response{
+	if err := wire.ParseError(&http.Response{
 		Status:     "401 Unauthorized",
 		StatusCode: http.StatusUnauthorized,
 		Body:       ioNopCloser(`{"error":{"message":"invalid api key"}}`),
@@ -513,7 +515,7 @@ func TestParseErrorVariants(t *testing.T) {
 		t.Fatalf("expected json error payload, got %v", err)
 	}
 
-	if err := ParseError(&http.Response{
+	if err := wire.ParseError(&http.Response{
 		Status:     "502 Bad Gateway",
 		StatusCode: http.StatusBadGateway,
 		Body:       ioNopCloser("gateway timeout"),
@@ -521,7 +523,7 @@ func TestParseErrorVariants(t *testing.T) {
 		t.Fatalf("expected plain text fallback, got %v", err)
 	}
 
-	if err := ParseError(&http.Response{
+	if err := wire.ParseError(&http.Response{
 		Status:     "500 Internal Server Error",
 		StatusCode: http.StatusInternalServerError,
 		Body:       ioNopCloser("   "),
@@ -529,7 +531,7 @@ func TestParseErrorVariants(t *testing.T) {
 		t.Fatalf("expected status fallback, got %v", err)
 	}
 
-	contextErr := ParseError(&http.Response{
+	contextErr := wire.ParseError(&http.Response{
 		Status:     "400 Bad Request",
 		StatusCode: http.StatusBadRequest,
 		Body: ioNopCloser(
@@ -544,30 +546,30 @@ func TestParseErrorVariants(t *testing.T) {
 func TestEmitFlushMergeAndUsage(t *testing.T) {
 	t.Parallel()
 
-	if err := EmitTextDelta(context.Background(), nil, "hello"); err != nil {
+	if err := streaming.EmitTextDelta(context.Background(), nil, "hello"); err != nil {
 		t.Fatalf("nil channel guard failed: %v", err)
 	}
 
 	nilCtxEvents := make(chan providertypes.StreamEvent, 4)
-	if err := EmitTextDelta(nil, nilCtxEvents, "nil-ctx-text"); err != nil {
+	if err := streaming.EmitTextDelta(nil, nilCtxEvents, "nil-ctx-text"); err != nil {
 		t.Fatalf("nil context text emit failed: %v", err)
 	}
 	if got := mustText(t, <-nilCtxEvents); got.Text != "nil-ctx-text" {
 		t.Fatalf("unexpected nil context text payload: %+v", got)
 	}
-	if err := EmitToolCallStart(nil, nilCtxEvents, 0, "call_nil", "tool_nil"); err != nil {
+	if err := streaming.EmitToolCallStart(nil, nilCtxEvents, 0, "call_nil", "tool_nil"); err != nil {
 		t.Fatalf("nil context start emit failed: %v", err)
 	}
 	if got := mustStart(t, <-nilCtxEvents); got.ID != "call_nil" || got.Name != "tool_nil" {
 		t.Fatalf("unexpected nil context start payload: %+v", got)
 	}
-	if err := EmitToolCallDelta(nil, nilCtxEvents, 0, "call_nil", "{\"x\":1}"); err != nil {
+	if err := streaming.EmitToolCallDelta(nil, nilCtxEvents, 0, "call_nil", "{\"x\":1}"); err != nil {
 		t.Fatalf("nil context delta emit failed: %v", err)
 	}
 	if got := mustDelta(t, <-nilCtxEvents); got.ID != "call_nil" || got.ArgumentsDelta != "{\"x\":1}" {
 		t.Fatalf("unexpected nil context delta payload: %+v", got)
 	}
-	if err := EmitMessageDone(nil, nilCtxEvents, "stop", &providertypes.Usage{TotalTokens: 3}); err != nil {
+	if err := streaming.EmitMessageDone(nil, nilCtxEvents, "stop", &providertypes.Usage{TotalTokens: 3}); err != nil {
 		t.Fatalf("nil context done emit failed: %v", err)
 	}
 	if got := mustDone(t, <-nilCtxEvents); got.FinishReason != "stop" || got.Usage == nil || got.Usage.TotalTokens != 3 {
@@ -575,7 +577,7 @@ func TestEmitFlushMergeAndUsage(t *testing.T) {
 	}
 
 	events := make(chan providertypes.StreamEvent, 8)
-	if err := EmitTextDelta(context.Background(), events, ""); err != nil {
+	if err := streaming.EmitTextDelta(context.Background(), events, ""); err != nil {
 		t.Fatalf("empty text guard failed: %v", err)
 	}
 	select {
@@ -584,22 +586,22 @@ func TestEmitFlushMergeAndUsage(t *testing.T) {
 	default:
 	}
 
-	if err := EmitTextDelta(context.Background(), events, "chunk"); err != nil {
-		t.Fatalf("EmitTextDelta() error = %v", err)
+	if err := streaming.EmitTextDelta(context.Background(), events, "chunk"); err != nil {
+		t.Fatalf("streaming.EmitTextDelta() error = %v", err)
 	}
 	if got := mustText(t, <-events); got.Text != "chunk" {
 		t.Fatalf("unexpected text payload: %+v", got)
 	}
 
-	if err := EmitToolCallStart(context.Background(), events, 1, "call_1", "filesystem_edit"); err != nil {
-		t.Fatalf("EmitToolCallStart() error = %v", err)
+	if err := streaming.EmitToolCallStart(context.Background(), events, 1, "call_1", "filesystem_edit"); err != nil {
+		t.Fatalf("streaming.EmitToolCallStart() error = %v", err)
 	}
 	if got := mustStart(t, <-events); got.Index != 1 || got.ID != "call_1" || got.Name != "filesystem_edit" {
 		t.Fatalf("unexpected start payload: %+v", got)
 	}
 
-	if err := EmitToolCallDelta(context.Background(), events, 1, "call_1", "{}"); err != nil {
-		t.Fatalf("EmitToolCallDelta() error = %v", err)
+	if err := streaming.EmitToolCallDelta(context.Background(), events, 1, "call_1", "{}"); err != nil {
+		t.Fatalf("streaming.EmitToolCallDelta() error = %v", err)
 	}
 	if got := mustDelta(t, <-events); got.ID != "call_1" || got.ArgumentsDelta != "{}" {
 		t.Fatalf("unexpected delta payload: %+v", got)
@@ -607,59 +609,59 @@ func TestEmitFlushMergeAndUsage(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := EmitTextDelta(ctx, make(chan providertypes.StreamEvent), "x"); !errors.Is(err, context.Canceled) {
+	if err := streaming.EmitTextDelta(ctx, make(chan providertypes.StreamEvent), "x"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected canceled text emit, got %v", err)
 	}
-	if err := EmitToolCallStart(ctx, make(chan providertypes.StreamEvent), 0, "call_1", "tool"); !errors.Is(err, context.Canceled) {
+	if err := streaming.EmitToolCallStart(ctx, make(chan providertypes.StreamEvent), 0, "call_1", "tool"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected canceled start emit, got %v", err)
 	}
-	if err := EmitToolCallDelta(ctx, make(chan providertypes.StreamEvent), 0, "call_1", "{}"); !errors.Is(err, context.Canceled) {
+	if err := streaming.EmitToolCallDelta(ctx, make(chan providertypes.StreamEvent), 0, "call_1", "{}"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected canceled delta emit, got %v", err)
 	}
 
 	doneEvents := make(chan providertypes.StreamEvent, 1)
-	if err := EmitMessageDone(ctx, doneEvents, "stop", &providertypes.Usage{TotalTokens: 10}); err != nil {
+	if err := streaming.EmitMessageDone(ctx, doneEvents, "stop", &providertypes.Usage{TotalTokens: 10}); err != nil {
 		t.Fatalf("expected canceled message_done fallback, got %v", err)
 	}
 	if got := mustDone(t, <-doneEvents); got.FinishReason != "stop" || got.Usage == nil || got.Usage.TotalTokens != 10 {
 		t.Fatalf("unexpected message_done payload: %+v", got)
 	}
-	if err := EmitMessageDone(ctx, make(chan providertypes.StreamEvent), "stop", &providertypes.Usage{}); err != nil {
+	if err := streaming.EmitMessageDone(ctx, make(chan providertypes.StreamEvent), "stop", &providertypes.Usage{}); err != nil {
 		t.Fatalf("expected non-blocking drop on canceled context, got %v", err)
 	}
 
 	var flushed []string
-	if err := FlushDataLines([]string{"a", "b"}, func(line string) error {
+	if err := streaming.FlushDataLines([]string{"a", "b"}, func(line string) error {
 		flushed = append(flushed, line)
 		return nil
 	}); err != nil || strings.Join(flushed, ",") != "a,b" {
 		t.Fatalf("unexpected flush result: lines=%v err=%v", flushed, err)
 	}
 	flushErr := errors.New("flush failed")
-	if err := FlushDataLines([]string{"x"}, func(string) error { return flushErr }); !errors.Is(err, flushErr) {
+	if err := streaming.FlushDataLines([]string{"x"}, func(string) error { return flushErr }); !errors.Is(err, flushErr) {
 		t.Fatalf("expected flush error, got %v", err)
 	}
 
 	toolCalls := map[int]*providertypes.ToolCall{}
-	if err := MergeToolCallDelta(context.Background(), events, toolCalls, ToolCallDelta{Index: 0, ID: "call_0"}); err != nil {
-		t.Fatalf("MergeToolCallDelta() id-only error = %v", err)
+	if err := wire.MergeToolCallDelta(context.Background(), events, toolCalls, wire.ToolCallDelta{Index: 0, ID: "call_0"}); err != nil {
+		t.Fatalf("wire.MergeToolCallDelta() id-only error = %v", err)
 	}
 	select {
 	case evt := <-events:
 		t.Fatalf("expected no event for id-only delta, got %+v", evt)
 	default:
 	}
-	if err := MergeToolCallDelta(context.Background(), events, toolCalls, ToolCallDelta{
+	if err := wire.MergeToolCallDelta(context.Background(), events, toolCalls, wire.ToolCallDelta{
 		Index:    0,
-		Function: FunctionCall{Name: "filesystem_edit", Arguments: `{"path":"main.go"}`},
+		Function: wire.FunctionCall{Name: "filesystem_edit", Arguments: `{"path":"main.go"}`},
 	}); err != nil {
-		t.Fatalf("MergeToolCallDelta() name error = %v", err)
+		t.Fatalf("wire.MergeToolCallDelta() name error = %v", err)
 	}
-	if err := MergeToolCallDelta(context.Background(), events, toolCalls, ToolCallDelta{
+	if err := wire.MergeToolCallDelta(context.Background(), events, toolCalls, wire.ToolCallDelta{
 		Index:    0,
-		Function: FunctionCall{Arguments: `,"replace":"new"}`},
+		Function: wire.FunctionCall{Arguments: `,"replace":"new"}`},
 	}); err != nil {
-		t.Fatalf("MergeToolCallDelta() args error = %v", err)
+		t.Fatalf("wire.MergeToolCallDelta() args error = %v", err)
 	}
 	if mustStart(t, <-events).Name != "filesystem_edit" {
 		t.Fatal("expected tool_call_start after name arrival")
@@ -674,16 +676,16 @@ func TestEmitFlushMergeAndUsage(t *testing.T) {
 		t.Fatalf("unexpected accumulated tool call: %+v", toolCalls[0])
 	}
 
-	if err := MergeToolCallDelta(ctx, make(chan providertypes.StreamEvent), map[int]*providertypes.ToolCall{}, ToolCallDelta{
+	if err := wire.MergeToolCallDelta(ctx, make(chan providertypes.StreamEvent), map[int]*providertypes.ToolCall{}, wire.ToolCallDelta{
 		Index:    1,
-		Function: FunctionCall{Name: "filesystem_edit"},
+		Function: wire.FunctionCall{Name: "filesystem_edit"},
 	}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected canceled merge, got %v", err)
 	}
 
 	var usage providertypes.Usage
-	ExtractStreamUsage(&usage, nil)
-	ExtractStreamUsage(&usage, &Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15})
+	wire.ExtractStreamUsage(&usage, nil)
+	wire.ExtractStreamUsage(&usage, &wire.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15})
 	if usage.InputTokens != 10 || usage.OutputTokens != 5 || usage.TotalTokens != 15 {
 		t.Fatalf("unexpected usage mapping: %+v", usage)
 	}
@@ -767,7 +769,7 @@ func TestConsumeStreamVariants(t *testing.T) {
 		t.Parallel()
 
 		events := make(chan providertypes.StreamEvent, 4)
-		err := mustProvider(t).ConsumeStream(context.Background(), strings.NewReader(
+		err := wire.ConsumeStream(context.Background(), strings.NewReader(
 			": heartbeat\n"+
 				"data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n"+
 				"data: [DONE]\n\n",
@@ -784,10 +786,10 @@ func TestConsumeStreamVariants(t *testing.T) {
 	t.Run("payload and decode errors", func(t *testing.T) {
 		t.Parallel()
 
-		if err := mustProvider(t).ConsumeStream(context.Background(), strings.NewReader("data: {\"error\":{\"message\":\"rate limit exceeded\"}}\n"), make(chan providertypes.StreamEvent, 1)); err == nil || !strings.Contains(err.Error(), "rate limit exceeded") {
+		if err := wire.ConsumeStream(context.Background(), strings.NewReader("data: {\"error\":{\"message\":\"rate limit exceeded\"}}\n"), make(chan providertypes.StreamEvent, 1)); err == nil || !strings.Contains(err.Error(), "rate limit exceeded") {
 			t.Fatalf("expected payload error, got %v", err)
 		}
-		if err := mustProvider(t).ConsumeStream(context.Background(), strings.NewReader("data: {not-json}\n\n"), make(chan providertypes.StreamEvent, 1)); err == nil || !strings.Contains(err.Error(), "decode stream chunk") {
+		if err := wire.ConsumeStream(context.Background(), strings.NewReader("data: {not-json}\n\n"), make(chan providertypes.StreamEvent, 1)); err == nil || !strings.Contains(err.Error(), "decode stream chunk") {
 			t.Fatalf("expected decode error, got %v", err)
 		}
 	})
@@ -796,7 +798,7 @@ func TestConsumeStreamVariants(t *testing.T) {
 		t.Parallel()
 
 		events := make(chan providertypes.StreamEvent, 4)
-		err := mustProvider(t).ConsumeStream(context.Background(), strings.NewReader("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n"), events)
+		err := wire.ConsumeStream(context.Background(), strings.NewReader("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n"), events)
 		if !errors.Is(err, provider.ErrStreamInterrupted) {
 			t.Fatalf("expected ErrStreamInterrupted, got %v", err)
 		}
@@ -810,7 +812,7 @@ func TestConsumeStreamVariants(t *testing.T) {
 		t.Parallel()
 
 		events := make(chan providertypes.StreamEvent, 4)
-		err := mustProvider(t).ConsumeStream(context.Background(), strings.NewReader(
+		err := wire.ConsumeStream(context.Background(), strings.NewReader(
 			"data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n"+
 				"data: {\"choices\":[{\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n",
 		), events)
@@ -832,12 +834,12 @@ func TestConsumeStreamVariants(t *testing.T) {
 
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		if err := mustProvider(t).ConsumeStream(ctx, strings.NewReader("data: {}\n\n"), make(chan providertypes.StreamEvent, 1)); !errors.Is(err, context.Canceled) {
+		if err := wire.ConsumeStream(ctx, strings.NewReader("data: {}\n\n"), make(chan providertypes.StreamEvent, 1)); !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled, got %v", err)
 		}
 
 		ctx2, cancel2 := context.WithCancel(context.Background())
-		err := mustProvider(t).ConsumeStream(ctx2, &cancelThenErrorReader{cancel: cancel2, err: io.ErrClosedPipe}, make(chan providertypes.StreamEvent, 1))
+		err := wire.ConsumeStream(ctx2, &cancelThenErrorReader{cancel: cancel2, err: io.ErrClosedPipe}, make(chan providertypes.StreamEvent, 1))
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected read cancellation, got %v", err)
 		}
@@ -848,7 +850,7 @@ func TestConsumeStreamVariants(t *testing.T) {
 
 		ctx, cancel := context.WithCancel(context.Background())
 		events := make(chan providertypes.StreamEvent, 2)
-		err := mustProvider(t).ConsumeStream(ctx, &cancelAfterDoneReader{
+		err := wire.ConsumeStream(ctx, &cancelAfterDoneReader{
 			payload: []byte("data: [DONE]\n"),
 			cancel:  cancel,
 			err:     io.ErrClosedPipe,
@@ -870,7 +872,7 @@ func TestConsumeStreamVariants(t *testing.T) {
 			strings.NewReader("data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n"),
 			&errReader{err: io.ErrClosedPipe},
 		)
-		err := mustProvider(t).ConsumeStream(context.Background(), body, events)
+		err := wire.ConsumeStream(context.Background(), body, events)
 		if !errors.Is(err, provider.ErrStreamInterrupted) {
 			t.Fatalf("expected interrupted error, got %v", err)
 		}
@@ -884,7 +886,7 @@ func TestConsumeStreamVariants(t *testing.T) {
 		t.Parallel()
 
 		events := make(chan providertypes.StreamEvent, 8)
-		err := mustProvider(t).ConsumeStream(context.Background(), strings.NewReader(
+		err := wire.ConsumeStream(context.Background(), strings.NewReader(
 			"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello \"}}]}\n"+
 				"data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"filesystem_edit\",\"arguments\":\"{\\\"path\\\":\\\"main.go\\\"}\"}}]}}]}\n"+
 				"data: {\"choices\":[{\"index\":0,\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}\n"+

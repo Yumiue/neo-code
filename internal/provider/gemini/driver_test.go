@@ -15,6 +15,9 @@ func TestDriverDiscover(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("x-goog-api-key"); got != "test-key" {
+			t.Fatalf("expected x-goog-api-key header, got %q", got)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"models": []map[string]any{
@@ -45,7 +48,7 @@ func TestDriverBuild(t *testing.T) {
 	driver := Driver()
 	p, err := driver.Build(context.Background(), provider.RuntimeConfig{
 		Driver:  DriverName,
-		BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
+		BaseURL: "https://generativelanguage.googleapis.com/v1beta",
 		APIKey:  "test-key",
 	})
 	if err != nil {

@@ -167,6 +167,15 @@ func (s *Service) CreateCustomProvider(ctx context.Context, input CreateCustomPr
 
 // normalizeCreateCustomProviderInput 统一裁剪新增 Provider 输入并执行基础字段校验。
 func normalizeCreateCustomProviderInput(input CreateCustomProviderInput) (createCustomProviderNormalizedInput, error) {
+	rawModelSource := strings.TrimSpace(input.ModelSource)
+	normalizedModelSource := provider.NormalizeModelSource(rawModelSource)
+	if rawModelSource != "" && normalizedModelSource == "" {
+		return createCustomProviderNormalizedInput{}, fmt.Errorf("selection: unsupported model source %q", input.ModelSource)
+	}
+	if normalizedModelSource == "" {
+		normalizedModelSource = provider.ModelSourceDiscover
+	}
+
 	normalized := createCustomProviderNormalizedInput{
 		Name:                  strings.TrimSpace(input.Name),
 		Driver:                strings.TrimSpace(input.Driver),
@@ -174,11 +183,8 @@ func normalizeCreateCustomProviderInput(input CreateCustomProviderInput) (create
 		ChatEndpointPath:      strings.TrimSpace(input.ChatEndpointPath),
 		APIKeyEnv:             strings.TrimSpace(input.APIKeyEnv),
 		APIKey:                strings.TrimSpace(input.APIKey),
-		ModelSource:           provider.NormalizeModelSource(strings.TrimSpace(input.ModelSource)),
+		ModelSource:           normalizedModelSource,
 		DiscoveryEndpointPath: strings.TrimSpace(input.DiscoveryEndpointPath),
-	}
-	if rawModelSource := strings.TrimSpace(input.ModelSource); rawModelSource != "" && normalized.ModelSource == "" {
-		return createCustomProviderNormalizedInput{}, fmt.Errorf("selection: unsupported model source %q", input.ModelSource)
 	}
 
 	if err := config.ValidateCustomProviderName(normalized.Name); err != nil {
@@ -196,37 +202,39 @@ func normalizeCreateCustomProviderInput(input CreateCustomProviderInput) (create
 	if config.IsProtectedEnvVarName(normalized.APIKeyEnv) {
 		return createCustomProviderNormalizedInput{}, fmt.Errorf("selection: env key %q is protected", normalized.APIKeyEnv)
 	}
-	if normalized.ModelSource == "" {
-		normalized.ModelSource = provider.ModelSourceDiscover
-	}
-	normalizedProtocols, err := provider.NormalizeProviderProtocolSettings(
-		normalized.Driver,
-		"",
-		normalized.ChatEndpointPath,
-		"",
-		normalized.DiscoveryEndpointPath,
-		"",
-		"",
-		"",
-		"",
-	)
-	if err != nil {
-		return createCustomProviderNormalizedInput{}, err
-	}
-	normalized.ChatEndpointPath = normalizedProtocols.ChatEndpointPath
-	switch provider.NormalizeModelSource(normalized.ModelSource) {
+	switch normalized.ModelSource {
 	case provider.ModelSourceManual:
 		manualModels, parseErr := parseManualModelsJSON(input.ManualModelsJSON)
 		if parseErr != nil {
 			return createCustomProviderNormalizedInput{}, parseErr
 		}
 		normalized.ManualModels = manualModels
-		normalized.DiscoveryEndpointPath = ""
 	case provider.ModelSourceDiscover:
-		normalized.DiscoveryEndpointPath = normalizedProtocols.DiscoveryEndpointPath
-	default:
-		return createCustomProviderNormalizedInput{}, fmt.Errorf("selection: unsupported model source %q", input.ModelSource)
+		normalized.ManualModels = nil
 	}
+
+	normalizedProviderInput, err := config.NormalizeCustomProviderInput(config.SaveCustomProviderInput{
+		Name:                  normalized.Name,
+		Driver:                normalized.Driver,
+		BaseURL:               normalized.BaseURL,
+		ChatEndpointPath:      normalized.ChatEndpointPath,
+		APIKeyEnv:             normalized.APIKeyEnv,
+		DiscoveryEndpointPath: normalized.DiscoveryEndpointPath,
+		ModelSource:           normalized.ModelSource,
+		Models:                normalized.ManualModels,
+	})
+	if err != nil {
+		return createCustomProviderNormalizedInput{}, err
+	}
+
+	normalized.Name = normalizedProviderInput.Name
+	normalized.Driver = normalizedProviderInput.Driver
+	normalized.BaseURL = normalizedProviderInput.BaseURL
+	normalized.ChatEndpointPath = normalizedProviderInput.ChatEndpointPath
+	normalized.APIKeyEnv = normalizedProviderInput.APIKeyEnv
+	normalized.ModelSource = normalizedProviderInput.ModelSource
+	normalized.DiscoveryEndpointPath = normalizedProviderInput.DiscoveryEndpointPath
+	normalized.ManualModels = normalizedProviderInput.Models
 
 	return normalized, nil
 }

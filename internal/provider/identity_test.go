@@ -6,16 +6,16 @@ func TestProviderIdentityKeyIncludesDriverSpecificFields(t *testing.T) {
 	t.Parallel()
 
 	identity := ProviderIdentity{
-		Driver:                   "openaicompat",
-		BaseURL:                  "https://api.example.com/v1",
-		APIStyle:                 "responses",
-		DeploymentMode:           "ignored",
-		APIVersion:               "ignored",
-		DiscoveryEndpointPath:    "/v2/models",
-		DiscoveryResponseProfile: "generic",
+		Driver:                "openaicompat",
+		BaseURL:               "https://api.example.com/v1",
+		ChatProtocol:          ChatProtocolOpenAIChatCompletions,
+		DiscoveryProtocol:     DiscoveryProtocolOpenAIModels,
+		AuthStrategy:          AuthStrategyBearer,
+		ResponseProfile:       DiscoveryResponseProfileOpenAI,
+		DiscoveryEndpointPath: "/v2/models",
 	}
 
-	if got, want := identity.Key(), "openaicompat|https://api.example.com/v1|responses|ignored|ignored|/v2/models|generic"; got != want {
+	if got, want := identity.Key(), "openaicompat|https://api.example.com/v1|openai_chat_completions|openai_models|bearer|openai|/v2/models"; got != want {
 		t.Fatalf("expected identity key %q, got %q", want, got)
 	}
 }
@@ -24,34 +24,32 @@ func TestNormalizeProviderIdentityUsesDriverSpecificNormalization(t *testing.T) 
 	t.Parallel()
 
 	identity, err := NormalizeProviderIdentity(ProviderIdentity{
-		Driver:                   " OpenAICompat ",
-		BaseURL:                  "https://API.EXAMPLE.COM/v1/",
-		APIStyle:                 " Responses ",
-		DiscoveryEndpointPath:    " models ",
-		DiscoveryResponseProfile: " Generic ",
+		Driver:                " OpenAICompat ",
+		BaseURL:               "https://API.EXAMPLE.COM/v1/",
+		DiscoveryEndpointPath: " models ",
+		ResponseProfile:       " Generic ",
 	})
 	if err != nil {
 		t.Fatalf("NormalizeProviderIdentity() error = %v", err)
 	}
 
-	if identity.Driver != "openaicompat" {
-		t.Fatalf("expected normalized driver %q, got %q", "openaicompat", identity.Driver)
+	if identity.Driver != DriverOpenAICompat {
+		t.Fatalf("expected normalized driver %q, got %q", DriverOpenAICompat, identity.Driver)
 	}
 	if identity.BaseURL != "https://api.example.com/v1" {
 		t.Fatalf("expected normalized base url %q, got %q", "https://api.example.com/v1", identity.BaseURL)
 	}
-	if identity.APIStyle != "responses" {
-		t.Fatalf("expected normalized api_style %q, got %q", "responses", identity.APIStyle)
+	if identity.ChatProtocol != ChatProtocolOpenAIChatCompletions {
+		t.Fatalf("expected normalized chat protocol %q, got %q", ChatProtocolOpenAIChatCompletions, identity.ChatProtocol)
+	}
+	if identity.DiscoveryProtocol != DiscoveryProtocolOpenAIModels {
+		t.Fatalf("expected normalized discovery protocol %q, got %q", DiscoveryProtocolOpenAIModels, identity.DiscoveryProtocol)
 	}
 	if identity.DiscoveryEndpointPath != "/models" {
 		t.Fatalf("expected normalized discovery endpoint path %q, got %q", "/models", identity.DiscoveryEndpointPath)
 	}
-	if identity.DiscoveryResponseProfile != DiscoveryResponseProfileGeneric {
-		t.Fatalf(
-			"expected normalized discovery response profile %q, got %q",
-			DiscoveryResponseProfileGeneric,
-			identity.DiscoveryResponseProfile,
-		)
+	if identity.ResponseProfile != DiscoveryResponseProfileGeneric {
+		t.Fatalf("expected normalized response profile %q, got %q", DiscoveryResponseProfileGeneric, identity.ResponseProfile)
 	}
 }
 
@@ -59,26 +57,28 @@ func TestNormalizeProviderIdentityPreservesDriverSpecificFields(t *testing.T) {
 	t.Parallel()
 
 	identity, err := NormalizeProviderIdentity(ProviderIdentity{
-		Driver:                   " Gemini ",
-		BaseURL:                  "https://API.EXAMPLE.COM/v1/",
-		DeploymentMode:           " Vertex ",
-		DiscoveryEndpointPath:    "/models",
-		DiscoveryResponseProfile: "gemini",
+		Driver:                " Gemini ",
+		BaseURL:               "https://API.EXAMPLE.COM/v1/",
+		DiscoveryEndpointPath: "/models",
+		ResponseProfile:       "gemini",
 	})
 	if err != nil {
 		t.Fatalf("NormalizeProviderIdentity() error = %v", err)
 	}
 
-	if identity.Driver != "gemini" {
-		t.Fatalf("expected normalized driver %q, got %q", "gemini", identity.Driver)
+	if identity.Driver != DriverGemini {
+		t.Fatalf("expected normalized driver %q, got %q", DriverGemini, identity.Driver)
 	}
 	if identity.BaseURL != "https://api.example.com/v1" {
 		t.Fatalf("expected normalized base url %q, got %q", "https://api.example.com/v1", identity.BaseURL)
 	}
-	if identity.DeploymentMode != "vertex" {
-		t.Fatalf("expected normalized deployment_mode %q, got %q", "vertex", identity.DeploymentMode)
+	if identity.ChatProtocol != ChatProtocolGeminiNative {
+		t.Fatalf("expected normalized chat protocol %q, got %q", ChatProtocolGeminiNative, identity.ChatProtocol)
 	}
-	if identity.DiscoveryEndpointPath != "/models" || identity.DiscoveryResponseProfile != DiscoveryResponseProfileGemini {
+	if identity.DiscoveryProtocol != DiscoveryProtocolGeminiModels {
+		t.Fatalf("expected normalized discovery protocol %q, got %q", DiscoveryProtocolGeminiModels, identity.DiscoveryProtocol)
+	}
+	if identity.DiscoveryEndpointPath != "/models" || identity.ResponseProfile != DiscoveryResponseProfileGemini {
 		t.Fatalf("expected normalized discovery settings, got %+v", identity)
 	}
 }
@@ -87,9 +87,9 @@ func TestProviderIdentityStringMatchesKey(t *testing.T) {
 	t.Parallel()
 
 	identity := ProviderIdentity{
-		Driver:   "openaicompat",
-		BaseURL:  "https://api.example.com/v1",
-		APIStyle: "responses",
+		Driver:       "openaicompat",
+		BaseURL:      "https://api.example.com/v1",
+		ChatProtocol: ChatProtocolOpenAIChatCompletions,
 	}
 	if identity.String() != identity.Key() {
 		t.Fatalf("expected String() to match Key(), got %q vs %q", identity.String(), identity.Key())
@@ -122,28 +122,27 @@ func TestNormalizeProviderIdentityAnthropicAndUnknownDriver(t *testing.T) {
 	t.Parallel()
 
 	anthropicIdentity, err := NormalizeProviderIdentity(ProviderIdentity{
-		Driver:     " Anthropic ",
-		BaseURL:    "https://API.EXAMPLE.COM/v1/",
-		APIVersion: " 2023-06-01 ",
+		Driver:  " Anthropic ",
+		BaseURL: "https://API.EXAMPLE.COM/v1/",
 	})
 	if err != nil {
 		t.Fatalf("NormalizeProviderIdentity() anthropic error = %v", err)
 	}
-	if anthropicIdentity.Driver != "anthropic" {
+	if anthropicIdentity.Driver != DriverAnthropic {
 		t.Fatalf("expected anthropic driver, got %+v", anthropicIdentity)
 	}
-	if anthropicIdentity.APIVersion != "2023-06-01" {
-		t.Fatalf("expected normalized api version, got %+v", anthropicIdentity)
+	if anthropicIdentity.AuthStrategy != AuthStrategyAnthropic {
+		t.Fatalf("expected anthropic auth strategy %q, got %+v", AuthStrategyAnthropic, anthropicIdentity)
+	}
+	if anthropicIdentity.DiscoveryProtocol != DiscoveryProtocolAnthropicModels {
+		t.Fatalf("expected anthropic discovery protocol %q, got %+v", DiscoveryProtocolAnthropicModels, anthropicIdentity)
 	}
 
 	fallbackIdentity, err := NormalizeProviderIdentity(ProviderIdentity{
-		Driver:                   " custom ",
-		BaseURL:                  "https://API.EXAMPLE.COM/v1/",
-		APIStyle:                 "responses",
-		DeploymentMode:           "vertex",
-		APIVersion:               "2023-06-01",
-		DiscoveryEndpointPath:    "gateway/models",
-		DiscoveryResponseProfile: "generic",
+		Driver:                " custom ",
+		BaseURL:               "https://API.EXAMPLE.COM/v1/",
+		DiscoveryEndpointPath: "gateway/models",
+		ResponseProfile:       "generic",
 	})
 	if err != nil {
 		t.Fatalf("NormalizeProviderIdentity() fallback error = %v", err)
@@ -151,11 +150,44 @@ func TestNormalizeProviderIdentityAnthropicAndUnknownDriver(t *testing.T) {
 	if fallbackIdentity.Driver != "custom" || fallbackIdentity.BaseURL != "https://api.example.com/v1" {
 		t.Fatalf("expected fallback identity to normalize driver and base URL, got %+v", fallbackIdentity)
 	}
-	if fallbackIdentity.APIStyle != "" || fallbackIdentity.DeploymentMode != "" || fallbackIdentity.APIVersion != "" {
-		t.Fatalf("expected fallback identity to drop protocol-specific fields, got %+v", fallbackIdentity)
-	}
-	if fallbackIdentity.DiscoveryEndpointPath != "/gateway/models" || fallbackIdentity.DiscoveryResponseProfile != "generic" {
+	if fallbackIdentity.DiscoveryEndpointPath != "/gateway/models" || fallbackIdentity.ResponseProfile != "generic" {
 		t.Fatalf("expected fallback identity to preserve normalized discovery settings, got %+v", fallbackIdentity)
+	}
+}
+
+func TestNormalizeProviderIdentityUsesDriverDefaultsMatrix(t *testing.T) {
+	t.Parallel()
+
+	tests := []string{DriverOpenAICompat, DriverGemini, DriverAnthropic}
+	for _, driver := range tests {
+		driver := driver
+		t.Run(driver, func(t *testing.T) {
+			t.Parallel()
+
+			identity, err := NormalizeProviderIdentity(ProviderIdentity{
+				Driver:  driver,
+				BaseURL: "https://api.example.com/v1",
+			})
+			if err != nil {
+				t.Fatalf("NormalizeProviderIdentity() error = %v", err)
+			}
+			defaults := ResolveDriverProtocolDefaults(driver)
+			if identity.ChatProtocol != defaults.ChatProtocol {
+				t.Fatalf("expected chat protocol %q, got %q", defaults.ChatProtocol, identity.ChatProtocol)
+			}
+			if identity.DiscoveryProtocol != defaults.DiscoveryProtocol {
+				t.Fatalf("expected discovery protocol %q, got %q", defaults.DiscoveryProtocol, identity.DiscoveryProtocol)
+			}
+			if identity.AuthStrategy != defaults.AuthStrategy {
+				t.Fatalf("expected auth strategy %q, got %q", defaults.AuthStrategy, identity.AuthStrategy)
+			}
+			if identity.ResponseProfile != defaults.ResponseProfile {
+				t.Fatalf("expected response profile %q, got %q", defaults.ResponseProfile, identity.ResponseProfile)
+			}
+			if identity.DiscoveryEndpointPath != DiscoveryEndpointPathModels {
+				t.Fatalf("expected discovery endpoint %q, got %q", DiscoveryEndpointPathModels, identity.DiscoveryEndpointPath)
+			}
+		})
 	}
 }
 
@@ -197,11 +229,7 @@ func TestNormalizeProviderDiscoveryResponseProfile(t *testing.T) {
 func TestNormalizeProviderDiscoverySettings(t *testing.T) {
 	t.Parallel()
 
-	endpointPath, responseProfile, err := NormalizeProviderDiscoverySettings(
-		DriverOpenAICompat,
-		"",
-		"",
-	)
+	endpointPath, responseProfile, err := NormalizeProviderDiscoverySettings(DriverOpenAICompat, "", "")
 	if err != nil {
 		t.Fatalf("NormalizeProviderDiscoverySettings() openaicompat error = %v", err)
 	}
@@ -209,11 +237,7 @@ func TestNormalizeProviderDiscoverySettings(t *testing.T) {
 		t.Fatalf("expected openaicompat defaults, got endpoint=%q profile=%q", endpointPath, responseProfile)
 	}
 
-	endpointPath, responseProfile, err = NormalizeProviderDiscoverySettings(
-		"custom-driver",
-		"",
-		"",
-	)
+	endpointPath, responseProfile, err = NormalizeProviderDiscoverySettings("custom-driver", "", "")
 	if err != nil {
 		t.Fatalf("NormalizeProviderDiscoverySettings() custom driver error = %v", err)
 	}

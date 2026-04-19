@@ -1050,8 +1050,8 @@ func TestSaveCustomProviderRejectsModelWithoutName(t *testing.T) {
 			{ID: "manual-model-1"},
 		},
 	})
-	if err != nil {
-		t.Fatalf("expected model name optional in SaveCustomProviderWithModels, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "models[0].name is empty") {
+		t.Fatalf("expected model name required error, got %v", err)
 	}
 }
 
@@ -1067,6 +1067,99 @@ func TestSaveCustomProviderRejectsInvalidModelSource(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "unsupported model_source") {
 		t.Fatalf("expected invalid model_source error, got %v", err)
+	}
+}
+
+func TestSaveCustomProviderAndLoadCustomProviderStayConsistent(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	tests := []struct {
+		name                 string
+		input                SaveCustomProviderInput
+		wantModelSource      string
+		wantChatPath         string
+		wantDiscoveryPath    string
+		wantModelDescriptors int
+	}{
+		{
+			name: "discover source",
+			input: SaveCustomProviderInput{
+				Name:        "roundtrip-discover",
+				Driver:      provider.DriverOpenAICompat,
+				BaseURL:     "https://llm.example.com/v1",
+				APIKeyEnv:   "ROUNDTRIP_DISCOVER_API_KEY",
+				ModelSource: provider.ModelSourceDiscover,
+			},
+			wantModelSource:      provider.ModelSourceDiscover,
+			wantChatPath:         "",
+			wantDiscoveryPath:    "/models",
+			wantModelDescriptors: 0,
+		},
+		{
+			name: "manual source",
+			input: SaveCustomProviderInput{
+				Name:                  "roundtrip-manual",
+				Driver:                provider.DriverOpenAICompat,
+				BaseURL:               "https://llm.example.com/v1",
+				APIKeyEnv:             "ROUNDTRIP_MANUAL_API_KEY",
+				ModelSource:           provider.ModelSourceManual,
+				DiscoveryEndpointPath: "/should-be-cleared",
+				Models: []providertypes.ModelDescriptor{
+					{
+						ID:              "manual-model-1",
+						Name:            "Manual Model 1",
+						ContextWindow:   131072,
+						MaxOutputTokens: 8192,
+					},
+				},
+			},
+			wantModelSource:      provider.ModelSourceManual,
+			wantChatPath:         "",
+			wantDiscoveryPath:    "",
+			wantModelDescriptors: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if err := SaveCustomProviderWithModels(baseDir, tt.input); err != nil {
+				t.Fatalf("SaveCustomProviderWithModels() error = %v", err)
+			}
+
+			loaded, err := loadCustomProvider(filepath.Join(baseDir, providersDirName, tt.input.Name))
+			if err != nil {
+				t.Fatalf("loadCustomProvider() error = %v", err)
+			}
+
+			if loaded.Name != tt.input.Name {
+				t.Fatalf("expected name %q, got %q", tt.input.Name, loaded.Name)
+			}
+			if loaded.Driver != tt.input.Driver {
+				t.Fatalf("expected driver %q, got %q", tt.input.Driver, loaded.Driver)
+			}
+			if loaded.BaseURL != tt.input.BaseURL {
+				t.Fatalf("expected base url %q, got %q", tt.input.BaseURL, loaded.BaseURL)
+			}
+			if loaded.APIKeyEnv != tt.input.APIKeyEnv {
+				t.Fatalf("expected api key env %q, got %q", tt.input.APIKeyEnv, loaded.APIKeyEnv)
+			}
+			if loaded.ModelSource != tt.wantModelSource {
+				t.Fatalf("expected model_source %q, got %q", tt.wantModelSource, loaded.ModelSource)
+			}
+			if loaded.ChatEndpointPath != tt.wantChatPath {
+				t.Fatalf("expected chat endpoint %q, got %q", tt.wantChatPath, loaded.ChatEndpointPath)
+			}
+			if loaded.DiscoveryEndpointPath != tt.wantDiscoveryPath {
+				t.Fatalf("expected discovery endpoint %q, got %q", tt.wantDiscoveryPath, loaded.DiscoveryEndpointPath)
+			}
+			if len(loaded.Models) != tt.wantModelDescriptors {
+				t.Fatalf("expected model descriptors %d, got %+v", tt.wantModelDescriptors, loaded.Models)
+			}
+		})
 	}
 }
 
@@ -1092,10 +1185,6 @@ func TestSaveCustomProviderManualModelsPersistOptionalFields(t *testing.T) {
 				ContextWindow:   131072,
 				MaxOutputTokens: 8192,
 			},
-			{
-				ID:   "Manual-Model-1",
-				Name: "Duplicate by key should be merged",
-			},
 		},
 	})
 	if err != nil {
@@ -1113,7 +1202,7 @@ func TestSaveCustomProviderManualModelsPersistOptionalFields(t *testing.T) {
 		t.Fatalf("expected discovery settings to be empty in manual mode, got %+v", cfg)
 	}
 	if len(cfg.Models) != 2 {
-		t.Fatalf("expected merged model list with 2 entries, got %+v", cfg.Models)
+		t.Fatalf("expected model list with 2 entries, got %+v", cfg.Models)
 	}
 	if cfg.Models[0].ContextWindow != 0 || cfg.Models[0].MaxOutputTokens != 0 {
 		t.Fatalf("expected optional fields omitted for model-1, got %+v", cfg.Models[0])

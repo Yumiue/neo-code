@@ -3,15 +3,12 @@ package chatcompletions
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"strings"
 
 	"neo-code/internal/provider"
-	"neo-code/internal/provider/openaicompat/shared"
 	providertypes "neo-code/internal/provider/types"
 )
 
@@ -26,7 +23,7 @@ func BuildRequest(ctx context.Context, cfg provider.RuntimeConfig, req providert
 		model = strings.TrimSpace(cfg.DefaultModel)
 	}
 	if model == "" {
-		return Request{}, errors.New(shared.ErrorPrefix + "model is empty")
+		return Request{}, errors.New(errorPrefix + "model is empty")
 	}
 
 	payload := Request{
@@ -138,7 +135,7 @@ func toOpenAIMessageWithBudget(
 		remainingAssetBudget = 0
 	}
 	if err := providertypes.ValidateParts(message.Parts); err != nil {
-		return Message{}, 0, fmt.Errorf("%sinvalid message parts: %w", shared.ErrorPrefix, err)
+		return Message{}, 0, fmt.Errorf("%sinvalid message parts: %w", errorPrefix, err)
 	}
 
 	out := Message{
@@ -300,25 +297,4 @@ func resolveSessionAssetDataURL(
 
 	encoded := base64.StdEncoding.EncodeToString(data)
 	return fmt.Sprintf("data:%s;base64,%s", normalizedMime, encoded), int64(len(data)), nil
-}
-
-// ParseError 解析 HTTP 错误响应并包装为 ProviderError。
-func ParseError(resp *http.Response) error {
-	data, readErr := io.ReadAll(resp.Body)
-	if readErr != nil {
-		return provider.NewProviderErrorFromStatus(resp.StatusCode,
-			fmt.Sprintf("%sread error response: %v", shared.ErrorPrefix, readErr))
-	}
-
-	var parsed ErrorResponse
-	if err := json.Unmarshal(data, &parsed); err == nil && strings.TrimSpace(parsed.Error.Message) != "" {
-		return provider.NewProviderErrorFromStatus(resp.StatusCode, parsed.Error.Message)
-	}
-
-	bodyText := strings.TrimSpace(string(data))
-	if bodyText == "" {
-		return provider.NewProviderErrorFromStatus(resp.StatusCode, resp.Status)
-	}
-
-	return provider.NewProviderErrorFromStatus(resp.StatusCode, bodyText)
 }

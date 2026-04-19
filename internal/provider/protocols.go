@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// NormalizedProtocolSettings 收敛 provider 协议相关字段，统一承载新旧配置映射后的可执行结果。
+// NormalizedProtocolSettings 收敛 provider 协议相关字段，统一承载归一化后的可执行配置。
 type NormalizedProtocolSettings struct {
 	ChatProtocol          string
 	ChatEndpointPath      string
@@ -16,27 +16,27 @@ type NormalizedProtocolSettings struct {
 	LegacyAPIStyle        string
 }
 
-// NormalizeProviderChatProtocol 规范化 chat protocol 枚举，未知值保持原样供上层做更严格校验。
+// NormalizeProviderChatProtocol 规范化 chat protocol 枚举值。
 func NormalizeProviderChatProtocol(value string) string {
 	return NormalizeKey(value)
 }
 
-// NormalizeProviderDiscoveryProtocol 规范化 discovery protocol 枚举，未知值保持原样供上层做更严格校验。
+// NormalizeProviderDiscoveryProtocol 规范化 discovery protocol 枚举值。
 func NormalizeProviderDiscoveryProtocol(value string) string {
 	return NormalizeKey(value)
 }
 
-// NormalizeProviderAuthStrategy 规范化 auth strategy 枚举，未知值保持原样供上层做更严格校验。
+// NormalizeProviderAuthStrategy 规范化 auth strategy 枚举值。
 func NormalizeProviderAuthStrategy(value string) string {
 	return NormalizeKey(value)
 }
 
-// NormalizeProviderChatEndpointPath 规范化聊天端点路径，沿用 discovery 路径的安全约束规则。
+// NormalizeProviderChatEndpointPath 规范化聊天端点路径，沿用 discovery 路径安全规则。
 func NormalizeProviderChatEndpointPath(endpointPath string) (string, error) {
 	return NormalizeProviderDiscoveryEndpointPath(endpointPath)
 }
 
-// NormalizeProviderProtocolSettings 合并新旧协议字段并执行组合校验，输出统一可执行协议配置。
+// NormalizeProviderProtocolSettings 合并协议字段并执行组合校验，输出统一协议配置。
 func NormalizeProviderProtocolSettings(
 	driver string,
 	chatProtocol string,
@@ -83,6 +83,9 @@ func NormalizeProviderProtocolSettings(
 			settings.ChatProtocol = mappedChatProtocol
 		}
 	}
+	if settings.ChatProtocol == "" {
+		settings.ChatProtocol = inferChatProtocolFromEndpointPath(normalizedDriver, settings.ChatEndpointPath)
+	}
 
 	if settings.ResponseProfile == "" {
 		legacyProfile, err := NormalizeProviderDiscoveryResponseProfile(legacyDiscoveryResponseProfile)
@@ -92,7 +95,20 @@ func NormalizeProviderProtocolSettings(
 		settings.ResponseProfile = legacyProfile
 	}
 
-	applyDriverDefaultProtocolSettings(normalizedDriver, &settings)
+	defaults := ResolveDriverProtocolDefaults(normalizedDriver)
+	if settings.ChatProtocol == "" {
+		settings.ChatProtocol = defaults.ChatProtocol
+	}
+	if settings.DiscoveryProtocol == "" {
+		settings.DiscoveryProtocol = defaults.DiscoveryProtocol
+	}
+	if settings.AuthStrategy == "" {
+		settings.AuthStrategy = defaults.AuthStrategy
+	}
+	if settings.ResponseProfile == "" {
+		settings.ResponseProfile = defaults.ResponseProfile
+	}
+
 	if err := validateProtocolEnums(settings); err != nil {
 		return NormalizedProtocolSettings{}, err
 	}
@@ -116,69 +132,7 @@ func NormalizeProviderProtocolSettings(
 	return settings, nil
 }
 
-// applyDriverDefaultProtocolSettings 为不同 driver 注入协议默认值，降低配置输入成本并保证行为稳定。
-func applyDriverDefaultProtocolSettings(normalizedDriver string, settings *NormalizedProtocolSettings) {
-	if settings == nil {
-		return
-	}
-
-	switch normalizedDriver {
-	case DriverOpenAICompat:
-		if settings.ChatProtocol == "" {
-			settings.ChatProtocol = ChatProtocolOpenAIChatCompletions
-		}
-		if settings.DiscoveryProtocol == "" {
-			settings.DiscoveryProtocol = DiscoveryProtocolOpenAIModels
-		}
-		if settings.AuthStrategy == "" {
-			settings.AuthStrategy = AuthStrategyBearer
-		}
-		if settings.ResponseProfile == "" {
-			settings.ResponseProfile = DiscoveryResponseProfileOpenAI
-		}
-	case DriverGemini:
-		if settings.ChatProtocol == "" {
-			settings.ChatProtocol = ChatProtocolOpenAIChatCompletions
-		}
-		if settings.DiscoveryProtocol == "" {
-			settings.DiscoveryProtocol = DiscoveryProtocolGeminiModels
-		}
-		if settings.AuthStrategy == "" {
-			settings.AuthStrategy = AuthStrategyBearer
-		}
-		if settings.ResponseProfile == "" {
-			settings.ResponseProfile = DiscoveryResponseProfileGemini
-		}
-	case DriverAnthropic:
-		if settings.ChatProtocol == "" {
-			settings.ChatProtocol = ChatProtocolAnthropicMessages
-		}
-		if settings.DiscoveryProtocol == "" {
-			settings.DiscoveryProtocol = DiscoveryProtocolAnthropicModels
-		}
-		if settings.AuthStrategy == "" {
-			settings.AuthStrategy = AuthStrategyAnthropic
-		}
-		if settings.ResponseProfile == "" {
-			settings.ResponseProfile = DiscoveryResponseProfileGeneric
-		}
-	default:
-		if settings.ChatProtocol == "" {
-			settings.ChatProtocol = ChatProtocolOpenAIChatCompletions
-		}
-		if settings.DiscoveryProtocol == "" {
-			settings.DiscoveryProtocol = DiscoveryProtocolCustomHTTPJSON
-		}
-		if settings.AuthStrategy == "" {
-			settings.AuthStrategy = AuthStrategyBearer
-		}
-		if settings.ResponseProfile == "" {
-			settings.ResponseProfile = DiscoveryResponseProfileGeneric
-		}
-	}
-}
-
-// validateProtocolEnums 校验协议枚举输入，避免拼写错误在运行期才暴露。
+// validateProtocolEnums 校验协议枚举输入，避免拼写错误延迟到运行期。
 func validateProtocolEnums(settings NormalizedProtocolSettings) error {
 	switch settings.ChatProtocol {
 	case ChatProtocolOpenAIChatCompletions, ChatProtocolOpenAIResponses, ChatProtocolGeminiNative, ChatProtocolAnthropicMessages:
@@ -219,23 +173,31 @@ func validateProtocolCombinations(settings NormalizedProtocolSettings) error {
 	return nil
 }
 
-// defaultChatEndpointPath 返回不同 chat protocol 的默认端点路径。
-func defaultChatEndpointPath(chatProtocol string) string {
-	switch strings.TrimSpace(chatProtocol) {
-	case ChatProtocolOpenAIResponses:
-		return "/responses"
-	case ChatProtocolAnthropicMessages:
-		return "/messages"
-	default:
-		return "/chat/completions"
-	}
-}
-
-// defaultDiscoveryEndpointPath 返回不同 discovery protocol 的默认端点路径。
+// defaultDiscoveryEndpointPath 返回 discovery protocol 对应的默认端点路径。
 func defaultDiscoveryEndpointPath(discoveryProtocol string) string {
 	switch strings.TrimSpace(discoveryProtocol) {
 	case DiscoveryProtocolOpenAIModels, DiscoveryProtocolGeminiModels, DiscoveryProtocolAnthropicModels, DiscoveryProtocolCustomHTTPJSON:
 		return DiscoveryEndpointPathModels
+	default:
+		return ""
+	}
+}
+
+// inferChatProtocolFromEndpointPath 根据驱动与聊天端点路径推断协议，避免平铺配置下 responses 无法触达。
+func inferChatProtocolFromEndpointPath(driver string, endpointPath string) string {
+	if NormalizeProviderDriver(driver) != DriverOpenAICompat {
+		return ""
+	}
+	normalizedPath, err := NormalizeProviderChatEndpointPath(endpointPath)
+	if err != nil {
+		return ""
+	}
+	trimmedPath := strings.Trim(strings.ToLower(strings.TrimSpace(normalizedPath)), "/")
+	switch {
+	case trimmedPath == "responses" || strings.HasSuffix(trimmedPath, "/responses"):
+		return ChatProtocolOpenAIResponses
+	case trimmedPath == "chat/completions" || strings.HasSuffix(trimmedPath, "/chat/completions"):
+		return ChatProtocolOpenAIChatCompletions
 	default:
 		return ""
 	}

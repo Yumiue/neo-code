@@ -2,59 +2,40 @@ package anthropic
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"time"
 
 	"neo-code/internal/provider"
 	httpdiscovery "neo-code/internal/provider/discovery/http"
+	"neo-code/internal/provider/transport"
 	providertypes "neo-code/internal/provider/types"
 )
 
 // DriverName 是 Anthropic 协议驱动的唯一标识。
 const DriverName = provider.DriverAnthropic
 
+// defaultRetryTransport 返回 Anthropic 驱动默认使用的重试传输层。
+func defaultRetryTransport() http.RoundTripper {
+	return transport.NewRetryTransport(http.DefaultTransport, transport.DefaultRetryConfig())
+}
+
 // Driver 返回 Anthropic 协议驱动定义。
 func Driver() provider.DriverDefinition {
 	return provider.DriverDefinition{
 		Name: DriverName,
 		Build: func(ctx context.Context, cfg provider.RuntimeConfig) (provider.Provider, error) {
-			return nil, provider.NewDiscoveryConfigError(
-				fmt.Sprintf("anthropic driver: chat protocol %q is not supported yet", provider.ResolveDriverProtocolDefaults(cfg.Driver).ChatProtocol),
-			)
+			return New(cfg, withTransport(defaultRetryTransport()))
 		},
 		Discover: func(ctx context.Context, cfg provider.RuntimeConfig) ([]providertypes.ModelDescriptor, error) {
-			discoveryProtocol, discoveryEndpointPath, responseProfile, err := provider.ResolveDriverDiscoveryConfig(
-				cfg.Driver,
-				cfg.DiscoveryEndpointPath,
-			)
-			if err != nil {
-				return nil, provider.NewDiscoveryConfigError(err.Error())
-			}
-			authStrategy, apiVersion := provider.ResolveDriverAuthConfig(cfg.Driver)
-
-			rawModels, err := httpdiscovery.DiscoverRawModels(ctx, &http.Client{Timeout: 90 * time.Second}, httpdiscovery.RequestConfig{
-				BaseURL:           cfg.BaseURL,
-				EndpointPath:      discoveryEndpointPath,
-				DiscoveryProtocol: discoveryProtocol,
-				ResponseProfile:   responseProfile,
-				AuthStrategy:      authStrategy,
-				APIKey:            cfg.APIKey,
-				APIVersion:        apiVersion,
-			})
+			requestCfg, err := httpdiscovery.RequestConfigFromRuntime(cfg)
 			if err != nil {
 				return nil, err
 			}
-
-			descriptors := make([]providertypes.ModelDescriptor, 0, len(rawModels))
-			for _, raw := range rawModels {
-				descriptor, ok := providertypes.DescriptorFromRawModel(raw)
-				if !ok {
-					continue
-				}
-				descriptors = append(descriptors, descriptor)
+			client := &http.Client{
+				Timeout:   90 * time.Second,
+				Transport: defaultRetryTransport(),
 			}
-			return providertypes.MergeModelDescriptors(descriptors), nil
+			return httpdiscovery.DiscoverModelDescriptors(ctx, client, requestCfg)
 		},
 		ValidateCatalogIdentity: validateCatalogIdentity,
 	}

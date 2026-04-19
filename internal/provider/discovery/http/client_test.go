@@ -346,6 +346,83 @@ func TestDiscoverRawModelsContextAndClientValidation(t *testing.T) {
 	})
 }
 
+func TestRequestConfigFromRuntime(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := RequestConfigFromRuntime(provider.RuntimeConfig{
+		Driver:  provider.DriverAnthropic,
+		BaseURL: "https://api.anthropic.com/v1",
+		APIKey:  "test-key",
+	})
+	if err != nil {
+		t.Fatalf("RequestConfigFromRuntime() error = %v", err)
+	}
+	if cfg.DiscoveryProtocol != provider.DiscoveryProtocolAnthropicModels {
+		t.Fatalf("expected discovery protocol %q, got %q", provider.DiscoveryProtocolAnthropicModels, cfg.DiscoveryProtocol)
+	}
+	if cfg.EndpointPath != provider.DiscoveryEndpointPathModels {
+		t.Fatalf("expected endpoint path %q, got %q", provider.DiscoveryEndpointPathModels, cfg.EndpointPath)
+	}
+	if cfg.ResponseProfile != provider.DiscoveryResponseProfileGeneric {
+		t.Fatalf("expected response profile %q, got %q", provider.DiscoveryResponseProfileGeneric, cfg.ResponseProfile)
+	}
+	if cfg.AuthStrategy != provider.AuthStrategyAnthropic {
+		t.Fatalf("expected auth strategy %q, got %q", provider.AuthStrategyAnthropic, cfg.AuthStrategy)
+	}
+	if cfg.APIKey != "test-key" {
+		t.Fatalf("expected api key to be preserved, got %q", cfg.APIKey)
+	}
+}
+
+func TestRequestConfigFromRuntimeRejectsInvalidDiscoveryPath(t *testing.T) {
+	t.Parallel()
+
+	_, err := RequestConfigFromRuntime(provider.RuntimeConfig{
+		Driver:                provider.DriverOpenAICompat,
+		BaseURL:               "https://api.example.com/v1",
+		DiscoveryEndpointPath: "https://api.example.com/models",
+	})
+	if err == nil {
+		t.Fatal("expected discovery config error")
+	}
+	if !provider.IsDiscoveryConfigError(err) {
+		t.Fatalf("expected discovery config error, got %v", err)
+	}
+}
+
+func TestDiscoverModelDescriptors(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"id": "gpt-4.1", "name": "GPT 4.1"},
+				{"id": "gpt-4.1", "name": "GPT 4.1 Duplicate"},
+				{"name": "missing-id"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	models, err := DiscoverModelDescriptors(context.Background(), server.Client(), RequestConfig{
+		BaseURL:           server.URL,
+		DiscoveryProtocol: provider.DiscoveryProtocolOpenAIModels,
+	})
+	if err != nil {
+		t.Fatalf("DiscoverModelDescriptors() error = %v", err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("expected 2 merged descriptors, got %d (%+v)", len(models), models)
+	}
+	if models[0].ID != "gpt-4.1" {
+		t.Fatalf("expected descriptor id gpt-4.1, got %q", models[0].ID)
+	}
+	if models[1].ID != "missing-id" {
+		t.Fatalf("expected fallback descriptor id missing-id, got %q", models[1].ID)
+	}
+}
+
 func assertTransportProviderError(t *testing.T, err error, wantCode provider.ProviderErrorCode, wantPart string) {
 	t.Helper()
 

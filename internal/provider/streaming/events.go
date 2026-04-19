@@ -1,4 +1,4 @@
-package chatcompletions
+package streaming
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	providertypes "neo-code/internal/provider/types"
 )
 
-// EmitTextDelta 发送文本增量事件，空文本时跳过。
+// EmitTextDelta 发送文本增量事件，空文本直接跳过。
 func EmitTextDelta(ctx context.Context, events chan<- providertypes.StreamEvent, text string) error {
 	if text == "" {
 		return nil
@@ -14,7 +14,7 @@ func EmitTextDelta(ctx context.Context, events chan<- providertypes.StreamEvent,
 	return emitStreamEvent(ctx, events, providertypes.NewTextDeltaStreamEvent(text))
 }
 
-// EmitToolCallStart 发送工具调用开始事件，空名称时跳过。
+// EmitToolCallStart 发送工具调用开始事件，工具名为空时跳过。
 func EmitToolCallStart(ctx context.Context, events chan<- providertypes.StreamEvent, index int, id, name string) error {
 	if name == "" {
 		return nil
@@ -22,8 +22,7 @@ func EmitToolCallStart(ctx context.Context, events chan<- providertypes.StreamEv
 	return emitStreamEvent(ctx, events, providertypes.NewToolCallStartStreamEvent(index, id, name))
 }
 
-// EmitToolCallDelta 发送工具调用参数增量事件。
-// id 为工具调用 ID，由上游 MergeToolCallDelta 从累积状态中传入。
+// EmitToolCallDelta 发送工具参数增量事件。
 func EmitToolCallDelta(ctx context.Context, events chan<- providertypes.StreamEvent, index int, id, argumentsDelta string) error {
 	if argumentsDelta == "" {
 		return nil
@@ -31,7 +30,7 @@ func EmitToolCallDelta(ctx context.Context, events chan<- providertypes.StreamEv
 	return emitStreamEvent(ctx, events, providertypes.NewToolCallDeltaStreamEvent(index, id, argumentsDelta))
 }
 
-// EmitMessageDone 发送消息完成事件。
+// EmitMessageDone 发送消息完成事件，并在上下文取消时进行非阻塞兜底。
 func EmitMessageDone(ctx context.Context, events chan<- providertypes.StreamEvent, finishReason string, usage *providertypes.Usage) error {
 	event := providertypes.NewMessageDoneStreamEvent(finishReason, usage)
 	if ctx == nil || ctx.Err() == nil {
@@ -49,8 +48,7 @@ func EmitMessageDone(ctx context.Context, events chan<- providertypes.StreamEven
 	}
 }
 
-// FlushDataLines 逐行处理缓冲的 data lines，每行作为独立 payload 交给 processChunk。
-// OpenAI 的 SSE 实际按单行 JSON 发送，因此逐行处理更可靠。
+// FlushDataLines 逐行处理 SSE data 缓冲区。
 func FlushDataLines(dataLines []string, processChunk func(string) error) error {
 	for _, line := range dataLines {
 		if err := processChunk(line); err != nil {
@@ -60,7 +58,7 @@ func FlushDataLines(dataLines []string, processChunk func(string) error) error {
 	return nil
 }
 
-// emitStreamEvent 通过 channel 安全发送流式事件，支持上下文取消和 nil channel 保护。
+// emitStreamEvent 安全发送流式事件，并支持上下文取消。
 func emitStreamEvent(ctx context.Context, events chan<- providertypes.StreamEvent, event providertypes.StreamEvent) error {
 	if events == nil {
 		return nil

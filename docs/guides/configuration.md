@@ -178,17 +178,7 @@ models:
 - 老配置未声明 `model_source` 时，默认按 `discover` 处理。
 - `manual` 模式下必须提供 `models`，否则会在加载/创建阶段报错。
 - `manual` 模式会忽略 discovery 相关字段（如 `discovery_endpoint_path`、`discovery_response_profile`）。
-- 旧版嵌套字段（如 `openai_compatible/gemini/anthropic`）在严格校验下会被拒绝，升级前请先执行迁移脚本：
-
-```bash
-go run ./scripts/migrate_provider_yaml.go --base-dir ~/.neocode
-```
-
-仅预览不落盘：
-
-```bash
-go run ./scripts/migrate_provider_yaml.go --base-dir ~/.neocode --dry-run
-```
+- `provider.yaml` 仅支持平铺字段：`name/driver/base_url/api_key_env/model_source/chat_endpoint_path/discovery_endpoint_path/models`。
 
 ## Auto Compact 失败与校验补充
 

@@ -128,14 +128,14 @@ func TestProviderConfigIdentity(t *testing.T) {
 	if identity.BaseURL != "https://api.openai.com/v1" {
 		t.Fatalf("expected base URL, got %q", identity.BaseURL)
 	}
-	if identity.APIStyle != "chat_completions" {
-		t.Fatalf("expected api_style chat_completions, got %q", identity.APIStyle)
+	if identity.ChatProtocol != providerpkg.ChatProtocolOpenAIChatCompletions {
+		t.Fatalf("expected chat protocol %q, got %q", providerpkg.ChatProtocolOpenAIChatCompletions, identity.ChatProtocol)
 	}
 	if identity.DiscoveryEndpointPath != "/models" {
 		t.Fatalf("expected discovery endpoint /models, got %q", identity.DiscoveryEndpointPath)
 	}
-	if identity.DiscoveryResponseProfile != providerpkg.DiscoveryResponseProfileOpenAI {
-		t.Fatalf("expected discovery response profile openai, got %q", identity.DiscoveryResponseProfile)
+	if identity.ResponseProfile != providerpkg.DiscoveryResponseProfileOpenAI {
+		t.Fatalf("expected discovery response profile openai, got %q", identity.ResponseProfile)
 	}
 }
 
@@ -149,7 +149,7 @@ func TestProviderConfigResolveAPIKeyEmptyEnvName(t *testing.T) {
 	}
 }
 
-func TestProviderIdentityFromConfigDefaultsAPIStyleForOpenAICompat(t *testing.T) {
+func TestProviderIdentityFromConfigDefaultsProtocolsForOpenAICompat(t *testing.T) {
 	t.Parallel()
 
 	cfg := ProviderConfig{
@@ -163,17 +163,20 @@ func TestProviderIdentityFromConfigDefaultsAPIStyleForOpenAICompat(t *testing.T)
 	if err != nil {
 		t.Fatalf("providerIdentityFromConfig() error = %v", err)
 	}
-	if identity.APIStyle != providerpkg.OpenAICompatibleAPIStyleChatCompletions {
-		t.Fatalf("expected default api_style %q, got %q", providerpkg.OpenAICompatibleAPIStyleChatCompletions, identity.APIStyle)
+	if identity.ChatProtocol != providerpkg.ChatProtocolOpenAIChatCompletions {
+		t.Fatalf("expected default chat protocol %q, got %q", providerpkg.ChatProtocolOpenAIChatCompletions, identity.ChatProtocol)
+	}
+	if identity.DiscoveryProtocol != providerpkg.DiscoveryProtocolOpenAIModels {
+		t.Fatalf("expected default discovery protocol %q, got %q", providerpkg.DiscoveryProtocolOpenAIModels, identity.DiscoveryProtocol)
 	}
 	if identity.DiscoveryEndpointPath != providerpkg.DiscoveryEndpointPathModels {
 		t.Fatalf("expected default discovery endpoint %q, got %q", providerpkg.DiscoveryEndpointPathModels, identity.DiscoveryEndpointPath)
 	}
-	if identity.DiscoveryResponseProfile != providerpkg.DiscoveryResponseProfileOpenAI {
+	if identity.ResponseProfile != providerpkg.DiscoveryResponseProfileOpenAI {
 		t.Fatalf(
 			"expected default discovery response profile %q, got %q",
 			providerpkg.DiscoveryResponseProfileOpenAI,
-			identity.DiscoveryResponseProfile,
+			identity.ResponseProfile,
 		)
 	}
 }
@@ -578,6 +581,7 @@ func TestResolvedProviderConfigToRuntimeConfig(t *testing.T) {
 			MaxSessionAssetBytes:       1024,
 			MaxSessionAssetsTotalBytes: 2048,
 		},
+		ChatProtocol:          providerpkg.ChatProtocolOpenAIChatCompletions,
 		ChatEndpointPath:      "",
 		DiscoveryEndpointPath: providerpkg.DiscoveryEndpointPathModels,
 	}
@@ -632,5 +636,28 @@ func TestResolvedProviderConfigToRuntimeConfigReturnsProtocolNormalizationError(
 	}
 	if !strings.Contains(err.Error(), "must be a relative path") {
 		t.Fatalf("expected relative path error, got %v", err)
+	}
+}
+
+func TestResolvedProviderConfigToRuntimeConfigInfersResponsesProtocol(t *testing.T) {
+	t.Parallel()
+
+	resolved := ResolvedProviderConfig{
+		ProviderConfig: ProviderConfig{
+			Name:             "responses-gateway",
+			Driver:           "openaicompat",
+			BaseURL:          "https://llm.example.com/v1",
+			Model:            "gpt-5.4",
+			ChatEndpointPath: "/responses",
+		},
+		APIKey: "secret-key",
+	}
+
+	got, err := resolved.ToRuntimeConfig()
+	if err != nil {
+		t.Fatalf("ToRuntimeConfig() error = %v", err)
+	}
+	if got.ChatProtocol != providerpkg.ChatProtocolOpenAIResponses {
+		t.Fatalf("expected chat protocol %q, got %q", providerpkg.ChatProtocolOpenAIResponses, got.ChatProtocol)
 	}
 }

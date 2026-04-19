@@ -218,7 +218,9 @@ func (a App) renderProviderAddForm() string {
 
 	var sb strings.Builder
 	driver := provider.NormalizeProviderDriver(a.providerAddForm.Driver)
-	baseURLRequired := driver == provider.DriverAnthropic || (driver != provider.DriverOpenAICompat && driver != provider.DriverGemini)
+	baseURLRequired := driver != provider.DriverOpenAICompat &&
+		driver != provider.DriverGemini &&
+		driver != provider.DriverAnthropic
 	visible := providerAddVisibleFields(a.providerAddForm.Driver, a.providerAddForm.ModelSource)
 	clampProviderAddStep(a.providerAddForm)
 
@@ -245,7 +247,8 @@ func (a App) renderProviderAddForm() string {
 			})
 		case providerAddFieldBaseURL:
 			note := ""
-			if strings.TrimSpace(a.providerAddForm.BaseURL) == "" && (driver == provider.DriverOpenAICompat || driver == provider.DriverGemini) {
+			if strings.TrimSpace(a.providerAddForm.BaseURL) == "" &&
+				(driver == provider.DriverOpenAICompat || driver == provider.DriverGemini || driver == provider.DriverAnthropic) {
 				note = "留空会自动填充默认地址"
 			}
 			fields = append(fields, renderField{

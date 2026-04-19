@@ -309,21 +309,21 @@ func newTestApp(t *testing.T) (App, *stubRuntime) {
 	return app, runtime
 }
 
-func TestSubmitProviderAddFormRequiresAnthropicBaseURL(t *testing.T) {
+func TestSubmitProviderAddFormRequiresCustomDriverBaseURL(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.startProviderAddForm()
 
-	app.providerAddForm.Name = "anthropic-gateway"
-	app.providerAddForm.Driver = provider.DriverAnthropic
-	app.providerAddForm.APIKeyEnv = "ANTHROPIC_GATEWAY_API_KEY"
+	app.providerAddForm.Name = "custom-gateway"
+	app.providerAddForm.Driver = "custom-driver"
+	app.providerAddForm.APIKeyEnv = "CUSTOM_GATEWAY_API_KEY"
 	app.providerAddForm.APIKey = "test-key"
 	app.providerAddForm.BaseURL = ""
 
 	cmd := app.submitProviderAddForm()
 	if cmd != nil {
-		t.Fatalf("expected nil command for invalid anthropic form")
+		t.Fatalf("expected nil command for invalid custom driver form")
 	}
-	if !strings.Contains(app.providerAddForm.Error, "Base URL is required") {
+	if !strings.Contains(app.providerAddForm.Error, "Base URL is required for custom driver") {
 		t.Fatalf("expected base URL validation error, got %q", app.providerAddForm.Error)
 	}
 }
@@ -2495,7 +2495,7 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		req, err := buildProviderAddRequest(providerAddFormState{
 			Name:        "openai-compat",
 			Driver:      provider.DriverOpenAICompat,
-			ModelSource: provider.ModelSourceManual,
+			ModelSource: provider.ModelSourceDiscover,
 			APIKey:      "k",
 			APIKeyEnv:   "\x00OPENAI_COMPAT_API_KEY",
 		})
@@ -2511,7 +2511,7 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		if _, err := buildProviderAddRequest(providerAddFormState{
 			Name:        "openai-compat",
 			Driver:      provider.DriverOpenAICompat,
-			ModelSource: provider.ModelSourceManual,
+			ModelSource: provider.ModelSourceDiscover,
 			APIKey:      "k",
 			APIKeyEnv:   "PATH",
 		}); !strings.Contains(err, "protected") {
@@ -2523,7 +2523,7 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		req, err := buildProviderAddRequest(providerAddFormState{
 			Name:        "gemini",
 			Driver:      provider.DriverGemini,
-			ModelSource: provider.ModelSourceManual,
+			ModelSource: provider.ModelSourceDiscover,
 			APIKey:      "k",
 			APIKeyEnv:   "GEMINI_GATEWAY_API_KEY",
 		})
@@ -2561,21 +2561,11 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		}
 	})
 
-	t.Run("anthropic/custom require base url", func(t *testing.T) {
-		if _, err := buildProviderAddRequest(providerAddFormState{
-			Name:        "anthropic",
-			Driver:      provider.DriverAnthropic,
-			ModelSource: provider.ModelSourceManual,
-			APIKey:      "k",
-			APIKeyEnv:   "ANTHROPIC_GATEWAY_API_KEY",
-		}); !strings.Contains(err, "Base URL is required") {
-			t.Fatalf("expected anthropic base url error, got %q", err)
-		}
-
+	t.Run("custom driver requires base url", func(t *testing.T) {
 		if _, err := buildProviderAddRequest(providerAddFormState{
 			Name:        "custom",
 			Driver:      "custom-driver",
-			ModelSource: provider.ModelSourceManual,
+			ModelSource: provider.ModelSourceDiscover,
 			APIKey:      "k",
 			APIKeyEnv:   "CUSTOM_DRIVER_API_KEY",
 			BaseURL:     "",
@@ -2592,6 +2582,7 @@ func TestBuildProviderAddRequest(t *testing.T) {
 			APIKey:                "k",
 			APIKeyEnv:             "MANUAL_GATEWAY_API_KEY",
 			DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+			ManualModelsJSON:      `[{"id":"manual-model","name":"Manual Model"}]`,
 		})
 		if err != "" {
 			t.Fatalf("unexpected error: %s", err)
@@ -3072,7 +3063,7 @@ func TestUpdateInputPanelTypingPathAndProviderAddFormExtraBranches(t *testing.T)
 	}
 
 	app.startProviderAddForm()
-	app.providerAddForm.Driver = provider.DriverAnthropic
+	app.providerAddForm.Driver = "unknown-driver"
 	app.providerAddForm.Step = 4 // chat endpoint
 	modelPtr, _ = app.handleProviderAddFormInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2024-10-01")})
 	app = *modelPtr.(*App)

@@ -23,6 +23,7 @@ func ApplyAuthHeaders(header http.Header, authStrategy string, apiKey string, ap
 		header.Set("Authorization", "Bearer "+trimmedAPIKey)
 	case AuthStrategyXAPIKey:
 		header.Set("X-API-Key", trimmedAPIKey)
+		header.Set("x-goog-api-key", trimmedAPIKey)
 	case AuthStrategyAnthropic:
 		header.Set("x-api-key", trimmedAPIKey)
 		version := strings.TrimSpace(apiVersion)

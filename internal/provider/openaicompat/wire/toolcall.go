@@ -1,14 +1,14 @@
-package chatcompletions
+package wire
 
 import (
 	"context"
 	"strings"
 
+	"neo-code/internal/provider/streaming"
 	providertypes "neo-code/internal/provider/types"
 )
 
-// MergeToolCallDelta 将单个 tool call delta 累积到 toolCalls map 中，
-// 并在名称或参数首次出现时发出对应的增量事件。
+// MergeToolCallDelta 将单个 tool call 增量合并到累积状态，并在必要时发出开始/增量事件。
 func MergeToolCallDelta(
 	ctx context.Context,
 	events chan<- providertypes.StreamEvent,
@@ -21,8 +21,7 @@ func MergeToolCallDelta(
 		toolCalls[delta.Index] = call
 	}
 
-	hadName := strings.TrimSpace(call.Name) != "" // 记录是否已知工具名，用于避免重复发 start 事件。
-
+	hadName := strings.TrimSpace(call.Name) != ""
 	if id := strings.TrimSpace(delta.ID); id != "" {
 		call.ID = id
 	}
@@ -31,14 +30,14 @@ func MergeToolCallDelta(
 	}
 
 	if !hadName && strings.TrimSpace(call.Name) != "" {
-		if err := EmitToolCallStart(ctx, events, delta.Index, call.ID, call.Name); err != nil {
+		if err := streaming.EmitToolCallStart(ctx, events, delta.Index, call.ID, call.Name); err != nil {
 			return err
 		}
 	}
 
 	if args := delta.Function.Arguments; args != "" {
 		call.Arguments += args
-		if err := EmitToolCallDelta(ctx, events, delta.Index, call.ID, args); err != nil {
+		if err := streaming.EmitToolCallDelta(ctx, events, delta.Index, call.ID, args); err != nil {
 			return err
 		}
 	}

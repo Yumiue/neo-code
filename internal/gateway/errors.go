@@ -64,4 +64,3 @@ func IsStableErrorCode(code string) bool {
 	_, exists := stableErrorCodes[code]
 	return exists
 }
-

@@ -71,7 +71,7 @@ const (
 	// GatewayCodeUnauthorized 表示请求未通过认证校验。
 	GatewayCodeUnauthorized = "unauthorized"
 	// GatewayCodeAccessDenied 表示请求已认证但未通过 ACL 校验。
-	GatewayCodeAccessDenied   = "access_denied"
+	GatewayCodeAccessDenied     = "access_denied"
 	GatewayCodeResourceNotFound = "resource_not_found"
 )
 

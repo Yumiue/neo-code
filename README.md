@@ -2,16 +2,14 @@
 
 > 基于 Go + Bubble Tea 的本地 Coding Agent
 
-## NeoCode 是什么
-
+## NeoCode 是什么？
 NeoCode 是一个在终端中运行的 AI 编码助手，采用 ReAct（Reason-Act-Observe）循环模式，围绕以下主链路工作：
 
 `用户输入 -> Agent 推理 -> 调用工具 -> 获取结果 -> 继续推理 -> UI 展示`
 
 它适合希望在本地工作流中完成代码理解、修改、调试与自动化操作的开发者。
 
-## 有什么能力
-
+## 有什么能力？
 - 终端原生 TUI 交互体验（Bubble Tea）
 - Agent 可调用内置工具完成文件与命令相关任务
 - 支持 Provider/Model 切换（内建 `openai`、`gemini`、`openll`、`qiniu`）
@@ -23,26 +21,21 @@ NeoCode 是一个在终端中运行的 AI 编码助手，采用 ReAct（Reason-A
 ## 怎么用（快速开始）
 
 ### 1) 环境要求
-
 - Go `1.25+`
 - 可用的 API Key（如 OpenAI、Gemini、OpenLL、Qiniu）
 
 ### 2) 一键安装
-
 macOS / Linux：
-
 ```bash
 curl -fsSL https://raw.githubusercontent.com/1024XEngineer/neo-code/main/scripts/install.sh | bash
 ```
 
 Windows PowerShell：
-
 ```powershell
 irm https://raw.githubusercontent.com/1024XEngineer/neo-code/main/scripts/install.ps1 | iex
 ```
 
 ### 3) 从源码运行
-
 ```bash
 git clone https://github.com/1024XEngineer/neo-code.git
 cd neo-code
@@ -70,8 +63,9 @@ go run ./cmd/neocode gateway --http-listen 127.0.0.1:8080
 安全限制：为防止跨站攻击，网关网络面默认开启严格的 Origin 校验。当前仅允许
 `http://localhost`、`http://127.0.0.1`、`http://[::1]` 以及 `app://` 前缀来源连入；
 非允许来源的跨域调用会被拦截并返回 `403`。
+
 注：上述白名单机制仅针对携带 `Origin` 头的浏览器跨站请求生效。若请求不携带 `Origin` 头
-（例如 `cURL`、Postman 或本地后端脚本直连），网关默认放行。
+（例如 `curl`、Postman 或本地后端脚本直连），网关默认放行。
 
 URL Scheme 派发骨架命令（EPIC-GW-02A）：
 
@@ -93,7 +87,6 @@ export QINIU_API_KEY="your_key_here"
 ```
 
 Windows PowerShell：
-
 ```powershell
 $env:OPENAI_API_KEY = "your_key_here"
 $env:GEMINI_API_KEY = "your_key_here"
@@ -108,7 +101,6 @@ go run ./cmd/neocode --workdir /path/to/workspace
 ```
 
 ### 4) 首次使用与常用命令
-
 - `/help`：查看命令帮助
 - `/provider`：打开 provider 选择器
 - `/model`：打开 model 选择器
@@ -121,7 +113,6 @@ go run ./cmd/neocode --workdir /path/to/workspace
 - `& <command>`：在当前工作区执行本地命令
 
 示例输入：
-
 ```text
 请先阅读当前项目目录结构并给出模块职责摘要
 帮我在 internal/runtime 下定位与 tool result 回灌相关逻辑
@@ -158,17 +149,14 @@ go run ./cmd/neocode --workdir /path/to/workspace
 2. Fork 仓库并创建功能分支。
 3. 完成开发并确保改动聚焦、边界清晰。
 4. 本地自检：
-
    ```bash
    gofmt -w ./cmd ./internal
    go test ./...
    go build ./...
    ```
-
 5. 提交 PR 到主仓库并说明变更目的、影响范围和验证方式。
 
 提交前请确认：
-
 - 不提交明文密钥、个人配置或会话数据
 - 不提交无关改动与临时文件
 
@@ -191,21 +179,22 @@ go run ./cmd/neocode --workdir /path/to/workspace
   - `http_max_stream_connections=128`
   - `ipc_read/write_sec=30/30`
   - `http_read/write/shutdown_sec=15/15/2`
-- 详细设计文档：[`docs/gateway-detailed-design.md`](docs/gateway-detailed-design.md)
+
+详细设计文档：[`docs/gateway-detailed-design.md`](docs/gateway-detailed-design.md)
 
 ### Gateway JSON-RPC 方法清单（当前实现）
 
 - `gateway.authenticate`：连接级鉴权握手
 - `gateway.ping`：探活
 - `gateway.bindStream`：会话流绑定
-- `gateway.run`：发起一次运行
+- `gateway.run`：发起一次运行（Accepted-ACK，异步执行）
 - `gateway.compact`：触发会话压缩
-- `gateway.cancel`：取消当前活跃运行
+- `gateway.cancel`：按 `run_id` 精确取消目标运行（`run_id` 必填）
 - `gateway.listSessions`：查询会话摘要列表
 - `gateway.loadSession`：加载单个会话详情
 - `gateway.resolvePermission`：提交权限审批结果
 - `wake.openUrl`：处理 `neocode://` 唤醒请求
-- `gateway.event`：网关推送的通知事件（notification）
+- `gateway.event`：网关推送通知事件（notification）
 
 ## License
 

@@ -1,4 +1,4 @@
-package chatcompletions
+package wire
 
 import (
 	"context"
@@ -9,13 +9,13 @@ import (
 	"strings"
 
 	"neo-code/internal/provider"
-	"neo-code/internal/provider/openaicompat/shared"
+	"neo-code/internal/provider/streaming"
 	"neo-code/internal/provider/streaming/sse"
 	providertypes "neo-code/internal/provider/types"
 )
 
-// ConsumeStream 消费 SSE 响应流，并在 [DONE] 或 message_done 时完成收尾。
-func (p *Provider) ConsumeStream(
+// ConsumeStream 消费 OpenAI-compatible SSE 响应并发出统一流式事件。
+func ConsumeStream(
 	ctx context.Context,
 	body io.Reader,
 	events chan<- providertypes.StreamEvent,
@@ -39,7 +39,7 @@ func (p *Provider) ConsumeStream(
 
 		var chunk Chunk
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
-			return fmt.Errorf("%sdecode stream chunk: %w", shared.ErrorPrefix, err)
+			return fmt.Errorf("%sdecode stream chunk: %w", errorPrefix, err)
 		}
 
 		if chunk.Error != nil && strings.TrimSpace(chunk.Error.Message) != "" {
@@ -53,7 +53,7 @@ func (p *Provider) ConsumeStream(
 				finishReason = choice.FinishReason
 			}
 			if choice.Delta.Content != "" {
-				if err := EmitTextDelta(ctx, events, choice.Delta.Content); err != nil {
+				if err := streaming.EmitTextDelta(ctx, events, choice.Delta.Content); err != nil {
 					return err
 				}
 			}
@@ -67,12 +67,12 @@ func (p *Provider) ConsumeStream(
 	}
 
 	finishStream := func() error {
-		return EmitMessageDone(ctx, events, finishReason, &usage)
+		return streaming.EmitMessageDone(ctx, events, finishReason, &usage)
 	}
 
 	flushPendingData := func() error {
 		defer func() { dataLines = dataLines[:0] }()
-		return FlushDataLines(dataLines, processChunk)
+		return streaming.FlushDataLines(dataLines, processChunk)
 	}
 
 	for {
@@ -123,7 +123,7 @@ func (p *Provider) ConsumeStream(
 				return finishStream()
 			}
 		case strings.HasPrefix(line, ":"):
-			// SSE 注释/心跳，直接忽略。
+			// SSE 注释/心跳行，忽略。
 		}
 
 		if errors.Is(err, io.EOF) {
@@ -144,7 +144,7 @@ func (p *Provider) ConsumeStream(
 	}
 }
 
-// ExtractStreamUsage 将 OpenAI usage 响应覆盖到累计 token 统计。
+// ExtractStreamUsage 将 OpenAI usage 覆盖到累计 token 统计。
 func ExtractStreamUsage(usage *providertypes.Usage, raw *Usage) {
 	if raw == nil {
 		return

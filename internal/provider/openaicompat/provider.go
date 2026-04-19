@@ -2,54 +2,67 @@ package openaicompat
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	"neo-code/internal/provider"
-	"neo-code/internal/provider/openaicompat/chatcompletions"
-	"neo-code/internal/provider/openaicompat/shared"
+	httpdiscovery "neo-code/internal/provider/discovery/http"
 	providertypes "neo-code/internal/provider/types"
 )
 
-// Provider 封装 OpenAI 兼容 API 的客户端配置和 HTTP 连接。
+// Provider 封装 OpenAI 兼容协议的运行时配置与 HTTP 客户端。
 type Provider struct {
-	cfg    provider.RuntimeConfig
-	client *http.Client
+	cfg           provider.RuntimeConfig
+	client        *http.Client
+	executionMode string
 }
 
-// buildOptions 控制构造行为，用于注入自定义 Transport 等选项。
+// buildOptions 控制 provider 构建时的可选注入项。
 type buildOptions struct {
-	transport http.RoundTripper
+	transport     http.RoundTripper
+	executionMode string
 }
 
-// buildOption 是 New() 的函数式配置选项。
+// buildOption 是 New 的函数式配置项。
 type buildOption func(*buildOptions)
 
-// withTransport 注入自定义 HTTP Transport（如 RetryTransport）。
+// withTransport 注入自定义 HTTP Transport。
 func withTransport(rt http.RoundTripper) buildOption {
 	return func(o *buildOptions) {
 		o.transport = rt
 	}
 }
 
-// New 创建 OpenAI provider 实例。cfg 必须包含有效的接入地址和 API Key。
+// withExecutionMode 显式覆盖 openaicompat Generate 的执行模式（auto/http/sdk）。
+func withExecutionMode(mode string) buildOption {
+	return func(o *buildOptions) {
+		o.executionMode = mode
+	}
+}
+
+// New 创建 OpenAI 兼容 provider 实例。
 func New(cfg provider.RuntimeConfig, opts ...buildOption) (*Provider, error) {
-	if err := shared.ValidateRuntimeConfig(cfg); err != nil {
+	if err := validateRuntimeConfig(cfg); err != nil {
 		return nil, err
 	}
 
 	o := &buildOptions{
-		transport: http.DefaultTransport,
+		transport:     http.DefaultTransport,
+		executionMode: executionModeAuto,
 	}
 	for _, apply := range opts {
 		apply(o)
 	}
+	mode, err := normalizeExecutionMode(o.executionMode)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Provider{
-		cfg: cfg,
+		cfg:           cfg,
+		executionMode: mode,
 		client: &http.Client{
 			Timeout:   90 * time.Second,
 			Transport: o.transport,
@@ -57,49 +70,55 @@ func New(cfg provider.RuntimeConfig, opts ...buildOption) (*Provider, error) {
 	}, nil
 }
 
-// DiscoverModels 通过 /models 端点查询可用模型列表。
+// DiscoverModels 通过统一 discovery/http 入口发现可用模型。
 func (p *Provider) DiscoverModels(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
-	rawModels, err := p.fetchModels(ctx)
+	requestCfg, err := httpdiscovery.RequestConfigFromRuntime(p.cfg)
 	if err != nil {
 		return nil, err
 	}
-
-	descriptors := make([]providertypes.ModelDescriptor, 0, len(rawModels))
-	fieldAliases := decodeModelFieldAliases(p.cfg.ModelFieldAliases)
-	for _, raw := range rawModels {
-		descriptor, ok := providertypes.DescriptorFromRawModelWithAliases(raw, fieldAliases)
-		if !ok {
-			continue
-		}
-		descriptors = append(descriptors, descriptor)
-	}
-	return providertypes.MergeModelDescriptors(descriptors), nil
+	return httpdiscovery.DiscoverModelDescriptors(ctx, p.client, requestCfg)
 }
 
-// Generate 发起 SSE 流式生成请求。
-// 流中断连或协议错误时直接返回错误，由上层调用方决定重试策略。
+// Generate 发起流式生成请求。
 func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
-	if _, err := supportedChatProtocol(p.cfg); err != nil {
-		return err
-	}
-
-	impl, err := chatcompletions.New(p.cfg, p.client)
+	chatProtocol, err := supportedChatProtocol(p.cfg)
 	if err != nil {
 		return err
 	}
-	return impl.Generate(ctx, req, events)
+
+	executionMode := resolveExecutionMode(p.cfg, chatProtocol, p.executionMode)
+	switch executionMode {
+	case executionModeSDK:
+		return p.generateViaSDK(ctx, req, events, chatProtocol)
+	case executionModeHTTP:
+		return p.generateViaHTTP(ctx, req, events, chatProtocol)
+	default:
+		return provider.NewDiscoveryConfigError(
+			fmt.Sprintf("openaicompat provider: unsupported execution mode %q", executionMode),
+		)
+	}
 }
 
-// supportedChatProtocol 校验 openaicompat 当前支持的聊天协议。
+// supportedChatProtocol 校验当前驱动可用的聊天协议。
 func supportedChatProtocol(cfg provider.RuntimeConfig) (string, error) {
-	normalized := provider.ResolveDriverProtocolDefaults(cfg.Driver).ChatProtocol
-	switch normalized {
-	case provider.ChatProtocolOpenAIChatCompletions:
-		return normalized, nil
-	case provider.ChatProtocolOpenAIResponses:
+	driverProtocol := provider.ResolveDriverProtocolDefaults(cfg.Driver).ChatProtocol
+	if driverProtocol != provider.ChatProtocolOpenAIChatCompletions &&
+		driverProtocol != provider.ChatProtocolOpenAIResponses {
 		return "", provider.NewDiscoveryConfigError(
-			fmt.Sprintf("openaicompat provider: driver %q currently does not support chat protocol %q", cfg.Driver, normalized),
+			fmt.Sprintf("openaicompat provider: driver %q resolved unsupported chat protocol %q", cfg.Driver, driverProtocol),
 		)
+	}
+
+	normalized := provider.NormalizeProviderChatProtocol(cfg.ChatProtocol)
+	if normalized == "" {
+		normalized = inferChatProtocolFromEndpointPath(cfg.ChatEndpointPath)
+	}
+	if normalized == "" {
+		normalized = driverProtocol
+	}
+	switch normalized {
+	case provider.ChatProtocolOpenAIChatCompletions, provider.ChatProtocolOpenAIResponses:
+		return normalized, nil
 	default:
 		return "", provider.NewDiscoveryConfigError(
 			fmt.Sprintf("openaicompat provider: driver %q resolved unsupported chat protocol %q", cfg.Driver, normalized),
@@ -107,16 +126,19 @@ func supportedChatProtocol(cfg provider.RuntimeConfig) (string, error) {
 	}
 }
 
-// decodeModelFieldAliases 解析配置中的字段别名映射字符串，解析失败时静默回退到默认映射。
-func decodeModelFieldAliases(encoded string) map[string][]string {
-	trimmed := strings.TrimSpace(encoded)
-	if trimmed == "" {
-		return nil
+// inferChatProtocolFromEndpointPath 根据聊天端点路径推断 OpenAI-compatible 的协议类型。
+func inferChatProtocolFromEndpointPath(endpointPath string) string {
+	normalizedPath, err := provider.NormalizeProviderChatEndpointPath(endpointPath)
+	if err != nil {
+		return ""
 	}
-
-	var aliases map[string][]string
-	if err := json.Unmarshal([]byte(trimmed), &aliases); err != nil {
-		return nil
+	trimmedPath := strings.Trim(strings.ToLower(strings.TrimSpace(normalizedPath)), "/")
+	switch {
+	case trimmedPath == "responses" || strings.HasSuffix(trimmedPath, "/responses"):
+		return provider.ChatProtocolOpenAIResponses
+	case trimmedPath == "chat/completions" || strings.HasSuffix(trimmedPath, "/chat/completions"):
+		return provider.ChatProtocolOpenAIChatCompletions
+	default:
+		return ""
 	}
-	return aliases
 }

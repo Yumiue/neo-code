@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 	"time"
@@ -2511,7 +2512,7 @@ func (a *App) startProviderAddForm() {
 		Driver:                provider.DriverOpenAICompat,
 		ModelSource:           provider.ModelSourceDiscover,
 		BaseURL:               "",
-		ChatEndpointPath:      "/chat/completions",
+		ChatEndpointPath:      providerAddDefaultChatEndpointPath(provider.DriverOpenAICompat),
 		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 		ManualModelsJSON:      "",
 		APIKeyEnv:             "",
@@ -2604,8 +2605,10 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 			if currentIdx >= 0 {
+				previousDriver := a.providerAddForm.Driver
 				currentIdx = (currentIdx - 1 + len(a.providerAddForm.Drivers)) % len(a.providerAddForm.Drivers)
 				a.providerAddForm.Driver = a.providerAddForm.Drivers[currentIdx]
+				syncProviderAddDriverDefaults(a.providerAddForm, previousDriver)
 				clampProviderAddStep(a.providerAddForm)
 			}
 		} else if currentProviderAddField(a.providerAddForm) == providerAddFieldModelSource {
@@ -2631,8 +2634,10 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 			if currentIdx >= 0 {
+				previousDriver := a.providerAddForm.Driver
 				currentIdx = (currentIdx + 1) % len(a.providerAddForm.Drivers)
 				a.providerAddForm.Driver = a.providerAddForm.Drivers[currentIdx]
+				syncProviderAddDriverDefaults(a.providerAddForm, previousDriver)
 				clampProviderAddStep(a.providerAddForm)
 			}
 		} else if currentProviderAddField(a.providerAddForm) == providerAddFieldModelSource {
@@ -2682,7 +2687,14 @@ func (a *App) submitProviderAddForm() tea.Cmd {
 		return nil
 	}
 
-	request, validationErr := buildProviderAddRequest(*a.providerAddForm)
+	formForValidation := *a.providerAddForm
+	if formForValidation.Stage == providerAddFormStageFields &&
+		provider.NormalizeModelSource(normalizeProviderAddFieldValue(formForValidation.ModelSource)) == provider.ModelSourceManual &&
+		strings.TrimSpace(formForValidation.ManualModelsJSON) == "" {
+		formForValidation.ManualModelsJSON = providerAddManualModelsJSONTemplate
+	}
+
+	request, validationErr := buildProviderAddRequest(formForValidation)
 	if validationErr != "" {
 		a.providerAddForm.Error = "Please update the form: " + validationErr
 		a.providerAddForm.ErrorIsHard = false
@@ -2729,6 +2741,52 @@ type providerAddResultMsg struct {
 	Warning string
 }
 
+// providerAddDefaultChatEndpointPath 返回 provider add 表单的驱动默认聊天端点路径。
+func providerAddDefaultChatEndpointPath(driver string) string {
+	switch provider.NormalizeProviderDriver(driver) {
+	case provider.DriverGemini:
+		return "/models"
+	case provider.DriverAnthropic:
+		return "/messages"
+	default:
+		return "/chat/completions"
+	}
+}
+
+// providerAddDefaultBaseURL 返回 provider add 表单的驱动默认 base URL。
+func providerAddDefaultBaseURL(driver string) string {
+	switch provider.NormalizeProviderDriver(driver) {
+	case provider.DriverOpenAICompat:
+		return config.OpenAIDefaultBaseURL
+	case provider.DriverGemini:
+		return config.GeminiDefaultBaseURL
+	case provider.DriverAnthropic:
+		return config.AnthropicDefaultBaseURL
+	default:
+		return ""
+	}
+}
+
+// syncProviderAddDriverDefaults 在切换 driver 时按需更新默认 base URL 与 chat endpoint。
+func syncProviderAddDriverDefaults(form *providerAddFormState, previousDriver string) {
+	if form == nil {
+		return
+	}
+	oldBaseURL := providerAddDefaultBaseURL(previousDriver)
+	newBaseURL := providerAddDefaultBaseURL(form.Driver)
+	currentBaseURL := strings.TrimSpace(form.BaseURL)
+	if newBaseURL != "" && (currentBaseURL == "" || (oldBaseURL != "" && currentBaseURL == oldBaseURL)) {
+		form.BaseURL = newBaseURL
+	}
+
+	oldChatPath := providerAddDefaultChatEndpointPath(previousDriver)
+	newChatPath := providerAddDefaultChatEndpointPath(form.Driver)
+	currentChatPath := strings.TrimSpace(form.ChatEndpointPath)
+	if currentChatPath == "" || currentChatPath == oldChatPath {
+		form.ChatEndpointPath = newChatPath
+	}
+}
+
 func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, string) {
 	request := providerAddRequest{
 		Name:                  normalizeProviderAddFieldValue(form.Name),
@@ -2763,6 +2821,9 @@ func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, str
 	if config.IsProtectedEnvVarName(request.APIKeyEnv) {
 		return providerAddRequest{}, fmt.Sprintf("API Key Env %q is protected", request.APIKeyEnv)
 	}
+	if strings.TrimSpace(request.ChatEndpointPath) == "" {
+		request.ChatEndpointPath = providerAddDefaultChatEndpointPath(request.Driver)
+	}
 
 	switch request.Driver {
 	case provider.DriverOpenAICompat:
@@ -2775,7 +2836,7 @@ func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, str
 		}
 	case provider.DriverAnthropic:
 		if request.BaseURL == "" {
-			return providerAddRequest{}, "Base URL is required for anthropic provider"
+			request.BaseURL = config.AnthropicDefaultBaseURL
 		}
 	default:
 		if request.BaseURL == "" {
@@ -2783,28 +2844,90 @@ func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, str
 		}
 	}
 
-	normalizedProtocols, err := provider.NormalizeProviderProtocolSettings(
-		request.Driver,
-		"",
-		request.ChatEndpointPath,
-		"",
-		request.DiscoveryEndpointPath,
-		"",
-		"",
-		"",
-		"",
-	)
+	var manualModels []providertypes.ModelDescriptor
+	if request.ModelSource == provider.ModelSourceManual {
+		if strings.TrimSpace(request.ManualModelsJSON) == "" {
+			return providerAddRequest{}, "Model JSON is required for manual model source"
+		}
+		models, err := parseProviderAddManualModelsJSON(request.ManualModelsJSON)
+		if err != nil {
+			return providerAddRequest{}, err.Error()
+		}
+		manualModels = models
+	}
+
+	normalizedInput, err := config.NormalizeCustomProviderInput(config.SaveCustomProviderInput{
+		Name:                  request.Name,
+		Driver:                request.Driver,
+		BaseURL:               request.BaseURL,
+		ChatEndpointPath:      request.ChatEndpointPath,
+		APIKeyEnv:             request.APIKeyEnv,
+		DiscoveryEndpointPath: request.DiscoveryEndpointPath,
+		ModelSource:           request.ModelSource,
+		Models:                manualModels,
+	})
 	if err != nil {
 		return providerAddRequest{}, err.Error()
 	}
-	request.ChatEndpointPath = normalizedProtocols.ChatEndpointPath
-	if request.ModelSource == provider.ModelSourceManual {
-		request.DiscoveryEndpointPath = ""
-		return request, ""
+
+	request.Name = normalizedInput.Name
+	request.Driver = normalizedInput.Driver
+	request.BaseURL = normalizedInput.BaseURL
+	request.ChatEndpointPath = normalizedInput.ChatEndpointPath
+	request.APIKeyEnv = normalizedInput.APIKeyEnv
+	request.ModelSource = normalizedInput.ModelSource
+	request.DiscoveryEndpointPath = normalizedInput.DiscoveryEndpointPath
+	if request.ModelSource != provider.ModelSourceManual {
+		request.ManualModelsJSON = ""
 	}
-	request.DiscoveryEndpointPath = normalizedProtocols.DiscoveryEndpointPath
 
 	return request, ""
+}
+
+type providerAddManualModelJSON struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	ContextWindow   *int   `json:"context_window,omitempty"`
+	MaxOutputTokens *int   `json:"max_output_tokens,omitempty"`
+}
+
+// parseProviderAddManualModelsJSON 解析 provider add 表单中的手工模型 JSON，并复用 config 归一化校验规则。
+func parseProviderAddManualModelsJSON(raw string) ([]providertypes.ModelDescriptor, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, errors.New("Model JSON is required for manual model source")
+	}
+
+	decoder := json.NewDecoder(strings.NewReader(trimmed))
+	decoder.DisallowUnknownFields()
+
+	var models []providerAddManualModelJSON
+	if err := decoder.Decode(&models); err != nil {
+		return nil, fmt.Errorf("parse manual model json: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, errors.New("parse manual model json: unexpected trailing content")
+	}
+	if len(models) == 0 {
+		return nil, errors.New("manual model list is empty")
+	}
+
+	descriptors := make([]providertypes.ModelDescriptor, 0, len(models))
+	for _, model := range models {
+		descriptor := providertypes.ModelDescriptor{
+			ID:   strings.TrimSpace(model.ID),
+			Name: strings.TrimSpace(model.Name),
+		}
+		if model.ContextWindow != nil {
+			descriptor.ContextWindow = *model.ContextWindow
+		}
+		if model.MaxOutputTokens != nil {
+			descriptor.MaxOutputTokens = *model.MaxOutputTokens
+		}
+		descriptors = append(descriptors, descriptor)
+	}
+	return config.NormalizeCustomProviderModels(descriptors)
 }
 
 // sanitizeProviderAddInputRunes 过滤 provider 表单输入中的控制字符，避免不可见字符污染配置字段。

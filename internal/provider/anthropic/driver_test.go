@@ -11,17 +11,20 @@ import (
 	"neo-code/internal/provider"
 )
 
-func TestDriverBuildRejectsUnsupportedAnthropicMessages(t *testing.T) {
+func TestDriverBuild(t *testing.T) {
 	t.Parallel()
 
 	driver := Driver()
-	_, err := driver.Build(context.Background(), provider.RuntimeConfig{
+	p, err := driver.Build(context.Background(), provider.RuntimeConfig{
 		Driver:  DriverName,
 		BaseURL: "https://api.anthropic.com/v1",
 		APIKey:  "test-key",
 	})
-	if err == nil {
-		t.Fatal("expected unsupported anthropic messages error")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if p == nil {
+		t.Fatal("expected non-nil provider")
 	}
 }
 
@@ -41,9 +44,10 @@ func TestDriverDiscover(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"models": []map[string]any{
-				{"id": "claude-3-7-sonnet", "name": "Claude 3.7 Sonnet"},
-			},
+			"models": []map[string]any{{
+				"id":   "claude-3-7-sonnet",
+				"name": "Claude 3.7 Sonnet",
+			}},
 		})
 	}))
 	defer server.Close()

@@ -1,6 +1,6 @@
 package provider
 
-// DriverProtocolDefaults 描述各 driver 在运行期固定采用的协议、鉴权与发现解析默认值。
+// DriverProtocolDefaults 描述不同 driver 在运行时固定采用的协议与鉴权默认值。
 type DriverProtocolDefaults struct {
 	ChatProtocol      string
 	DiscoveryProtocol string
@@ -9,14 +9,14 @@ type DriverProtocolDefaults struct {
 	APIVersion        string
 }
 
-// ResolveDriverProtocolDefaults 根据 driver 返回运行期固定协议默认值，避免由外部配置决定协议分支。
+// ResolveDriverProtocolDefaults 根据 driver 返回唯一默认协议配置来源。
 func ResolveDriverProtocolDefaults(driver string) DriverProtocolDefaults {
 	switch NormalizeProviderDriver(driver) {
 	case DriverGemini:
 		return DriverProtocolDefaults{
-			ChatProtocol:      ChatProtocolOpenAIChatCompletions,
+			ChatProtocol:      ChatProtocolGeminiNative,
 			DiscoveryProtocol: DiscoveryProtocolGeminiModels,
-			AuthStrategy:      AuthStrategyBearer,
+			AuthStrategy:      AuthStrategyXAPIKey,
 			ResponseProfile:   DiscoveryResponseProfileGemini,
 		}
 	case DriverAnthropic:
@@ -43,7 +43,7 @@ func ResolveDriverProtocolDefaults(driver string) DriverProtocolDefaults {
 	}
 }
 
-// ResolveDriverDiscoveryConfig 解析 discovery 请求所需配置，并在端点为空时注入 driver 约定默认值。
+// ResolveDriverDiscoveryConfig 解析 discovery 请求所需配置，并在端点为空时注入默认值。
 func ResolveDriverDiscoveryConfig(driver string, endpointPath string) (string, string, string, error) {
 	defaults := ResolveDriverProtocolDefaults(driver)
 	normalizedEndpointPath, err := NormalizeProviderDiscoveryEndpointPath(endpointPath)
@@ -56,7 +56,7 @@ func ResolveDriverDiscoveryConfig(driver string, endpointPath string) (string, s
 	return defaults.DiscoveryProtocol, normalizedEndpointPath, defaults.ResponseProfile, nil
 }
 
-// ResolveDriverAuthConfig 返回 driver 运行期鉴权策略及附加版本配置。
+// ResolveDriverAuthConfig 返回 driver 对应的鉴权策略与附加 API 版本配置。
 func ResolveDriverAuthConfig(driver string) (string, string) {
 	defaults := ResolveDriverProtocolDefaults(driver)
 	return defaults.AuthStrategy, defaults.APIVersion

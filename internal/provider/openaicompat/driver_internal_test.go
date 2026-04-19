@@ -55,6 +55,18 @@ func TestDriverClosuresAndSupportedProtocol(t *testing.T) {
 	if got, err := supportedChatProtocol(provider.RuntimeConfig{Driver: DriverName}); err != nil || got != provider.ChatProtocolOpenAIChatCompletions {
 		t.Fatalf("expected default chat protocol, got protocol=%q err=%v", got, err)
 	}
+	if got, err := supportedChatProtocol(provider.RuntimeConfig{
+		Driver:       DriverName,
+		ChatProtocol: provider.ChatProtocolOpenAIResponses,
+	}); err != nil || got != provider.ChatProtocolOpenAIResponses {
+		t.Fatalf("expected explicit responses chat protocol, got protocol=%q err=%v", got, err)
+	}
+	if got, err := supportedChatProtocol(provider.RuntimeConfig{
+		Driver:           DriverName,
+		ChatEndpointPath: "/responses",
+	}); err != nil || got != provider.ChatProtocolOpenAIResponses {
+		t.Fatalf("expected endpoint inferred responses protocol, got protocol=%q err=%v", got, err)
+	}
 	if _, err := supportedChatProtocol(provider.RuntimeConfig{Driver: provider.DriverAnthropic}); err == nil ||
 		!strings.Contains(err.Error(), "unsupported chat protocol") {
 		t.Fatalf("expected unsupported anthropic protocol error, got %v", err)
@@ -73,7 +85,7 @@ func TestFetchModelsAndGenerateExtraBranches(t *testing.T) {
 		},
 		client: &http.Client{},
 	}
-	if _, err := p.fetchModels(context.Background()); err == nil || !strings.Contains(err.Error(), "build models request") {
+	if _, err := discoverRawModels(context.Background(), p); err == nil || !strings.Contains(err.Error(), "build models request") {
 		t.Fatalf("expected build models request error, got %v", err)
 	}
 
@@ -87,7 +99,7 @@ func TestFetchModelsAndGenerateExtraBranches(t *testing.T) {
 		},
 		client: &http.Client{},
 	}
-	if _, err := p.fetchModels(context.Background()); err == nil || !provider.IsDiscoveryConfigError(err) {
+	if _, err := discoverRawModels(context.Background(), p); err == nil || !provider.IsDiscoveryConfigError(err) {
 		t.Fatalf("expected discovery config error, got %v", err)
 	}
 
@@ -108,8 +120,8 @@ func TestFetchModelsAndGenerateExtraBranches(t *testing.T) {
 		},
 		client: server.Client(),
 	}
-	if _, err := p.fetchModels(context.Background()); err != nil {
-		t.Fatalf("fetchModels() error = %v", err)
+	if _, err := discoverRawModels(context.Background(), p); err != nil {
+		t.Fatalf("discoverRawModels() error = %v", err)
 	}
 	if auth != "" {
 		t.Fatalf("expected no authorization header, got %q", auth)
@@ -139,7 +151,6 @@ func TestValidateCatalogIdentityRejectsInvalidDiscoverySettings(t *testing.T) {
 	err := validateCatalogIdentity(provider.ProviderIdentity{
 		Driver:                DriverName,
 		BaseURL:               "https://api.example.com/v1",
-		APIStyle:              provider.OpenAICompatibleAPIStyleChatCompletions,
 		DiscoveryEndpointPath: "https://api.example.com/models",
 	})
 	if err == nil || !provider.IsDiscoveryConfigError(err) {
@@ -147,10 +158,9 @@ func TestValidateCatalogIdentityRejectsInvalidDiscoverySettings(t *testing.T) {
 	}
 
 	err = validateCatalogIdentity(provider.ProviderIdentity{
-		Driver:                   DriverName,
-		BaseURL:                  "https://api.example.com/v1",
-		APIStyle:                 provider.OpenAICompatibleAPIStyleChatCompletions,
-		DiscoveryResponseProfile: "unsupported",
+		Driver:          DriverName,
+		BaseURL:         "https://api.example.com/v1",
+		ResponseProfile: "unsupported",
 	})
 	if err == nil || !provider.IsDiscoveryConfigError(err) {
 		t.Fatalf("expected discovery config error for response profile, got %v", err)
