@@ -14,6 +14,9 @@ import (
 const (
 	defaultSubAgentDispatchConcurrency = 2
 	defaultSubAgentDispatchPollDelay   = 100 * time.Millisecond
+	// defaultSubAgentDispatchTaskTimeout 为 runtime 自动调度任务提供更宽松的默认执行超时，
+	// 避免 ask 审批等待稍长就触发 worker timeout 并误判为任务失败。
+	defaultSubAgentDispatchTaskTimeout = 5 * time.Minute
 	// defaultSubAgentDispatchMaxRetries 定义 runtime 自动调度的默认重试上限，避免瞬时失败直接终止 DAG。
 	defaultSubAgentDispatchMaxRetries = 2
 )
@@ -43,6 +46,9 @@ func (s *Service) dispatchTodos(ctx context.Context, state *runState, snapshot t
 		subagent.SchedulerConfig{
 			MaxConcurrency: resolveSubAgentDispatchConcurrency(),
 			PollInterval:   defaultSubAgentDispatchPollDelay,
+			DefaultBudget: subagent.Budget{
+				Timeout: defaultSubAgentDispatchTaskTimeout,
+			},
 			FailureMode:    subagent.SchedulerFailureContinueOnError,
 			RecoveryMode:   subagent.SchedulerRecoveryRetry,
 			MaxRetries:     defaultSubAgentDispatchMaxRetries,

@@ -177,6 +177,76 @@ func TestDispatchTodosSkipsAgentOwnedTodos(t *testing.T) {
 	}
 }
 
+func TestDispatchTodosUsesExtendedDefaultTaskTimeout(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManagerWithProviderEnvs(t, nil)
+	store := newMemoryStore()
+	service := NewWithFactory(
+		manager,
+		tools.NewRegistry(),
+		store,
+		&scriptedProviderFactory{provider: &scriptedProvider{}},
+		&stubContextBuilder{},
+	)
+
+	var (
+		mu             sync.Mutex
+		capturedBudget time.Duration
+	)
+	service.SetSubAgentFactory(subagent.NewWorkerFactory(func(role subagent.Role, policy subagent.RolePolicy) subagent.Engine {
+		_ = role
+		_ = policy
+		return subagent.EngineFunc(func(ctx context.Context, input subagent.StepInput) (subagent.StepOutput, error) {
+			_ = ctx
+			mu.Lock()
+			capturedBudget = input.Budget.Timeout
+			mu.Unlock()
+			return subagent.StepOutput{
+				Done: true,
+				Output: subagent.Output{
+					Summary:     "done",
+					Findings:    []string{"ok"},
+					Patches:     []string{"none"},
+					Risks:       []string{"low"},
+					NextActions: []string{"continue"},
+					Artifacts:   []string{"timeout-check.artifact"},
+				},
+			}, nil
+		})
+	}))
+
+	session := agentsession.New("dispatch-timeout-budget")
+	session.Workdir = manager.Get().Workdir
+	if err := session.ReplaceTodos([]agentsession.TodoItem{
+		{
+			ID:       "sub-timeout",
+			Content:  "validate timeout",
+			Executor: agentsession.TodoExecutorSubAgent,
+		},
+	}); err != nil {
+		t.Fatalf("ReplaceTodos(session) error = %v", err)
+	}
+	saveSessionToMemoryStore(store, session)
+
+	state := newRunState("run-dispatch-timeout-budget", session)
+	state.phase = controlplane.PhaseDispatch
+	progressed, err := service.dispatchTodos(context.Background(), &state, turnSnapshot{workdir: session.Workdir})
+	if err != nil {
+		t.Fatalf("dispatchTodos() error = %v", err)
+	}
+	if !progressed {
+		t.Fatalf("dispatchTodos() progressed = false, want true")
+	}
+
+	mu.Lock()
+	timeout := capturedBudget
+	mu.Unlock()
+	if timeout != defaultSubAgentDispatchTaskTimeout {
+		t.Fatalf("captured timeout = %v, want %v", timeout, defaultSubAgentDispatchTaskTimeout)
+	}
+}
+
 func TestRunAutoDispatchesSubAgentTodosFromTodoWrite(t *testing.T) {
 	t.Parallel()
 

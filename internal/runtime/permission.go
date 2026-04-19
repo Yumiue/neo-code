@@ -118,6 +118,8 @@ func (s *Service) executeToolCallWithPermission(ctx context.Context, input permi
 		return result, execErr
 	}
 
+	// 审批等待属于用户交互阶段，不应受工具执行超时约束；
+	// 否则用户未及时响应会被误判为工具失败并进入调度重试/失败链路。
 	decision, requestID, err := s.awaitPermissionDecision(ctx, input, permissionErr)
 	if err != nil {
 		return result, err
