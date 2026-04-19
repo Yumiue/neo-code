@@ -301,6 +301,12 @@ func (w *runtimeSchedulerWorker) Stop(reason subagent.StopReason) error {
 	if w == nil {
 		return errors.New("runtime: subagent scheduler worker is nil")
 	}
+
+	stopReason := reason
+	if strings.TrimSpace(string(stopReason)) == "" {
+		stopReason = subagent.StopReasonError
+	}
+
 	switch reason {
 	case subagent.StopReasonCanceled:
 		w.state = subagent.StateCanceled
@@ -309,6 +315,18 @@ func (w *runtimeSchedulerWorker) Stop(reason subagent.StopReason) error {
 	default:
 		w.state = subagent.StateFailed
 	}
+
+	if strings.TrimSpace(w.result.TaskID) == "" {
+		w.result.TaskID = strings.TrimSpace(w.task.ID)
+	}
+	if !w.role.Valid() {
+		w.result.Role = subagent.RoleCoder
+	} else if !w.result.Role.Valid() {
+		w.result.Role = w.role
+	}
+	w.result.State = w.state
+	w.result.StopReason = stopReason
+
 	w.completed = true
 	return nil
 }

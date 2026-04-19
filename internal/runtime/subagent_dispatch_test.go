@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -588,4 +589,171 @@ func saveSessionToMemoryStore(store *memoryStore, session agentsession.Session) 
 	defer store.mu.Unlock()
 	store.saves++
 	store.sessions[session.ID] = cloneSession(session)
+}
+
+func TestNewRuntimeSchedulerFactoryHandlesNilState(t *testing.T) {
+	t.Parallel()
+
+	factory := newRuntimeSchedulerFactory(nil, nil, "/tmp/workdir")
+	worker, err := factory.Create(subagent.RoleCoder)
+	if err != nil {
+		t.Fatalf("Create(coder) error = %v", err)
+	}
+	impl, ok := worker.(*runtimeSchedulerWorker)
+	if !ok {
+		t.Fatalf("worker type = %T, want *runtimeSchedulerWorker", worker)
+	}
+	if impl.workdir != "" {
+		t.Fatalf("workdir = %q, want empty when state is nil", impl.workdir)
+	}
+	if impl.runID != "" || impl.sessionID != "" || impl.agentID != "" {
+		t.Fatalf("unexpected ids: run=%q session=%q agent=%q", impl.runID, impl.sessionID, impl.agentID)
+	}
+	if _, err := factory.Create(subagent.Role("invalid-role")); err == nil {
+		t.Fatalf("Create(invalid-role) error = nil, want error")
+	}
+}
+
+func TestRuntimeSchedulerWorkerStartAndStepGuards(t *testing.T) {
+	t.Parallel()
+
+	var nilWorker *runtimeSchedulerWorker
+	if err := nilWorker.Start(subagent.Task{}, subagent.Budget{}, subagent.Capability{}); err == nil {
+		t.Fatalf("nil Start() error = nil, want error")
+	}
+	if _, err := nilWorker.Step(context.Background()); err == nil {
+		t.Fatalf("nil Step() error = nil, want error")
+	}
+	if err := nilWorker.Stop(subagent.StopReasonCanceled); err == nil {
+		t.Fatalf("nil Stop() error = nil, want error")
+	}
+	if _, err := nilWorker.Result(); err == nil {
+		t.Fatalf("nil Result() error = nil, want error")
+	}
+	if state := nilWorker.State(); state != subagent.StateIdle {
+		t.Fatalf("nil State() = %q, want %q", state, subagent.StateIdle)
+	}
+	if policy := nilWorker.Policy(); !reflect.DeepEqual(policy, subagent.RolePolicy{}) {
+		t.Fatalf("nil Policy() = %+v, want zero", policy)
+	}
+
+	worker := &runtimeSchedulerWorker{role: subagent.RoleCoder}
+	if err := worker.Start(subagent.Task{}, subagent.Budget{}, subagent.Capability{}); err == nil {
+		t.Fatalf("Start(invalid task) error = nil, want error")
+	}
+	if _, err := worker.Step(context.Background()); err == nil {
+		t.Fatalf("Step(not started) error = nil, want error")
+	}
+	if _, err := worker.Result(); err == nil {
+		t.Fatalf("Result(not completed) error = nil, want error")
+	}
+
+	validTask := subagent.Task{ID: "task-1", Goal: "implement task-1"}
+	worker.result = subagent.Result{TaskID: "old", State: subagent.StateSucceeded}
+	worker.resultErr = errors.New("old")
+	worker.completed = true
+	if err := worker.Start(validTask, subagent.Budget{MaxSteps: 1}, subagent.Capability{}); err != nil {
+		t.Fatalf("Start(valid) error = %v", err)
+	}
+	if worker.state != subagent.StateRunning || worker.completed {
+		t.Fatalf("worker state/completed = %q/%v, want running/false", worker.state, worker.completed)
+	}
+	if !reflect.DeepEqual(worker.result, subagent.Result{}) || worker.resultErr != nil {
+		t.Fatalf("worker result reset failed: result=%+v err=%v", worker.result, worker.resultErr)
+	}
+
+	completedWorker := &runtimeSchedulerWorker{started: true, completed: true}
+	if _, err := completedWorker.Step(context.Background()); err == nil {
+		t.Fatalf("Step(completed) error = nil, want error")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := worker.Step(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Step(canceled ctx) error = %v, want context.Canceled", err)
+	}
+
+	worker.started = true
+	worker.completed = false
+	worker.service = nil
+	if _, err := worker.Step(context.Background()); err == nil {
+		t.Fatalf("Step(nil service) error = nil, want error")
+	}
+}
+
+func TestRuntimeSchedulerWorkerStopPopulatesResultAndState(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		reason     subagent.StopReason
+		wantState  subagent.State
+		wantReason subagent.StopReason
+	}{
+		{
+			name:       "completed",
+			reason:     subagent.StopReasonCompleted,
+			wantState:  subagent.StateSucceeded,
+			wantReason: subagent.StopReasonCompleted,
+		},
+		{
+			name:       "canceled",
+			reason:     subagent.StopReasonCanceled,
+			wantState:  subagent.StateCanceled,
+			wantReason: subagent.StopReasonCanceled,
+		},
+		{
+			name:       "timeout",
+			reason:     subagent.StopReasonTimeout,
+			wantState:  subagent.StateFailed,
+			wantReason: subagent.StopReasonTimeout,
+		},
+		{
+			name:       "empty reason fallback",
+			reason:     subagent.StopReason(""),
+			wantState:  subagent.StateFailed,
+			wantReason: subagent.StopReasonError,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			worker := &runtimeSchedulerWorker{
+				role:  subagent.RoleReviewer,
+				task:  subagent.Task{ID: "task-stop"},
+				state: subagent.StateRunning,
+			}
+			if err := worker.Stop(tc.reason); err != nil {
+				t.Fatalf("Stop(%q) error = %v", tc.reason, err)
+			}
+			if !worker.completed {
+				t.Fatalf("completed = false, want true")
+			}
+			if got := worker.State(); got != tc.wantState {
+				t.Fatalf("State() = %q, want %q", got, tc.wantState)
+			}
+			if gotPolicy := worker.Policy(); !reflect.DeepEqual(gotPolicy, subagent.RolePolicy{}) {
+				t.Fatalf("Policy() = %+v, want zero policy", gotPolicy)
+			}
+			result, err := worker.Result()
+			if err != nil {
+				t.Fatalf("Result() error = %v", err)
+			}
+			if result.TaskID != "task-stop" {
+				t.Fatalf("result.TaskID = %q, want task-stop", result.TaskID)
+			}
+			if result.Role != subagent.RoleReviewer {
+				t.Fatalf("result.Role = %q, want reviewer", result.Role)
+			}
+			if result.State != tc.wantState {
+				t.Fatalf("result.State = %q, want %q", result.State, tc.wantState)
+			}
+			if result.StopReason != tc.wantReason {
+				t.Fatalf("result.StopReason = %q, want %q", result.StopReason, tc.wantReason)
+			}
+		})
+	}
 }
