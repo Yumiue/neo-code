@@ -54,6 +54,20 @@ func computeToolSignature(calls []providertypes.ToolCall) string {
 	return hex.EncodeToString(hash[:])
 }
 
+// computeTodoStateSignature 计算当前 Todo 列表的状态签名，用于识别 dispatch 是否产生了真实状态变化。
+func computeTodoStateSignature(items []agentsession.TodoItem) string {
+	normalized := cloneTodosForPersistence(items)
+	if len(normalized) == 0 {
+		return ""
+	}
+	encoded, err := json.Marshal(normalized)
+	if err != nil {
+		return ""
+	}
+	hash := sha256.Sum256(encoded)
+	return hex.EncodeToString(hash[:])
+}
+
 // Run 执行一次完整的 ReAct 闭环：保存用户输入、驱动模型、执行工具并发出事件。
 // 已有会话会先加锁再加载/更新，确保同一会话并发 Run 不会出现状态覆盖；
 // 新会话在创建后再绑定会话锁，不同会话可并行执行。
@@ -154,6 +168,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			s.emitTokenUsage(ctx, &state, turnResult)
 
 			if len(turnResult.assistant.ToolCalls) == 0 {
+				beforeDispatchSignature := computeTodoStateSignature(state.session.Todos)
 				s.transitionRunPhase(ctx, &state, controlplane.PhaseDispatch)
 				progressed, err := s.dispatchTodos(ctx, &state, snapshot)
 				if err != nil {
@@ -163,6 +178,25 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					s.emitRunScoped(ctx, EventAgentDone, &state, turnResult.assistant)
 					s.triggerMemoExtraction(state.session.ID, state.session.Messages, state.rememberedThisRun)
 					return nil
+				}
+
+				afterDispatchSignature := computeTodoStateSignature(state.session.Todos)
+				var evidence []controlplane.ProgressEvidenceRecord
+				if beforeDispatchSignature != afterDispatchSignature {
+					evidence = append(evidence, controlplane.ProgressEvidenceRecord{
+						Kind: controlplane.EvidenceNewInfoNonDup,
+					})
+				}
+				state.mu.Lock()
+				state.progress = controlplane.ApplyProgressEvidence(state.progress, evidence, "")
+				streak := state.progress.LastScore.NoProgressStreak
+				currentScore := state.progress.LastScore
+				state.mu.Unlock()
+				s.emitRunScoped(ctx, EventProgressEvaluated, &state, ProgressEvaluatedPayload{Score: currentScore})
+
+				if streak >= snapshot.noProgressStreakLimit {
+					err = ErrNoProgressStreakLimit
+					return err
 				}
 				s.transitionRunPhase(ctx, &state, controlplane.PhaseVerify)
 				break

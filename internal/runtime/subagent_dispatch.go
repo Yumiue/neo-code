@@ -137,6 +137,8 @@ func (s *Service) emitSubAgentSchedulerEvent(ctx context.Context, state *runStat
 		TaskID: strings.TrimSpace(event.TaskID),
 		Step:   event.Attempt,
 		Reason: strings.TrimSpace(event.Reason),
+		QueueSize: event.QueueSize,
+		Running:   event.Running,
 	}
 
 	switch event.Type {

@@ -100,7 +100,7 @@ func (s *Scheduler) Run(ctx context.Context) (ScheduleResult, error) {
 		}
 
 		snapshot := mapTodosByID(s.store.ListTodos())
-		ready, err := s.collectReadyTasks(snapshot, graph, state)
+		ready, err := s.collectReadyTasks(snapshot, graph, state, &result)
 		if err != nil {
 			s.cancelRunningTodos(state, err)
 			return finalize(result), err
@@ -122,10 +122,11 @@ func (s *Scheduler) Run(ctx context.Context) (ScheduleResult, error) {
 			if s.cfg.DispatchOnce {
 				return finalize(result), nil
 			}
-			if !hasSchedulablePotential(graph.order, snapshot) {
+			latestSnapshot := mapTodosByID(s.store.ListTodos())
+			if !hasSchedulablePotential(graph.order, latestSnapshot) {
 				return finalize(result), nil
 			}
-			if err := waitWithContext(ctx, s.nextPollDelay(snapshot)); err != nil {
+			if err := waitWithContext(ctx, s.nextPollDelay(latestSnapshot)); err != nil {
 				s.cancelRunningTodos(state, err)
 				return finalize(result), err
 			}
@@ -242,6 +243,7 @@ func (s *Scheduler) collectReadyTasks(
 	snapshot map[string]agentsession.TodoItem,
 	graph *taskGraph,
 	state *schedulerState,
+	summary *ScheduleResult,
 ) ([]agentsession.TodoItem, error) {
 	now := s.cfg.Clock()
 	ready := make([]agentsession.TodoItem, 0, len(graph.order))
@@ -255,6 +257,15 @@ func (s *Scheduler) collectReadyTasks(
 			continue
 		}
 		if _, running := state.running[id]; running {
+			continue
+		}
+
+		if reason, failed := dependencyFailureReason(item, snapshot); failed {
+			updated, err := s.ensureDependencyFailed(item, reason, state, summary)
+			if err != nil {
+				return nil, err
+			}
+			snapshot[id] = updated
 			continue
 		}
 
@@ -335,6 +346,80 @@ func (s *Scheduler) ensureBlocked(item agentsession.TodoItem, reason string, sta
 	return nil
 }
 
+// ensureDependencyFailed 将依赖已失败/取消的任务收敛到 failed，并发出可观测失败事件。
+func (s *Scheduler) ensureDependencyFailed(
+	item agentsession.TodoItem,
+	reason string,
+	state *schedulerState,
+	summary *ScheduleResult,
+) (agentsession.TodoItem, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "dependency_failed"
+	}
+
+	status := agentsession.TodoStatusFailed
+	ownerType := ""
+	ownerID := ""
+	zeroRetryCount := 0
+	zeroRetryAt := time.Time{}
+	patch := agentsession.TodoPatch{
+		Status:        &status,
+		OwnerType:     &ownerType,
+		OwnerID:       &ownerID,
+		FailureReason: &reason,
+		RetryCount:    &zeroRetryCount,
+		NextRetryAt:   &zeroRetryAt,
+	}
+	if err := s.store.UpdateTodo(item.ID, patch, item.Revision); err != nil {
+		if isRevisionConflict(err) {
+			latest, ok := s.store.FindTodo(item.ID)
+			if ok {
+				return latest, nil
+			}
+			return item, nil
+		}
+		return item, fmt.Errorf("subagent: mark dependency-failed todo: %w", err)
+	}
+
+	updated, ok := s.store.FindTodo(item.ID)
+	if !ok {
+		updated = item.Clone()
+		updated.Status = status
+		updated.OwnerType = ownerType
+		updated.OwnerID = ownerID
+		updated.FailureReason = reason
+		updated.RetryCount = zeroRetryCount
+		updated.NextRetryAt = zeroRetryAt
+	}
+	if summary != nil {
+		appendUniqueString(&summary.Failed, updated.ID)
+	}
+
+	running := 0
+	if state != nil {
+		running = len(state.running)
+	}
+	now := s.cfg.Clock()
+	s.emit(SchedulerEvent{
+		Type:    SchedulerEventFailed,
+		TaskID:  updated.ID,
+		Attempt: updated.RetryCount,
+		Reason:  reason,
+		Running: running,
+		At:      now,
+	})
+	s.emit(SchedulerEvent{
+		Type:    SchedulerEventSubAgentFailed,
+		TaskID:  updated.ID,
+		Attempt: updated.RetryCount,
+		Reason:  reason,
+		Running: running,
+		At:      now,
+	})
+	return updated, nil
+}
+
 // ensureReadyStatus 处理 blocked 到 pending 的解锁与可执行状态判定。
 func (s *Scheduler) ensureReadyStatus(item agentsession.TodoItem) (agentsession.TodoItem, bool, error) {
 	switch item.Status {
@@ -411,6 +496,8 @@ func (s *Scheduler) startReadyTasks(
 			ID:             item.ID,
 			Goal:           strings.TrimSpace(item.Content),
 			ExpectedOutput: strings.Join(item.Acceptance, "\n"),
+			FailureReason:  strings.TrimSpace(item.FailureReason),
+			RetryCount:     item.RetryCount,
 			ContextSlice:   contextSlice,
 		}
 
@@ -802,6 +889,25 @@ func dependenciesCompleted(item agentsession.TodoItem, byID map[string]agentsess
 	return true
 }
 
+// dependencyFailureReason 提取依赖失败信息，用于将下游任务明确收敛到 failed。
+func dependencyFailureReason(item agentsession.TodoItem, byID map[string]agentsession.TodoItem) (string, bool) {
+	failedDeps := make([]string, 0, len(item.Dependencies))
+	for _, depID := range item.Dependencies {
+		dependency, ok := byID[depID]
+		if !ok {
+			continue
+		}
+		if dependency.Status == agentsession.TodoStatusFailed || dependency.Status == agentsession.TodoStatusCanceled {
+			failedDeps = append(failedDeps, depID)
+		}
+	}
+	if len(failedDeps) == 0 {
+		return "", false
+	}
+	sort.Strings(failedDeps)
+	return "dependency_failed: " + strings.Join(failedDeps, ","), true
+}
+
 // todoDispatchableBySubAgent 判断任务是否应由 SubAgent 调度器执行。
 func todoDispatchableBySubAgent(item agentsession.TodoItem) bool {
 	return strings.EqualFold(strings.TrimSpace(item.Executor), agentsession.TodoExecutorSubAgent)
@@ -866,12 +972,18 @@ func collectBlockedLeft(order []string, items []agentsession.TodoItem, running m
 	byID := mapTodosByID(items)
 	left := make([]string, 0)
 	for _, id := range order {
+		item, ok := byID[id]
+		if !ok {
+			continue
+		}
+		if !todoDispatchableBySubAgent(item) {
+			continue
+		}
 		if _, ok := running[id]; ok {
 			left = append(left, id)
 			continue
 		}
-		item, ok := byID[id]
-		if !ok || item.Status.IsTerminal() {
+		if item.Status.IsTerminal() {
 			continue
 		}
 		left = append(left, id)

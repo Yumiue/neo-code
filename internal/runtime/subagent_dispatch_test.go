@@ -408,6 +408,73 @@ func TestRunKeepsDrivingAgentPathForMixedExecutorDependencies(t *testing.T) {
 	}
 }
 
+func TestDispatchTodosFinishedQueueSizeExcludesAgentTodos(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManagerWithProviderEnvs(t, nil)
+	store := newMemoryStore()
+	service := NewWithFactory(
+		manager,
+		tools.NewRegistry(),
+		store,
+		&scriptedProviderFactory{provider: &scriptedProvider{}},
+		&stubContextBuilder{},
+	)
+
+	session := agentsession.New("dispatch-finished-queue-size")
+	session.Workdir = manager.Get().Workdir
+	if err := session.ReplaceTodos([]agentsession.TodoItem{
+		{
+			ID:       "agent-1",
+			Content:  "agent prerequisite",
+			Executor: agentsession.TodoExecutorAgent,
+			Status:   agentsession.TodoStatusPending,
+		},
+		{
+			ID:           "sub-1",
+			Content:      "subagent waiting for agent",
+			Executor:     agentsession.TodoExecutorSubAgent,
+			Status:       agentsession.TodoStatusBlocked,
+			Dependencies: []string{"agent-1"},
+		},
+	}); err != nil {
+		t.Fatalf("ReplaceTodos(session) error = %v", err)
+	}
+	saveSessionToMemoryStore(store, session)
+
+	state := newRunState("run-finished-queue-size", session)
+	state.phase = controlplane.PhaseDispatch
+	progressed, err := service.dispatchTodos(context.Background(), &state, turnSnapshot{workdir: session.Workdir})
+	if err != nil {
+		t.Fatalf("dispatchTodos() error = %v", err)
+	}
+	if !progressed {
+		t.Fatalf("dispatchTodos() progressed = false, want true")
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	foundFinished := false
+	for _, event := range events {
+		if event.Type != EventSubAgentFinished {
+			continue
+		}
+		foundFinished = true
+		payload, ok := event.Payload.(SubAgentEventPayload)
+		if !ok {
+			t.Fatalf("payload type = %T, want SubAgentEventPayload", event.Payload)
+		}
+		if payload.QueueSize != 1 {
+			t.Fatalf("finished payload queue_size = %d, want 1", payload.QueueSize)
+		}
+		if payload.Running != 0 {
+			t.Fatalf("finished payload running = %d, want 0", payload.Running)
+		}
+	}
+	if !foundFinished {
+		t.Fatalf("expected EventSubAgentFinished")
+	}
+}
+
 func TestHasSubAgentTodoWaitingForAgentDependency(t *testing.T) {
 	t.Parallel()
 
@@ -473,11 +540,15 @@ func TestEmitSubAgentSchedulerEventEmitsOnlySchedulerSpecificEvents(t *testing.T
 		TaskID:  "task-1",
 		Attempt: 2,
 		Reason:  "retry_after_failure",
+		QueueSize: 5,
+		Running:   1,
 	})
 	service.emitSubAgentSchedulerEvent(context.Background(), &state, subagent.SchedulerEvent{
 		Type:   subagent.SchedulerEventBlocked,
 		TaskID: "task-2",
 		Reason: "dependency_unmet",
+		QueueSize: 4,
+		Running:   2,
 	})
 	service.emitSubAgentSchedulerEvent(context.Background(), &state, subagent.SchedulerEvent{
 		Type:      subagent.SchedulerEventFinished,
@@ -494,26 +565,106 @@ func TestEmitSubAgentSchedulerEventEmitsOnlySchedulerSpecificEvents(t *testing.T
 	assertEventContains(t, events, EventSubAgentFinished)
 
 	for _, event := range events {
-		if event.Type != EventSubAgentFinished {
-			continue
-		}
 		payload, ok := event.Payload.(SubAgentEventPayload)
 		if !ok {
 			t.Fatalf("payload type = %T, want SubAgentEventPayload", event.Payload)
 		}
-		if payload.TaskID != "" {
-			t.Fatalf("finished payload task_id = %q, want empty", payload.TaskID)
-		}
-		if payload.State != "" {
-			t.Fatalf("finished payload state = %q, want empty", payload.State)
-		}
-		if payload.Reason != "dispatch_round_finished" {
-			t.Fatalf("finished payload reason = %q, want dispatch_round_finished", payload.Reason)
-		}
-		if payload.QueueSize != 3 || payload.Running != 0 {
-			t.Fatalf("finished payload queue/running = %d/%d, want 3/0", payload.QueueSize, payload.Running)
+		switch event.Type {
+		case EventSubAgentRetried:
+			if payload.QueueSize != 5 || payload.Running != 1 {
+				t.Fatalf("retried payload queue/running = %d/%d, want 5/1", payload.QueueSize, payload.Running)
+			}
+		case EventSubAgentBlocked:
+			if payload.QueueSize != 4 || payload.Running != 2 {
+				t.Fatalf("blocked payload queue/running = %d/%d, want 4/2", payload.QueueSize, payload.Running)
+			}
+		case EventSubAgentFinished:
+			if payload.TaskID != "" {
+				t.Fatalf("finished payload task_id = %q, want empty", payload.TaskID)
+			}
+			if payload.State != "" {
+				t.Fatalf("finished payload state = %q, want empty", payload.State)
+			}
+			if payload.Reason != "dispatch_round_finished" {
+				t.Fatalf("finished payload reason = %q, want dispatch_round_finished", payload.Reason)
+			}
+			if payload.QueueSize != 3 || payload.Running != 0 {
+				t.Fatalf("finished payload queue/running = %d/%d, want 3/0", payload.QueueSize, payload.Running)
+			}
 		}
 	}
+}
+
+func TestRunStopsMixedExecutorNoToolCallStallByNoProgressLimit(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManagerWithProviderEnvs(t, nil)
+	store := newMemoryStore()
+	scripted := &scriptedProvider{
+		chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+			_ = ctx
+			_ = req
+			events <- providertypes.NewTextDeltaStreamEvent("still waiting")
+			events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
+			return nil
+		},
+	}
+	service := NewWithFactory(
+		manager,
+		tools.NewRegistry(),
+		store,
+		&scriptedProviderFactory{provider: scripted},
+		&stubContextBuilder{},
+	)
+
+	seed := agentsession.New("dispatch-mixed-no-tool-stall")
+	seed.Workdir = manager.Get().Workdir
+	if err := seed.ReplaceTodos([]agentsession.TodoItem{
+		{
+			ID:       "agent-1",
+			Content:  "agent prerequisite",
+			Executor: agentsession.TodoExecutorAgent,
+			Status:   agentsession.TodoStatusPending,
+		},
+		{
+			ID:           "sub-1",
+			Content:      "subagent follow-up",
+			Executor:     agentsession.TodoExecutorSubAgent,
+			Status:       agentsession.TodoStatusBlocked,
+			Dependencies: []string{"agent-1"},
+		},
+	}); err != nil {
+		t.Fatalf("ReplaceTodos(seed) error = %v", err)
+	}
+	saveSessionToMemoryStore(store, seed)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := service.Run(ctx, UserInput{
+		SessionID: seed.ID,
+		RunID:     "run-mixed-no-tool-stall",
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("continue")},
+	})
+	if !errors.Is(err, ErrNoProgressStreakLimit) {
+		t.Fatalf("Run() error = %v, want ErrNoProgressStreakLimit", err)
+	}
+
+	if scripted.callCount != 3 {
+		t.Fatalf("provider call count = %d, want 3", scripted.callCount)
+	}
+
+	session := firstSessionFromMemoryStore(t, store)
+	agentTodo, ok := session.FindTodo("agent-1")
+	if !ok || agentTodo.Status != agentsession.TodoStatusPending {
+		t.Fatalf("agent todo = %+v, want pending", agentTodo)
+	}
+	subTodo, ok := session.FindTodo("sub-1")
+	if !ok || subTodo.Status != agentsession.TodoStatusBlocked {
+		t.Fatalf("sub todo = %+v, want blocked", subTodo)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertStopReasonDecided(t, events, controlplane.StopReasonError, ErrNoProgressStreakLimit.Error())
 }
 
 func newSuccessSubAgentFactory() subagent.Factory {
