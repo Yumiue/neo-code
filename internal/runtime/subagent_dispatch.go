@@ -14,6 +14,8 @@ import (
 const (
 	defaultSubAgentDispatchConcurrency = 2
 	defaultSubAgentDispatchPollDelay   = 100 * time.Millisecond
+	// defaultSubAgentDispatchMaxRetries 定义 runtime 自动调度的默认重试上限，避免瞬时失败直接终止 DAG。
+	defaultSubAgentDispatchMaxRetries = 2
 )
 
 // dispatchTodos 在当前轮次执行一次 Todo DAG 调度，并把子代理事件映射到 runtime 事件流。
@@ -43,7 +45,12 @@ func (s *Service) dispatchTodos(ctx context.Context, state *runState, snapshot t
 			PollInterval:   defaultSubAgentDispatchPollDelay,
 			FailureMode:    subagent.SchedulerFailureContinueOnError,
 			RecoveryMode:   subagent.SchedulerRecoveryRetry,
-			DispatchOnce:   true,
+			MaxRetries:     defaultSubAgentDispatchMaxRetries,
+			Backoff: func(_ int) time.Duration {
+				// runtime 的 dispatch 采用单轮推进，重试不等待 wall-clock，避免 blocked 停在当前轮次之外。
+				return 0
+			},
+			DispatchOnce: true,
 			Observer: func(event subagent.SchedulerEvent) {
 				s.emitSubAgentSchedulerEvent(ctx, state, event)
 			},

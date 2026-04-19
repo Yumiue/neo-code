@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -72,6 +74,58 @@ func TestDispatchTodosExecutesSubAgentTasks(t *testing.T) {
 	}
 
 	events := collectRuntimeEvents(service.Events())
+	assertEventContains(t, events, EventSubAgentCompleted)
+	assertEventContains(t, events, EventSubAgentFinished)
+}
+
+func TestDispatchTodosRetriesTransientSubAgentFailureInSameRound(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManagerWithProviderEnvs(t, nil)
+	store := newMemoryStore()
+	service := NewWithFactory(
+		manager,
+		tools.NewRegistry(),
+		store,
+		&scriptedProviderFactory{provider: &scriptedProvider{}},
+		&stubContextBuilder{},
+	)
+	service.SetSubAgentFactory(newFailOnceThenSuccessSubAgentFactory())
+
+	session := agentsession.New("dispatch-retry-once")
+	session.Workdir = manager.Get().Workdir
+	if err := session.ReplaceTodos([]agentsession.TodoItem{
+		{
+			ID:       "retry-once",
+			Content:  "transient failure should auto retry",
+			Executor: agentsession.TodoExecutorSubAgent,
+		},
+	}); err != nil {
+		t.Fatalf("ReplaceTodos() error = %v", err)
+	}
+	saveSessionToMemoryStore(store, session)
+
+	state := newRunState("run-dispatch-retry-once", session)
+	state.turn = 1
+	state.phase = controlplane.PhaseDispatch
+	progressed, err := service.dispatchTodos(context.Background(), &state, turnSnapshot{workdir: session.Workdir})
+	if err != nil {
+		t.Fatalf("dispatchTodos() error = %v", err)
+	}
+	if !progressed {
+		t.Fatalf("dispatchTodos() progressed = false, want true")
+	}
+
+	task, ok := state.session.FindTodo("retry-once")
+	if !ok {
+		t.Fatalf("todo retry-once not found")
+	}
+	if task.Status != agentsession.TodoStatusCompleted {
+		t.Fatalf("todo retry-once status = %q, want completed", task.Status)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventContains(t, events, EventSubAgentRetried)
 	assertEventContains(t, events, EventSubAgentCompleted)
 	assertEventContains(t, events, EventSubAgentFinished)
 }
@@ -470,6 +524,41 @@ func newSuccessSubAgentFactory() subagent.Factory {
 			return subagent.StepOutput{
 				Done:  true,
 				Delta: "completed",
+				Output: subagent.Output{
+					Summary:     "completed " + input.Task.ID,
+					Findings:    []string{"ok"},
+					Patches:     []string{"none"},
+					Risks:       []string{"low"},
+					NextActions: []string{"continue"},
+					Artifacts:   []string{input.Task.ID + ".artifact"},
+				},
+			}, nil
+		})
+	})
+}
+
+func newFailOnceThenSuccessSubAgentFactory() subagent.Factory {
+	var (
+		mu       sync.Mutex
+		attempts = make(map[string]int)
+	)
+	return subagent.NewWorkerFactory(func(role subagent.Role, policy subagent.RolePolicy) subagent.Engine {
+		_ = role
+		_ = policy
+		return subagent.EngineFunc(func(ctx context.Context, input subagent.StepInput) (subagent.StepOutput, error) {
+			_ = ctx
+
+			mu.Lock()
+			attempts[input.Task.ID]++
+			attempt := attempts[input.Task.ID]
+			mu.Unlock()
+			if attempt == 1 {
+				return subagent.StepOutput{}, errors.New("transient failure")
+			}
+
+			return subagent.StepOutput{
+				Done:  true,
+				Delta: "completed after retry",
 				Output: subagent.Output{
 					Summary:     "completed " + input.Task.ID,
 					Findings:    []string{"ok"},
