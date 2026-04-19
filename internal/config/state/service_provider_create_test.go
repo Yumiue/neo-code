@@ -176,6 +176,20 @@ func TestNormalizeCreateCustomProviderInputDefaultsToDiscoverWhenModelSourceEmpt
 	}
 }
 
+func TestNormalizeCreateCustomProviderInputRejectsInvalidModelSource(t *testing.T) {
+	_, err := normalizeCreateCustomProviderInput(CreateCustomProviderInput{
+		Name:        "invalid-model-source-provider",
+		Driver:      provider.DriverOpenAICompat,
+		BaseURL:     "https://llm.example.com/v1",
+		APIKeyEnv:   "INVALID_MODEL_SOURCE_PROVIDER_API_KEY",
+		APIKey:      "test-key",
+		ModelSource: "manul",
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported model source") {
+		t.Fatalf("expected invalid model source error, got %v", err)
+	}
+}
+
 func TestNormalizeCreateCustomProviderInputManualSkipsDiscoveryFieldValidation(t *testing.T) {
 	normalized, err := normalizeCreateCustomProviderInput(CreateCustomProviderInput{
 		Name:                     "manual-no-discovery-validation",

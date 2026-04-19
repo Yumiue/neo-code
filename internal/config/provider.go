@@ -83,9 +83,6 @@ func (p ProviderConfig) Validate() error {
 	if normalizedModelSource == "" {
 		normalizedModelSource = provider.ModelSourceDiscover
 	}
-	if normalizedModelSource == provider.ModelSourceManual && strings.TrimSpace(p.DiscoveryEndpointPath) != "" {
-		return fmt.Errorf("provider %q manual model source must not set discovery_endpoint_path", p.Name)
-	}
 	if normalizedModelSource == provider.ModelSourceManual && len(p.Models) == 0 {
 		return fmt.Errorf("provider %q manual model source requires non-empty models", p.Name)
 	}

@@ -162,6 +162,9 @@ func loadCustomProvider(providerDir string) (ProviderConfig, error) {
 	if err := validateCustomProviderDiscoveryFieldPlacement(file); err != nil {
 		return ProviderConfig{}, fmt.Errorf("config: custom provider %q: %w", filepath.Base(providerDir), err)
 	}
+	if err := validateCustomProviderModelSource(file.ModelSource); err != nil {
+		return ProviderConfig{}, fmt.Errorf("config: custom provider %q: %w", filepath.Base(providerDir), err)
+	}
 
 	settings := resolveCustomProviderSettings(file)
 	models, err := customProviderModels(file.Models)
@@ -190,16 +193,23 @@ func loadCustomProvider(providerDir string) (ProviderConfig, error) {
 		Source:                   ProviderSourceCustom,
 	}
 
+	normalizedDiscoveryEndpointPath := cfg.DiscoveryEndpointPath
+	normalizedDiscoveryResponseProfile := cfg.DiscoveryResponseProfile
+	if provider.NormalizeModelSource(cfg.ModelSource) == provider.ModelSourceManual {
+		normalizedDiscoveryEndpointPath = ""
+		normalizedDiscoveryResponseProfile = ""
+	}
+
 	normalizedProtocols, err := provider.NormalizeProviderProtocolSettings(
 		cfg.Driver,
 		cfg.ChatProtocol,
 		cfg.ChatEndpointPath,
 		cfg.DiscoveryProtocol,
-		cfg.DiscoveryEndpointPath,
+		normalizedDiscoveryEndpointPath,
 		cfg.AuthStrategy,
 		cfg.ResponseProfile,
 		cfg.APIStyle,
-		cfg.DiscoveryResponseProfile,
+		normalizedDiscoveryResponseProfile,
 	)
 	if err != nil {
 		return ProviderConfig{}, fmt.Errorf("config: custom provider %q: %w", filepath.Base(providerDir), err)
@@ -210,8 +220,7 @@ func loadCustomProvider(providerDir string) (ProviderConfig, error) {
 	cfg.AuthStrategy = normalizedProtocols.AuthStrategy
 	cfg.ResponseProfile = normalizedProtocols.ResponseProfile
 	cfg.APIStyle = normalizedProtocols.LegacyAPIStyle
-	if provider.NormalizeModelSource(cfg.ModelSource) == provider.ModelSourceManual &&
-		strings.TrimSpace(settings.DiscoveryEndpointPath) == "" {
+	if provider.NormalizeModelSource(cfg.ModelSource) == provider.ModelSourceManual {
 		cfg.DiscoveryEndpointPath = ""
 		cfg.DiscoveryResponseProfile = ""
 	} else {
@@ -326,6 +335,18 @@ func resolveCustomProviderSettings(file customProviderFile) customProviderSettin
 	}
 
 	return settings
+}
+
+// validateCustomProviderModelSource 校验 model_source 字段；仅允许缺省或合法枚举值，拒绝静默回退。
+func validateCustomProviderModelSource(raw string) error {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil
+	}
+	if provider.NormalizeModelSource(trimmed) == "" {
+		return fmt.Errorf("unsupported model_source %q", raw)
+	}
+	return nil
 }
 
 // validateCustomProviderDiscoveryFieldPlacement 校验 discovery 字段写在与 driver 对应的协议块中，避免静默忽略。

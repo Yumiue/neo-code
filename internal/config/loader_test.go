@@ -400,6 +400,81 @@ func TestLoaderRejectsMalformedCustomProviderYAML(t *testing.T) {
 	}
 }
 
+func TestLoaderRejectsInvalidCustomProviderModelSource(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	customDir := filepath.Join(loader.BaseDir(), providersDirName, "company-gateway")
+	if err := os.MkdirAll(customDir, 0o755); err != nil {
+		t.Fatalf("mkdir custom provider dir: %v", err)
+	}
+
+	providerYAML := `
+name: company-gateway
+driver: openaicompat
+api_key_env: COMPANY_GATEWAY_API_KEY
+model_source: manul
+openai_compatible:
+  base_url: https://llm.example.com/v1
+`
+	if err := os.WriteFile(filepath.Join(customDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
+		t.Fatalf("write provider.yaml: %v", err)
+	}
+
+	_, err := loader.Load(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "unsupported model_source") {
+		t.Fatalf("expected invalid model_source error, got %v", err)
+	}
+}
+
+func TestLoaderLoadManualModelSourceIgnoresDiscoveryFields(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	customDir := filepath.Join(loader.BaseDir(), providersDirName, "company-gateway")
+	if err := os.MkdirAll(customDir, 0o755); err != nil {
+		t.Fatalf("mkdir custom provider dir: %v", err)
+	}
+
+	providerYAML := `
+name: company-gateway
+driver: openaicompat
+api_key_env: COMPANY_GATEWAY_API_KEY
+model_source: manual
+models:
+  - id: manual-model
+    name: Manual Model
+openai_compatible:
+  base_url: https://llm.example.com/v1
+  discovery_endpoint_path: /models
+  discovery_response_profile: invalid-profile
+`
+	if err := os.WriteFile(filepath.Join(customDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
+		t.Fatalf("write provider.yaml: %v", err)
+	}
+
+	cfg, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	loadedProvider, err := cfg.ProviderByName("company-gateway")
+	if err != nil {
+		t.Fatalf("ProviderByName(company-gateway) error = %v", err)
+	}
+	if loadedProvider.ModelSource != provider.ModelSourceManual {
+		t.Fatalf("expected model_source manual, got %q", loadedProvider.ModelSource)
+	}
+	if loadedProvider.DiscoveryEndpointPath != "" {
+		t.Fatalf("expected manual mode to clear discovery endpoint path, got %q", loadedProvider.DiscoveryEndpointPath)
+	}
+	if loadedProvider.DiscoveryResponseProfile != "" {
+		t.Fatalf(
+			"expected manual mode to clear discovery response profile, got %q",
+			loadedProvider.DiscoveryResponseProfile,
+		)
+	}
+}
+
 func TestLoaderRejectsTopLevelDiscoverySettingsForKnownDriver(t *testing.T) {
 	t.Parallel()
 
