@@ -293,8 +293,8 @@ func TestRenderProviderAddFormMasksAPIKeyAndShowsHints(t *testing.T) {
 	if !strings.Contains(form, "留空会自动填充默认地址") {
 		t.Fatalf("expected base url hint, got %q", form)
 	}
-	if !strings.Contains(form, "留空或\"/\" 使用直连 base_url") {
-		t.Fatalf("expected chat endpoint direct-mode hint, got %q", form)
+	if !strings.Contains(form, "留空会按 Chat API Mode 自动回填默认端点") {
+		t.Fatalf("expected chat endpoint autofill hint, got %q", form)
 	}
 	if !strings.Contains(form, "[Error] input invalid") {
 		t.Fatalf("expected hard error label, got %q", form)
@@ -304,7 +304,7 @@ func TestRenderProviderAddFormMasksAPIKeyAndShowsHints(t *testing.T) {
 func TestRenderProviderAddFormPromptLabel(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.startProviderAddForm()
-	app.providerAddForm.Driver = "anthropic"
+	app.providerAddForm.Driver = "custom-driver"
 	app.providerAddForm.Error = "continue input"
 	app.providerAddForm.ErrorIsHard = false
 

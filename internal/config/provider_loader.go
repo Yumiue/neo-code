@@ -25,6 +25,7 @@ type customProviderFile struct {
 	Driver                string                    `yaml:"driver"`
 	APIKeyEnv             string                    `yaml:"api_key_env"`
 	ModelSource           string                    `yaml:"model_source,omitempty"`
+	ChatAPIMode           string                    `yaml:"chat_api_mode,omitempty"`
 	BaseURL               string                    `yaml:"base_url,omitempty"`
 	ChatEndpointPath      string                    `yaml:"chat_endpoint_path,omitempty"`
 	DiscoveryEndpointPath string                    `yaml:"discovery_endpoint_path,omitempty"`
@@ -104,51 +105,32 @@ func loadCustomProvider(providerDir string) (ProviderConfig, error) {
 		return ProviderConfig{}, fmt.Errorf("config: custom provider %q: %w", filepath.Base(providerDir), err)
 	}
 
-	cfg := ProviderConfig{
+	normalizedInput, err := NormalizeCustomProviderInput(SaveCustomProviderInput{
 		Name:                  strings.TrimSpace(file.Name),
 		Driver:                strings.TrimSpace(file.Driver),
 		BaseURL:               strings.TrimSpace(file.BaseURL),
 		APIKeyEnv:             strings.TrimSpace(file.APIKeyEnv),
-		ModelSource:           provider.NormalizeModelSource(strings.TrimSpace(file.ModelSource)),
+		ModelSource:           strings.TrimSpace(file.ModelSource),
+		ChatAPIMode:           strings.TrimSpace(file.ChatAPIMode),
 		ChatEndpointPath:      strings.TrimSpace(file.ChatEndpointPath),
 		DiscoveryEndpointPath: strings.TrimSpace(file.DiscoveryEndpointPath),
 		Models:                models,
-		Source:                ProviderSourceCustom,
-	}
-	if rawModelSource := strings.TrimSpace(file.ModelSource); rawModelSource != "" && cfg.ModelSource == "" {
-		return ProviderConfig{}, fmt.Errorf(
-			"config: custom provider %q: unsupported model_source %q",
-			filepath.Base(providerDir),
-			rawModelSource,
-		)
-	}
-	if cfg.ModelSource == "" {
-		cfg.ModelSource = provider.ModelSourceDiscover
-	}
-
-	normalizedDiscoveryEndpointPath := cfg.DiscoveryEndpointPath
-	if cfg.ModelSource == provider.ModelSourceManual {
-		normalizedDiscoveryEndpointPath = ""
-	}
-	normalizedProtocols, err := provider.NormalizeProviderProtocolSettings(
-		cfg.Driver,
-		"",
-		cfg.ChatEndpointPath,
-		"",
-		normalizedDiscoveryEndpointPath,
-		"",
-		"",
-		"",
-		"",
-	)
+	})
 	if err != nil {
 		return ProviderConfig{}, fmt.Errorf("config: custom provider %q: %w", filepath.Base(providerDir), err)
 	}
-	cfg.ChatEndpointPath = normalizedProtocols.ChatEndpointPath
-	if cfg.ModelSource == provider.ModelSourceManual {
-		cfg.DiscoveryEndpointPath = ""
-	} else {
-		cfg.DiscoveryEndpointPath = normalizedProtocols.DiscoveryEndpointPath
+
+	cfg := ProviderConfig{
+		Name:                  normalizedInput.Name,
+		Driver:                normalizedInput.Driver,
+		BaseURL:               normalizedInput.BaseURL,
+		APIKeyEnv:             normalizedInput.APIKeyEnv,
+		ModelSource:           normalizedInput.ModelSource,
+		ChatAPIMode:           normalizedInput.ChatAPIMode,
+		ChatEndpointPath:      normalizedInput.ChatEndpointPath,
+		DiscoveryEndpointPath: normalizedInput.DiscoveryEndpointPath,
+		Models:                normalizedInput.Models,
+		Source:                ProviderSourceCustom,
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -176,16 +158,17 @@ func customProviderModels(models []customProviderModelFile) ([]providertypes.Mod
 			return nil, fmt.Errorf("models[%d].name is empty", index)
 		}
 
+		descriptor := providertypes.ModelDescriptor{
+			ID:              id,
+			Name:            name,
+			ContextWindow:   ManualModelOptionalIntUnset,
+			MaxOutputTokens: ManualModelOptionalIntUnset,
+		}
 		key := provider.NormalizeKey(id)
 		if _, exists := seen[key]; exists {
 			return nil, fmt.Errorf("models[%d].id %q is duplicated", index, id)
 		}
 		seen[key] = struct{}{}
-
-		descriptor := providertypes.ModelDescriptor{
-			ID:   id,
-			Name: name,
-		}
 		if model.ContextWindow != nil {
 			if *model.ContextWindow <= 0 {
 				return nil, fmt.Errorf("models[%d].context_window must be greater than 0", index)
@@ -200,8 +183,7 @@ func customProviderModels(models []customProviderModelFile) ([]providertypes.Mod
 		}
 		descriptors = append(descriptors, descriptor)
 	}
-
-	return providertypes.MergeModelDescriptors(descriptors), nil
+	return descriptors, nil
 }
 
 // SaveCustomProviderInput 定义自定义 Provider 的持久化字段。
@@ -209,6 +191,7 @@ type SaveCustomProviderInput struct {
 	Name                  string
 	Driver                string
 	BaseURL               string
+	ChatAPIMode           string
 	ChatEndpointPath      string
 	APIKeyEnv             string
 	DiscoveryEndpointPath string
@@ -218,68 +201,29 @@ type SaveCustomProviderInput struct {
 
 // SaveCustomProviderWithModels 保存自定义 provider，并可在 manual 模式下写入手工模型列表。
 func SaveCustomProviderWithModels(baseDir string, input SaveCustomProviderInput) error {
-	name := input.Name
-	driver := input.Driver
-	baseURL := input.BaseURL
-	chatEndpointPath := strings.TrimSpace(input.ChatEndpointPath)
-	apiKeyEnv := input.APIKeyEnv
-	discoveryEndpointPath := strings.TrimSpace(input.DiscoveryEndpointPath)
-	rawModelSource := strings.TrimSpace(input.ModelSource)
-	modelSource := provider.NormalizeModelSource(rawModelSource)
-	if rawModelSource != "" && modelSource == "" {
-		return fmt.Errorf("config: provider %q unsupported model_source %q", strings.TrimSpace(name), rawModelSource)
-	}
-	if modelSource == "" {
-		modelSource = provider.ModelSourceDiscover
-	}
-	if modelSource == provider.ModelSourceManual {
-		discoveryEndpointPath = ""
-		if len(providertypes.MergeModelDescriptors(input.Models)) == 0 {
-			return fmt.Errorf("config: provider %q manual model source requires non-empty models", strings.TrimSpace(name))
-		}
-	}
-
-	if err := validateCustomProviderName(name); err != nil {
+	normalizedInput, err := NormalizeCustomProviderInput(input)
+	if err != nil {
 		return err
 	}
 
-	normalizedDriver := normalizeProviderDriver(driver)
-	normalizedProtocols, err := provider.NormalizeProviderProtocolSettings(
-		normalizedDriver,
-		"",
-		chatEndpointPath,
-		"",
-		discoveryEndpointPath,
-		"",
-		"",
-		"",
-		"",
-	)
-	if err != nil {
-		return fmt.Errorf("config: normalize provider protocol settings: %w", err)
-	}
-	chatEndpointPath = normalizedProtocols.ChatEndpointPath
-	if modelSource == provider.ModelSourceDiscover {
-		discoveryEndpointPath = normalizedProtocols.DiscoveryEndpointPath
-	}
-
-	providersDir := filepath.Join(baseDir, providersDirName, name)
+	providersDir := filepath.Join(baseDir, providersDirName, normalizedInput.Name)
 	if err := os.MkdirAll(providersDir, 0o755); err != nil {
 		return fmt.Errorf("config: create provider dir: %w", err)
 	}
 
 	cfg := customProviderFile{
-		Name:        name,
-		Driver:      normalizedDriver,
-		APIKeyEnv:   apiKeyEnv,
-		ModelSource: modelSource,
+		Name:        normalizedInput.Name,
+		Driver:      normalizedInput.Driver,
+		APIKeyEnv:   normalizedInput.APIKeyEnv,
+		ModelSource: normalizedInput.ModelSource,
+		ChatAPIMode: normalizedInput.ChatAPIMode,
 	}
 
-	cfg.BaseURL = baseURL
-	cfg.ChatEndpointPath = chatEndpointPath
-	cfg.DiscoveryEndpointPath = discoveryEndpointPath
-	if modelSource == provider.ModelSourceManual {
-		cfg.Models = toCustomProviderModelFiles(input.Models)
+	cfg.BaseURL = normalizedInput.BaseURL
+	cfg.ChatEndpointPath = normalizedInput.ChatEndpointPath
+	cfg.DiscoveryEndpointPath = normalizedInput.DiscoveryEndpointPath
+	if normalizedInput.ModelSource == ModelSourceManual {
+		cfg.Models = toCustomProviderModelFiles(normalizedInput.Models)
 	}
 
 	data, err := yaml.Marshal(cfg)
@@ -293,35 +237,6 @@ func SaveCustomProviderWithModels(baseDir string, input SaveCustomProviderInput)
 	}
 
 	return nil
-}
-
-// validateModelDescriptorsRequireName 校验模型描述的 id/name 必填，拒绝 name 缺省回填为 id。
-func validateModelDescriptorsRequireName(
-	models []providertypes.ModelDescriptor,
-) ([]providertypes.ModelDescriptor, error) {
-	if len(models) == 0 {
-		return nil, nil
-	}
-	normalized := make([]providertypes.ModelDescriptor, 0, len(models))
-	for index, model := range models {
-		id := strings.TrimSpace(model.ID)
-		if id == "" {
-			return nil, fmt.Errorf("config: models[%d].id is empty", index)
-		}
-		name := strings.TrimSpace(model.Name)
-		if name == "" {
-			return nil, fmt.Errorf("config: models[%d].name is empty", index)
-		}
-		normalized = append(normalized, providertypes.ModelDescriptor{
-			ID:              id,
-			Name:            name,
-			Description:     strings.TrimSpace(model.Description),
-			ContextWindow:   model.ContextWindow,
-			MaxOutputTokens: model.MaxOutputTokens,
-			CapabilityHints: model.CapabilityHints,
-		})
-	}
-	return normalized, nil
 }
 
 // toCustomProviderModelFiles 将模型描述列表转换为 custom provider.yaml 可持久化格式。

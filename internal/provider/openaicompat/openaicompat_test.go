@@ -299,7 +299,7 @@ func TestDiscoverModelsParsesStringModelIDs(t *testing.T) {
 	}
 }
 
-// --- toOpenAIMessage 转换测试 ---
+// --- toOpenAIMessage 閺夌儐鍓氬畷鎻捗圭€ｎ厾妲?---
 
 func TestToOpenAIMessage_BasicMessage(t *testing.T) {
 	t.Parallel()
@@ -383,7 +383,7 @@ func TestToOpenAIMessage_EmptyToolCalls(t *testing.T) {
 	}
 }
 
-// --- extractStreamUsage 测试 ---
+// --- extractStreamUsage 婵炴潙顑堥惁?---
 
 func TestExtractStreamUsage_NilInput(t *testing.T) {
 	t.Parallel()
@@ -429,13 +429,13 @@ func TestExtractStreamUsage_MultipleOverwrites(t *testing.T) {
 	}
 }
 
-// --- buildRequest 边界测试 ---
+// --- buildRequest 閺夊牆婀遍弲顐⒚圭€ｎ厾妲?---
 
 func TestBuildRequest_EmptyModelReturnsError(t *testing.T) {
 	t.Parallel()
 
-	// 直接构造 Provider 跳过 New() 的 Validate 校验，
-	// 以便测试 buildRequest 对空 model 的独立校验。
+	// Directly construct Provider and bypass New() validation
+	// to test BuildRequest's own empty-model check.
 	p := &Provider{
 		cfg: provider.RuntimeConfig{
 			Name:         DriverName,
@@ -588,15 +588,10 @@ func TestBuildRequest_WhitespaceSystemPromptSkipped(t *testing.T) {
 	}
 }
 
-// --- consumeStream SSE 场景测试 ---
+// --- consumeStream SSE 闁革妇鍎ゅ▍娆徝圭€ｎ厾妲?---
 
 func TestConsumeStream_SSECommentIgnored(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
-
-	p, err := chatcompletions.New(resolvedConfig("", ""), &http.Client{})
-	if err != nil {
-		t.Fatalf("chatcompletions.New() error = %v", err)
-	}
 
 	sseData := `: heartbeat
 data: {"id":"a","choices":[{"delta":{"content":"ok"},"finish_reason":""}]}
@@ -604,7 +599,7 @@ data: [DONE]
 
 `
 	events := make(chan providertypes.StreamEvent, 4)
-	err = p.ConsumeStream(context.Background(), strings.NewReader(sseData), events)
+	err := chatcompletions.ConsumeStream(context.Background(), strings.NewReader(sseData), events)
 	if err != nil {
 		t.Fatalf("consumeStream() error = %v", err)
 	}
@@ -623,15 +618,10 @@ data: [DONE]
 func TestConsumeStream_ChunkErrorInPayload(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
 
-	p, err := chatcompletions.New(resolvedConfig("", ""), &http.Client{})
-	if err != nil {
-		t.Fatalf("chatcompletions.New() error = %v", err)
-	}
-
 	sseData := `data: {"error":{"message":"rate limit exceeded"}}
 `
 	events := make(chan providertypes.StreamEvent, 1)
-	err = p.ConsumeStream(context.Background(), strings.NewReader(sseData), events)
+	err := chatcompletions.ConsumeStream(context.Background(), strings.NewReader(sseData), events)
 	if err == nil {
 		t.Fatal("expected error for chunk with error field")
 	}
@@ -643,18 +633,13 @@ func TestConsumeStream_ChunkErrorInPayload(t *testing.T) {
 func TestConsumeStream_MultiLineDataPayload(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
 
-	p, err := chatcompletions.New(resolvedConfig("", ""), &http.Client{})
-	if err != nil {
-		t.Fatalf("chatcompletions.New() error = %v", err)
-	}
-
 	sseData := `data: {"id":"a","choices":[{"delta":{"content":"part1"},"finish_reason":""}]}
 data: {"id":"b","choices":[{"delta":{"content":"part2"},"finish_reason":"stop"}]}
 data: [DONE]
 
 `
 	events := make(chan providertypes.StreamEvent, 8)
-	err = p.ConsumeStream(context.Background(), strings.NewReader(sseData), events)
+	err := chatcompletions.ConsumeStream(context.Background(), strings.NewReader(sseData), events)
 	if err != nil {
 		t.Fatalf("consumeStream() error = %v", err)
 	}
@@ -667,15 +652,10 @@ data: [DONE]
 func TestConsumeStream_EOFWithoutDoneReturnsInterrupted(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
 
-	p, err := chatcompletions.New(resolvedConfig("", ""), &http.Client{})
-	if err != nil {
-		t.Fatalf("chatcompletions.New() error = %v", err)
-	}
-
 	sseData := `data: {"id":"a","choices":[{"delta":{"content":"partial"},"finish_reason":""}]}
 `
 	events := make(chan providertypes.StreamEvent, 4)
-	err = p.ConsumeStream(context.Background(), strings.NewReader(sseData), events)
+	err := chatcompletions.ConsumeStream(context.Background(), strings.NewReader(sseData), events)
 	if err == nil {
 		t.Fatal("expected interrupted error for EOF without [DONE]")
 	}
@@ -697,11 +677,6 @@ func TestConsumeStream_EOFWithoutDoneReturnsInterrupted(t *testing.T) {
 func TestConsumeStream_ContextCancellation(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
 
-	p, err := chatcompletions.New(resolvedConfig("", ""), &http.Client{})
-	if err != nil {
-		t.Fatalf("chatcompletions.New() error = %v", err)
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -709,7 +684,7 @@ func TestConsumeStream_ContextCancellation(t *testing.T) {
 
 `
 	events := make(chan providertypes.StreamEvent, 1)
-	err = p.ConsumeStream(ctx, strings.NewReader(sseData), events)
+	err := chatcompletions.ConsumeStream(ctx, strings.NewReader(sseData), events)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got: %v", err)
 	}
@@ -721,15 +696,10 @@ func TestConsumeStream_ContextCancellation(t *testing.T) {
 func TestConsumeStream_ContextCancellationOnReadErrorReturnsCanceled(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
 
-	p, err := chatcompletions.New(resolvedConfig("", ""), &http.Client{})
-	if err != nil {
-		t.Fatalf("chatcompletions.New() error = %v", err)
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	body := &cancelThenErrorReader{cancel: cancel, err: io.ErrClosedPipe}
 
-	err = p.ConsumeStream(ctx, body, make(chan providertypes.StreamEvent, 1))
+	err := chatcompletions.ConsumeStream(ctx, body, make(chan providertypes.StreamEvent, 1))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
@@ -741,11 +711,6 @@ func TestConsumeStream_ContextCancellationOnReadErrorReturnsCanceled(t *testing.
 func TestConsumeStream_ContextCancellationAtEOFWithoutDoneReturnsCanceled(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
 
-	p, err := chatcompletions.New(resolvedConfig("", ""), &http.Client{})
-	if err != nil {
-		t.Fatalf("chatcompletions.New() error = %v", err)
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	sseData := `data: {"id":"a","choices":[{"delta":{"content":"hello"}}]}
 `
@@ -755,7 +720,7 @@ func TestConsumeStream_ContextCancellationAtEOFWithoutDoneReturnsCanceled(t *tes
 	}
 	events := make(chan providertypes.StreamEvent, 8)
 
-	err = p.ConsumeStream(ctx, body, events)
+	err := chatcompletions.ConsumeStream(ctx, body, events)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
@@ -767,11 +732,6 @@ func TestConsumeStream_ContextCancellationAtEOFWithoutDoneReturnsCanceled(t *tes
 func TestConsumeStream_DoneThenCancellationStillFinishes(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
 
-	p, err := chatcompletions.New(resolvedConfig("", ""), &http.Client{})
-	if err != nil {
-		t.Fatalf("chatcompletions.New() error = %v", err)
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	body := &cancelAfterDoneReader{
 		payload: []byte("data: [DONE]\n"),
@@ -780,7 +740,7 @@ func TestConsumeStream_DoneThenCancellationStillFinishes(t *testing.T) {
 	}
 	events := make(chan providertypes.StreamEvent, 4)
 
-	err = p.ConsumeStream(ctx, body, events)
+	err := chatcompletions.ConsumeStream(ctx, body, events)
 	if err != nil {
 		t.Fatalf("expected completed stream after [DONE], got %v", err)
 	}
@@ -799,18 +759,13 @@ func TestConsumeStream_DoneThenCancellationStillFinishes(t *testing.T) {
 func TestConsumeStream_FinishReasonAccumulation(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
 
-	p, err := chatcompletions.New(resolvedConfig("", ""), &http.Client{})
-	if err != nil {
-		t.Fatalf("chatcompletions.New() error = %v", err)
-	}
-
 	sseData := `data: {"id":"a","choices":[{"delta":{"content":"text"},"finish_reason":""}]}
 data: {"id":"b","choices":[{"index":0,"finish_reason":"stop"}]}
 data: [DONE]
 
 `
 	events := make(chan providertypes.StreamEvent, 8)
-	err = p.ConsumeStream(context.Background(), strings.NewReader(sseData), events)
+	err := chatcompletions.ConsumeStream(context.Background(), strings.NewReader(sseData), events)
 	if err != nil {
 		t.Fatalf("consumeStream() error = %v", err)
 	}
@@ -831,11 +786,11 @@ data: [DONE]
 	}
 }
 
-// --- emit 函数守卫和边界测试 ---
+// --- emit 闁告垼濮ら弳鐔衡偓鐟扮墕瀹曞ジ宕畝鍐彾闁伙絽鏈粊瀵告嫚?---
 
 func TestEmitTextDelta_NilEventsGuard(t *testing.T) {
 	t.Parallel()
-	if err := chatcompletions.EmitTextDelta(context.Background(), nil, "some text"); err != nil {
+	if err := provider.EmitTextDelta(context.Background(), nil, "some text"); err != nil {
 		t.Fatalf("expected nil events guard to return nil, got %v", err)
 	}
 }
@@ -843,7 +798,7 @@ func TestEmitTextDelta_NilEventsGuard(t *testing.T) {
 func TestEmitTextDelta_EmptyTextGuard(t *testing.T) {
 	t.Parallel()
 	events := make(chan providertypes.StreamEvent, 1)
-	if err := chatcompletions.EmitTextDelta(context.Background(), events, ""); err != nil {
+	if err := provider.EmitTextDelta(context.Background(), events, ""); err != nil {
 		t.Fatalf("expected empty text guard to return nil, got %v", err)
 	}
 	select {
@@ -853,12 +808,12 @@ func TestEmitTextDelta_EmptyTextGuard(t *testing.T) {
 	}
 }
 
-// --- flushDataLines 测试 ---
+// --- flushDataLines 婵炴潙顑堥惁?---
 
 func TestFlushDataLines_EmptyLines(t *testing.T) {
 	t.Parallel()
 	called := false
-	err := chatcompletions.FlushDataLines([]string{}, func(string) error { called = true; return nil })
+	err := provider.FlushDataLines([]string{}, func(string) error { called = true; return nil })
 	if err != nil {
 		t.Fatalf("flushDataLines() error = %v", err)
 	}
@@ -870,7 +825,7 @@ func TestFlushDataLines_EmptyLines(t *testing.T) {
 func TestFlushDataLines_SingleLine(t *testing.T) {
 	t.Parallel()
 	var received string
-	err := chatcompletions.FlushDataLines([]string{"line1"}, func(p string) error { received = p; return nil })
+	err := provider.FlushDataLines([]string{"line1"}, func(p string) error { received = p; return nil })
 	if err != nil {
 		t.Fatalf("flushDataLines() error = %v", err)
 	}
@@ -882,7 +837,7 @@ func TestFlushDataLines_SingleLine(t *testing.T) {
 func TestFlushDataLines_MultipleLinesProcessedIndividually(t *testing.T) {
 	t.Parallel()
 	var received []string
-	err := chatcompletions.FlushDataLines([]string{"a", "b", "c"}, func(p string) error { received = append(received, p); return nil })
+	err := provider.FlushDataLines([]string{"a", "b", "c"}, func(p string) error { received = append(received, p); return nil })
 	if err != nil {
 		t.Fatalf("flushDataLines() error = %v", err)
 	}
@@ -894,13 +849,13 @@ func TestFlushDataLines_MultipleLinesProcessedIndividually(t *testing.T) {
 func TestFlushDataLines_ProcessChunkError(t *testing.T) {
 	t.Parallel()
 	expectedErr := errors.New("process error")
-	err := chatcompletions.FlushDataLines([]string{"data"}, func(string) error { return expectedErr })
+	err := provider.FlushDataLines([]string{"data"}, func(string) error { return expectedErr })
 	if err != expectedErr {
 		t.Fatalf("expected processChunk error, got %v", err)
 	}
 }
 
-// --- DiscoverModels 错误场景测试 ---
+// --- DiscoverModels tests ---
 
 func TestDiscoverModels_HTTPError(t *testing.T) {
 	t.Parallel()
@@ -990,8 +945,8 @@ func TestFetchModelsSetsAuthorizationHeader(t *testing.T) {
 	}
 	p.client = server.Client()
 
-	if _, err := p.fetchModels(context.Background()); err != nil {
-		t.Fatalf("fetchModels() error = %v", err)
+	if _, err := discoverRawModels(context.Background(), p); err != nil {
+		t.Fatalf("discoverRawModels() error = %v", err)
 	}
 	if authorization != "Bearer test-key" {
 		t.Fatalf("expected bearer authorization header, got %q", authorization)
@@ -1013,7 +968,7 @@ func TestFetchModelsDecodeError(t *testing.T) {
 	}
 	p.client = server.Client()
 
-	_, err = p.fetchModels(context.Background())
+	_, err = discoverRawModels(context.Background(), p)
 	if err == nil || !strings.Contains(err.Error(), "decode models response") {
 		t.Fatalf("expected decode error, got %v", err)
 	}
@@ -1039,9 +994,9 @@ func TestFetchModelsAcceptsObjectData(t *testing.T) {
 	}
 	p.client = server.Client()
 
-	models, err := p.fetchModels(context.Background())
+	models, err := discoverRawModels(context.Background(), p)
 	if err != nil {
-		t.Fatalf("fetchModels() error = %v", err)
+		t.Fatalf("discoverRawModels() error = %v", err)
 	}
 	if len(models) != 1 {
 		t.Fatalf("expected 1 model, got %d", len(models))
@@ -1066,7 +1021,7 @@ func TestFetchModelsRejectsUnsupportedDataType(t *testing.T) {
 	}
 	p.client = server.Client()
 
-	_, err = p.fetchModels(context.Background())
+	_, err = discoverRawModels(context.Background(), p)
 	if err == nil || !strings.Contains(err.Error(), "decode models response") {
 		t.Fatalf("expected decode models response error, got %v", err)
 	}
@@ -1105,7 +1060,7 @@ func TestDiscoverModelsSkipsInvalidEntriesAndDedupes(t *testing.T) {
 	}
 }
 
-// --- mergeToolCallDelta 边界测试 ---
+// --- mergeToolCallDelta tests ---
 
 func TestMergeToolCallDelta_MultipleIndices(t *testing.T) {
 	t.Parallel()
@@ -1173,7 +1128,7 @@ func TestMergeToolCallDelta_IDUpdateOnly(t *testing.T) {
 	}
 }
 
-// --- Generate 集成测试 ---
+// --- Generate tests ---
 
 func TestGenerate_BaseURLTrailingSlashHandled(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
@@ -1239,11 +1194,49 @@ data: [DONE]
 	}
 }
 
-func TestGenerate_UsesDirectBaseURLWhenChatEndpointPathEmpty(t *testing.T) {
+func TestGenerate_UsesResponsesEndpointPath(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/text/chatcompletion_v2" {
+		if r.URL.Path != "/responses" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"type":"response.output_text.delta","delta":"ok"}
+data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}
+data: [DONE]
+
+`))
+	}))
+	defer server.Close()
+
+	cfg := resolvedConfig(server.URL, config.OpenAIDefaultModel)
+	cfg.ChatEndpointPath = "/responses"
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p.client = server.Client()
+
+	events := make(chan providertypes.StreamEvent, 4)
+	err = p.Generate(context.Background(), providertypes.GenerateRequest{
+		Model:    config.OpenAIDefaultModel,
+		Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}}},
+	}, events)
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	drained := drainStreamEvents(events)
+	if len(drained) != 2 || drained[0].Type != providertypes.StreamEventTextDelta || drained[1].Type != providertypes.StreamEventMessageDone {
+		t.Fatalf("unexpected events: %+v", drained)
+	}
+}
+
+func TestGenerate_UsesDefaultCompletionsEndpointWhenChatEndpointPathEmpty(t *testing.T) {
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/text/chatcompletion_v2/chat/completions" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -1269,6 +1262,45 @@ data: [DONE]
 	}, events)
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
+	}
+}
+
+func TestGenerate_UsesDefaultResponsesEndpointWhenChatEndpointPathEmpty(t *testing.T) {
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/text/chatcompletion_v2/responses" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"type":"response.output_text.delta","delta":"ok"}
+data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}
+data: [DONE]
+
+`))
+	}))
+	defer server.Close()
+
+	cfg := resolvedConfig(server.URL+"/v1/text/chatcompletion_v2", config.OpenAIDefaultModel)
+	cfg.ChatEndpointPath = ""
+	cfg.ChatAPIMode = provider.ChatAPIModeResponses
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p.client = server.Client()
+
+	events := make(chan providertypes.StreamEvent, 4)
+	err = p.Generate(context.Background(), providertypes.GenerateRequest{
+		Model:    config.OpenAIDefaultModel,
+		Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}}},
+	}, events)
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	drained := drainStreamEvents(events)
+	if len(drained) != 2 || drained[0].Type != providertypes.StreamEventTextDelta || drained[1].Type != providertypes.StreamEventMessageDone {
+		t.Fatalf("unexpected events: %+v", drained)
 	}
 }
 
@@ -1305,7 +1337,7 @@ data: [DONE]
 	}
 }
 
-// --- parseError 边界测试 ---
+// --- parseError tests ---
 
 func TestParseError_ReadBodyFailure(t *testing.T) {
 	t.Parallel()
@@ -1313,7 +1345,7 @@ func TestParseError_ReadBodyFailure(t *testing.T) {
 	readErr := errors.New("simulated read failure")
 	resp := &http.Response{Status: "400 Bad Request", StatusCode: 400, Body: &failingReadCloser{err: readErr}}
 
-	err := chatcompletions.ParseError(resp)
+	err := ParseError(resp)
 	if err == nil {
 		t.Fatal("expected error when body read fails")
 	}
@@ -1326,7 +1358,7 @@ func TestParseError_InvalidJSONBody(t *testing.T) {
 	t.Parallel()
 
 	resp := &http.Response{Status: "400 Bad Request", StatusCode: 400, Body: ioNopCloser("this is not json at all")}
-	err := chatcompletions.ParseError(resp)
+	err := ParseError(resp)
 	if err == nil {
 		t.Fatal("expected error for non-JSON body")
 	}
@@ -1343,7 +1375,7 @@ func TestParseError_ClassifiesContextTooLong(t *testing.T) {
 		StatusCode: 400,
 		Body:       ioNopCloser(`{"error":{"message":"This model's maximum context length is 128000 tokens. However, your messages resulted in 140000 tokens."}}`),
 	}
-	err := chatcompletions.ParseError(resp)
+	err := ParseError(resp)
 	if err == nil {
 		t.Fatal("expected context too long error")
 	}
@@ -1352,7 +1384,7 @@ func TestParseError_ClassifiesContextTooLong(t *testing.T) {
 	}
 }
 
-// --- 原有保留的集成测试（保持兼容） ---
+// --- Provider.Generate end-to-end tests ---
 
 func TestProviderGenerateConsumesSSEAndMergesToolCalls(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
@@ -1511,7 +1543,7 @@ func TestProviderGenerateRejectsUnsupportedDriverProtocol(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected unsupported protocol error")
 	}
-	if !strings.Contains(err.Error(), "unsupported chat protocol") {
+	if !strings.Contains(err.Error(), "unsupported") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -1578,7 +1610,7 @@ func TestParseErrorAndEmitTextDelta(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			resp := &http.Response{Status: tt.status, Body: ioNopCloser(tt.body)}
-			err := chatcompletions.ParseError(resp)
+			err := ParseError(resp)
 			if err == nil || !strings.Contains(err.Error(), tt.expectErr) {
 				t.Fatalf("expected error containing %q, got %v", tt.expectErr, err)
 			}
@@ -1586,7 +1618,7 @@ func TestParseErrorAndEmitTextDelta(t *testing.T) {
 	}
 
 	eventCh := make(chan providertypes.StreamEvent, 1)
-	if err := chatcompletions.EmitTextDelta(context.Background(), eventCh, "chunk"); err != nil {
+	if err := provider.EmitTextDelta(context.Background(), eventCh, "chunk"); err != nil {
 		t.Fatalf("emitTextDelta() error = %v", err)
 	}
 	if got := <-eventCh; got.Type != providertypes.StreamEventTextDelta || requireTextDeltaPayload(t, got).Text != "chunk" {
@@ -1595,7 +1627,7 @@ func TestParseErrorAndEmitTextDelta(t *testing.T) {
 
 	cancelledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := chatcompletions.EmitTextDelta(cancelledCtx, make(chan providertypes.StreamEvent), "chunk"); err == nil {
+	if err := provider.EmitTextDelta(cancelledCtx, make(chan providertypes.StreamEvent), "chunk"); err == nil {
 		t.Fatalf("expected cancellation error")
 	}
 }
@@ -1603,18 +1635,13 @@ func TestParseErrorAndEmitTextDelta(t *testing.T) {
 func TestProviderConsumeStreamRejectsDirtyJSON(t *testing.T) {
 	t.Parallel()
 
-	p, err := chatcompletions.New(resolvedConfig(config.OpenAIDefaultBaseURL, config.OpenAIDefaultModel), &http.Client{})
-	if err != nil {
-		t.Fatalf("chatcompletions.New() error = %v", err)
-	}
-
-	err = p.ConsumeStream(context.Background(), strings.NewReader("data: {not-json}\n\n"), make(chan providertypes.StreamEvent, 1))
+	err := chatcompletions.ConsumeStream(context.Background(), strings.NewReader("data: {not-json}\n\n"), make(chan providertypes.StreamEvent, 1))
 	if err == nil || !strings.Contains(err.Error(), "decode stream chunk") {
 		t.Fatalf("expected dirty JSON decode error, got %v", err)
 	}
 }
 
-// --- 辅助函数 ---
+// --- test helpers ---
 
 func resolvedConfig(baseURL string, model string) provider.RuntimeConfig {
 	if strings.TrimSpace(baseURL) == "" {
@@ -1713,18 +1740,21 @@ type readCloser struct{ *strings.Reader }
 
 func (r *readCloser) Close() error { return nil }
 
-// --- 错误包装测试 ---
+func discoverRawModels(ctx context.Context, p *Provider) ([]map[string]any, error) {
+	requestCfg, err := RequestConfigFromRuntime(p.cfg)
+	if err != nil {
+		return nil, err
+	}
+	return DiscoverRawModels(ctx, p.client, requestCfg)
+}
+
+// --- ConsumeStream interruption tests ---
 
 func TestConsumeStream_WrapsNonEOFAsInterrupted(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
 
-	p, err := chatcompletions.New(resolvedConfig("", ""), &http.Client{})
-	if err != nil {
-		t.Fatalf("chatcompletions.New() error = %v", err)
-	}
-
 	errReader := &errReader{err: io.ErrClosedPipe}
-	err = p.ConsumeStream(context.Background(), errReader, make(chan providertypes.StreamEvent, 1))
+	err := chatcompletions.ConsumeStream(context.Background(), errReader, make(chan providertypes.StreamEvent, 1))
 	if err == nil {
 		t.Fatal("expected error for broken reader")
 	}
@@ -1736,17 +1766,12 @@ func TestConsumeStream_WrapsNonEOFAsInterrupted(t *testing.T) {
 func TestConsumeStream_FlushesPendingDataOnNonEOFError(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
 
-	p, err := chatcompletions.New(resolvedConfig("", ""), &http.Client{})
-	if err != nil {
-		t.Fatalf("chatcompletions.New() error = %v", err)
-	}
-
 	sseData := `data: {"id":"a","choices":[{"delta":{"content":"hello"},"finish_reason":""}]}
 `
 	body := io.MultiReader(strings.NewReader(sseData), &errReader{err: io.ErrClosedPipe})
 	events := make(chan providertypes.StreamEvent, 10)
 
-	err = p.ConsumeStream(context.Background(), body, events)
+	err := chatcompletions.ConsumeStream(context.Background(), body, events)
 	if err == nil {
 		t.Fatal("expected error for broken reader")
 	}
@@ -1815,18 +1840,18 @@ type failingReadCloser struct{ err error }
 func (f *failingReadCloser) Read(_ []byte) (int, error) { return 0, f.err }
 func (f *failingReadCloser) Close() error               { return f.err }
 
-// --- emitToolCallStart 和 mergeToolCallDelta 保留测试 ---
+// --- emitToolCallStart and mergeToolCallDelta guards ---
 
 func TestEmitToolCallStartGuards(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	if err := chatcompletions.EmitToolCallStart(ctx, nil, 0, "call-1", "filesystem_edit"); err != nil {
+	if err := provider.EmitToolCallStart(ctx, nil, 0, "call-1", "filesystem_edit"); err != nil {
 		t.Fatalf("expected nil events guard to return nil, got %v", err)
 	}
 
 	events := make(chan providertypes.StreamEvent, 1)
-	if err := chatcompletions.EmitToolCallStart(ctx, events, 0, "call-1", ""); err != nil {
+	if err := provider.EmitToolCallStart(ctx, events, 0, "call-1", ""); err != nil {
 		t.Fatalf("expected empty name guard to return nil, got %v", err)
 	}
 	select {
@@ -1835,7 +1860,7 @@ func TestEmitToolCallStartGuards(t *testing.T) {
 	default:
 	}
 
-	if err := chatcompletions.EmitToolCallStart(ctx, events, 2, "call-1", "filesystem_edit"); err != nil {
+	if err := provider.EmitToolCallStart(ctx, events, 2, "call-1", "filesystem_edit"); err != nil {
 		t.Fatalf("emitToolCallStart() error = %v", err)
 	}
 	got := <-events
@@ -1846,7 +1871,7 @@ func TestEmitToolCallStartGuards(t *testing.T) {
 
 	cancelledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := chatcompletions.EmitToolCallStart(cancelledCtx, make(chan providertypes.StreamEvent), 0, "call-1", "filesystem_edit"); err == nil {
+	if err := provider.EmitToolCallStart(cancelledCtx, make(chan providertypes.StreamEvent), 0, "call-1", "filesystem_edit"); err == nil {
 		t.Fatal("expected cancellation error")
 	}
 }

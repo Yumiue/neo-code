@@ -275,7 +275,9 @@ func (a App) renderProviderAddForm() string {
 
 	var sb strings.Builder
 	driver := provider.NormalizeProviderDriver(a.providerAddForm.Driver)
-	baseURLRequired := driver == provider.DriverAnthropic || (driver != provider.DriverOpenAICompat && driver != provider.DriverGemini)
+	baseURLRequired := driver != provider.DriverOpenAICompat &&
+		driver != provider.DriverGemini &&
+		driver != provider.DriverAnthropic
 	visible := providerAddVisibleFields(a.providerAddForm.Driver, a.providerAddForm.ModelSource)
 	clampProviderAddStep(a.providerAddForm)
 
@@ -300,9 +302,17 @@ func (a App) renderProviderAddForm() string {
 				required: true,
 				note:     note,
 			})
+		case providerAddFieldChatAPIMode:
+			note := "仅 openaicompat 生效；chat_completions 或 responses"
+			fields = append(fields, renderField{
+				label: "Chat API Mode",
+				value: a.providerAddForm.ChatAPIMode,
+				note:  note,
+			})
 		case providerAddFieldBaseURL:
 			note := ""
-			if strings.TrimSpace(a.providerAddForm.BaseURL) == "" && (driver == provider.DriverOpenAICompat || driver == provider.DriverGemini) {
+			if strings.TrimSpace(a.providerAddForm.BaseURL) == "" &&
+				(driver == provider.DriverOpenAICompat || driver == provider.DriverGemini || driver == provider.DriverAnthropic) {
 				note = "留空会自动填充默认地址"
 			}
 			fields = append(fields, renderField{
@@ -314,8 +324,10 @@ func (a App) renderProviderAddForm() string {
 		case providerAddFieldChatEndpointPath:
 			note := ""
 			trimmedPath := strings.TrimSpace(a.providerAddForm.ChatEndpointPath)
-			if trimmedPath == "" || trimmedPath == "/" {
-				note = "留空或\"/\" 使用直连 base_url"
+			if trimmedPath == "" {
+				note = "留空会按 Chat API Mode 自动回填默认端点"
+			} else if trimmedPath == "/" {
+				note = "\"/\" 使用直连 base_url"
 			} else {
 				note = "以 \"/\" 开头的端点路径"
 			}

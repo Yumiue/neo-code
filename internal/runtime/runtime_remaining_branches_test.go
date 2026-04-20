@@ -13,10 +13,10 @@ import (
 	agentcontext "neo-code/internal/context"
 	contextcompact "neo-code/internal/context/compact"
 	"neo-code/internal/provider"
-	"neo-code/internal/provider/streaming"
 
 	providertypes "neo-code/internal/provider/types"
 	approvalflow "neo-code/internal/runtime/approval"
+	"neo-code/internal/runtime/streaming"
 	"neo-code/internal/security"
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"

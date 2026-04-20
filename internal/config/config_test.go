@@ -554,11 +554,12 @@ func TestConfigValidateAllowsEmptyCurrentModelForSelectedCustomProvider(t *testi
 		Providers: []ProviderConfig{
 			testDefaultProviderConfig(),
 			{
-				Name:      "company-gateway",
-				Driver:    "openaicompat",
-				BaseURL:   "https://llm.example.com/v1",
-				APIKeyEnv: "COMPANY_GATEWAY_API_KEY",
-				Source:    ProviderSourceCustom,
+				Name:                  "company-gateway",
+				Driver:                "openaicompat",
+				BaseURL:               "https://llm.example.com/v1",
+				APIKeyEnv:             "COMPANY_GATEWAY_API_KEY",
+				DiscoveryEndpointPath: providerpkg.DiscoveryEndpointPathModels,
+				Source:                ProviderSourceCustom,
 			},
 		},
 		SelectedProvider: "company-gateway",
@@ -700,11 +701,12 @@ func TestProviderConfigValidateAllowsStructurallyValidCustomDriver(t *testing.T)
 	t.Parallel()
 
 	err := (ProviderConfig{
-		Name:      "custom-openai",
-		Driver:    "custom-driver",
-		BaseURL:   "https://example.com/v1",
-		APIKeyEnv: "CUSTOM_API_KEY",
-		Source:    ProviderSourceCustom,
+		Name:                  "custom-openai",
+		Driver:                "custom-driver",
+		BaseURL:               "https://example.com/v1",
+		APIKeyEnv:             "CUSTOM_API_KEY",
+		DiscoveryEndpointPath: providerpkg.DiscoveryEndpointPathModels,
+		Source:                ProviderSourceCustom,
 	}).Validate()
 	if err != nil {
 		t.Fatalf("expected custom driver to pass structural validation, got %v", err)

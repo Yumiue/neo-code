@@ -113,7 +113,8 @@
 ## 流式桥接
 
 - Provider 发出 `StreamEvent`
-- `internal/provider/streaming` 统一累积文本、tool call 增量和 `message_done`
+- `internal/provider` 根包仅保留最小事件发送 helper；协议流解析留在各自 driver 子包
+- `internal/runtime/streaming` 统一累积文本、tool call 增量和 `message_done`
 - runtime 将累积过程映射成 `RuntimeEvent`
 - TUI 使用 Bubble Tea `Cmd` 监听事件，并在处理完成后继续订阅
 - `provider.GenerateText` 只在上游 `Generate` 成功返回时，才把缺失 `message_done` 视为流式中断。

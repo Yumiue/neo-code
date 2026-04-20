@@ -8,4 +8,3 @@ var (
 	// ErrRuntimeResourceNotFound 表示运行时未找到目标资源。
 	ErrRuntimeResourceNotFound = errors.New("runtime resource not found")
 )
-

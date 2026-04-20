@@ -69,6 +69,7 @@ custom provider 来自：
 ```
 
 当前只接受明确受支持的字段；未知字段会直接报错，不做“旧格式自动迁移”。
+`provider.yaml` 只支持平铺字段：`name/driver/base_url/api_key_env/model_source/chat_endpoint_path/discovery_endpoint_path/models`。
 
 ## 加载流程
 

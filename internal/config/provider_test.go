@@ -128,14 +128,76 @@ func TestProviderConfigIdentity(t *testing.T) {
 	if identity.BaseURL != "https://api.openai.com/v1" {
 		t.Fatalf("expected base URL, got %q", identity.BaseURL)
 	}
-	if identity.APIStyle != "chat_completions" {
-		t.Fatalf("expected api_style chat_completions, got %q", identity.APIStyle)
+	if identity.ChatEndpointPath != "" {
+		t.Fatalf("expected default chat endpoint path to be omitted, got %q", identity.ChatEndpointPath)
 	}
 	if identity.DiscoveryEndpointPath != "/models" {
 		t.Fatalf("expected discovery endpoint /models, got %q", identity.DiscoveryEndpointPath)
 	}
-	if identity.DiscoveryResponseProfile != providerpkg.DiscoveryResponseProfileOpenAI {
-		t.Fatalf("expected discovery response profile openai, got %q", identity.DiscoveryResponseProfile)
+}
+
+func TestProviderConfigValidateAllowsEmptyBaseURLForSDKDrivers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		driver string
+	}{
+		{name: "gemini", driver: providerpkg.DriverGemini},
+		{name: "anthropic", driver: providerpkg.DriverAnthropic},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := ProviderConfig{
+				Name:                  tt.name,
+				Driver:                tt.driver,
+				BaseURL:               "",
+				APIKeyEnv:             "TEST_KEY",
+				DiscoveryEndpointPath: providerpkg.DiscoveryEndpointPathModels,
+				Source:                ProviderSourceCustom,
+			}
+			if err := cfg.Validate(); err != nil {
+				t.Fatalf("expected empty base_url to be accepted for %s, got %v", tt.driver, err)
+			}
+		})
+	}
+}
+
+func TestProviderIdentityFromConfigUsesDefaultBaseURLWhenEmptyForSDKDrivers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		driver      string
+		expectedURL string
+	}{
+		{name: "gemini", driver: providerpkg.DriverGemini, expectedURL: GeminiDefaultBaseURL},
+		{name: "anthropic", driver: providerpkg.DriverAnthropic, expectedURL: AnthropicDefaultBaseURL},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := ProviderConfig{
+				Name:    tt.name,
+				Driver:  tt.driver,
+				BaseURL: "",
+			}
+			identity, err := providerIdentityFromConfig(cfg)
+			if err != nil {
+				t.Fatalf("providerIdentityFromConfig() error = %v", err)
+			}
+			if identity.BaseURL != tt.expectedURL {
+				t.Fatalf("expected identity base URL %q, got %q", tt.expectedURL, identity.BaseURL)
+			}
+			if identity.ChatEndpointPath != "" {
+				t.Fatalf("expected sdk identity to omit protocol matrix fields, got %+v", identity)
+			}
+		})
 	}
 }
 
@@ -149,7 +211,7 @@ func TestProviderConfigResolveAPIKeyEmptyEnvName(t *testing.T) {
 	}
 }
 
-func TestProviderIdentityFromConfigDefaultsAPIStyleForOpenAICompat(t *testing.T) {
+func TestProviderIdentityFromConfigDefaultsPathsForOpenAICompat(t *testing.T) {
 	t.Parallel()
 
 	cfg := ProviderConfig{
@@ -163,18 +225,11 @@ func TestProviderIdentityFromConfigDefaultsAPIStyleForOpenAICompat(t *testing.T)
 	if err != nil {
 		t.Fatalf("providerIdentityFromConfig() error = %v", err)
 	}
-	if identity.APIStyle != providerpkg.OpenAICompatibleAPIStyleChatCompletions {
-		t.Fatalf("expected default api_style %q, got %q", providerpkg.OpenAICompatibleAPIStyleChatCompletions, identity.APIStyle)
+	if identity.ChatEndpointPath != "" {
+		t.Fatalf("expected default chat endpoint path to be omitted, got %q", identity.ChatEndpointPath)
 	}
 	if identity.DiscoveryEndpointPath != providerpkg.DiscoveryEndpointPathModels {
 		t.Fatalf("expected default discovery endpoint %q, got %q", providerpkg.DiscoveryEndpointPathModels, identity.DiscoveryEndpointPath)
-	}
-	if identity.DiscoveryResponseProfile != providerpkg.DiscoveryResponseProfileOpenAI {
-		t.Fatalf(
-			"expected default discovery response profile %q, got %q",
-			providerpkg.DiscoveryResponseProfileOpenAI,
-			identity.DiscoveryResponseProfile,
-		)
 	}
 }
 
@@ -264,6 +319,23 @@ func TestProviderConfigValidateRejectsInvalidDiscoverySettings(t *testing.T) {
 	cfg.Model = "gpt-4.1"
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "must be a relative path") {
 		t.Fatalf("expected invalid chat endpoint path error, got %v", err)
+	}
+}
+
+func TestProviderConfigValidateRejectsChatAPIModeForNonOpenAICompatDriver(t *testing.T) {
+	t.Parallel()
+
+	cfg := ProviderConfig{
+		Name:        "gemini",
+		Driver:      providerpkg.DriverGemini,
+		BaseURL:     GeminiDefaultBaseURL,
+		Model:       GeminiDefaultModel,
+		APIKeyEnv:   "TEST_KEY",
+		ChatAPIMode: providerpkg.ChatAPIModeResponses,
+		Source:      ProviderSourceBuiltin,
+	}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "chat_api_mode") {
+		t.Fatalf("expected chat_api_mode validation error, got %v", err)
 	}
 }
 
@@ -363,6 +435,33 @@ func TestCustomProviderModelsRejectsNonPositiveMaxOutputTokens(t *testing.T) {
 		Name:            "DeepSeek Coder",
 		MaxOutputTokens: &maxOutputTokens,
 	}})
+	if err == nil || !strings.Contains(err.Error(), "max_output_tokens") {
+		t.Fatalf("expected max_output_tokens validation error, got %v", err)
+	}
+}
+
+func TestNormalizeCustomProviderModelsRejectsZeroLimits(t *testing.T) {
+	t.Parallel()
+
+	_, err := NormalizeCustomProviderModels([]providertypes.ModelDescriptor{
+		{
+			ID:            "deepseek-coder",
+			Name:          "DeepSeek Coder",
+			ContextWindow: 0,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "context_window") {
+		t.Fatalf("expected context_window validation error, got %v", err)
+	}
+
+	_, err = NormalizeCustomProviderModels([]providertypes.ModelDescriptor{
+		{
+			ID:              "deepseek-coder",
+			Name:            "DeepSeek Coder",
+			ContextWindow:   ManualModelOptionalIntUnset,
+			MaxOutputTokens: 0,
+		},
+	})
 	if err == nil || !strings.Contains(err.Error(), "max_output_tokens") {
 		t.Fatalf("expected max_output_tokens validation error, got %v", err)
 	}
@@ -578,6 +677,7 @@ func TestResolvedProviderConfigToRuntimeConfig(t *testing.T) {
 			MaxSessionAssetBytes:       1024,
 			MaxSessionAssetsTotalBytes: 2048,
 		},
+		ChatAPIMode:           "",
 		ChatEndpointPath:      "",
 		DiscoveryEndpointPath: providerpkg.DiscoveryEndpointPathModels,
 	}
@@ -632,5 +732,59 @@ func TestResolvedProviderConfigToRuntimeConfigReturnsProtocolNormalizationError(
 	}
 	if !strings.Contains(err.Error(), "must be a relative path") {
 		t.Fatalf("expected relative path error, got %v", err)
+	}
+}
+
+func TestResolvedProviderConfigToRuntimeConfigUsesNormalizedOpenAICompatPaths(t *testing.T) {
+	t.Parallel()
+
+	resolved := ResolvedProviderConfig{
+		ProviderConfig: ProviderConfig{
+			Name:             "responses-gateway",
+			Driver:           "openaicompat",
+			BaseURL:          "https://llm.example.com/v1",
+			Model:            "gpt-5.4",
+			ChatAPIMode:      providerpkg.ChatAPIModeResponses,
+			ChatEndpointPath: "/responses",
+		},
+		APIKey: "secret-key",
+	}
+
+	got, err := resolved.ToRuntimeConfig()
+	if err != nil {
+		t.Fatalf("ToRuntimeConfig() error = %v", err)
+	}
+	if got.ChatEndpointPath != "/responses" {
+		t.Fatalf("expected normalized chat endpoint path %q, got %q", "/responses", got.ChatEndpointPath)
+	}
+	if got.ChatAPIMode != providerpkg.ChatAPIModeResponses {
+		t.Fatalf("expected chat api mode %q, got %q", providerpkg.ChatAPIModeResponses, got.ChatAPIMode)
+	}
+}
+
+func TestResolvedProviderConfigToRuntimeConfigStripsSDKChatEndpointPath(t *testing.T) {
+	t.Parallel()
+
+	resolved := ResolvedProviderConfig{
+		ProviderConfig: ProviderConfig{
+			Name:                  "gemini",
+			Driver:                providerpkg.DriverGemini,
+			BaseURL:               GeminiDefaultBaseURL,
+			Model:                 GeminiDefaultModel,
+			ChatEndpointPath:      "/models",
+			DiscoveryEndpointPath: providerpkg.DiscoveryEndpointPathModels,
+		},
+		APIKey: "secret-key",
+	}
+
+	got, err := resolved.ToRuntimeConfig()
+	if err != nil {
+		t.Fatalf("ToRuntimeConfig() error = %v", err)
+	}
+	if got.ChatEndpointPath != "" {
+		t.Fatalf("expected sdk runtime config to omit chat endpoint path, got %q", got.ChatEndpointPath)
+	}
+	if got.DiscoveryEndpointPath != providerpkg.DiscoveryEndpointPathModels {
+		t.Fatalf("expected discovery endpoint %q, got %q", providerpkg.DiscoveryEndpointPathModels, got.DiscoveryEndpointPath)
 	}
 }

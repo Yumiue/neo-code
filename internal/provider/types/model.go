@@ -43,46 +43,14 @@ type ModelDescriptor struct {
 
 // DescriptorFromRawModel 将原始 provider 模型对象标准化为 ModelDescriptor。
 func DescriptorFromRawModel(raw map[string]any) (ModelDescriptor, bool) {
-	return DescriptorFromRawModelWithAliases(raw, nil)
-}
-
-// DescriptorFromRawModelWithAliases 在默认字段映射基础上追加别名映射，兼容第三方返回字段差异。
-func DescriptorFromRawModelWithAliases(raw map[string]any, aliases map[string][]string) (ModelDescriptor, bool) {
 	candidates := descriptorRawCandidates(raw)
 
-	idKeys := extendAliasKeys(
-		[]string{"id", "model_id", "modelId", "model_name", "modelName", "name"},
-		aliases,
-		"id",
-		"model_id",
-		"model",
-	)
-	nameKeys := extendAliasKeys(
-		[]string{"display_name", "displayName", "displayname", "name", "model_name", "modelName"},
-		aliases,
-		"name",
-		"display_name",
-	)
-	descriptionKeys := extendAliasKeys(
-		[]string{"description", "desc", "model_description", "modelDescription"},
-		aliases,
-		"description",
-	)
-	contextWindowKeys := extendAliasKeys(
-		[]string{"context_window", "contextWindow", "contextLength", "input_token_limit", "inputTokenLimit", "max_context_tokens"},
-		aliases,
-		"context_window",
-	)
-	maxOutputKeys := extendAliasKeys(
-		[]string{"max_output_tokens", "maxOutputTokens", "output_token_limit", "outputTokenLimit", "max_tokens", "maxTokens"},
-		aliases,
-		"max_output_tokens",
-	)
-	capabilityKeys := extendAliasKeys(
-		[]string{"capabilities", "capability", "features"},
-		aliases,
-		"capabilities",
-	)
+	idKeys := []string{"id", "model_id", "modelId", "model_name", "modelName", "name"}
+	nameKeys := []string{"display_name", "displayName", "displayname", "name", "model_name", "modelName"}
+	descriptionKeys := []string{"description", "desc", "model_description", "modelDescription"}
+	contextWindowKeys := []string{"context_window", "contextWindow", "contextLength", "input_token_limit", "inputTokenLimit", "max_context_tokens"}
+	maxOutputKeys := []string{"max_output_tokens", "maxOutputTokens", "output_token_limit", "outputTokenLimit", "max_tokens", "maxTokens"}
+	capabilityKeys := []string{"capabilities", "capability", "features"}
 
 	id := firstNonEmptyString(
 		stringValueFromCandidates(candidates, idKeys...),
@@ -434,42 +402,4 @@ func firstPositiveIntFromCandidates(candidates []map[string]any, keys ...string)
 		}
 	}
 	return 0
-}
-
-// extendAliasKeys 在默认字段别名基础上追加配置别名，保持原有优先级并去重。
-func extendAliasKeys(defaultKeys []string, aliases map[string][]string, canonicalKeys ...string) []string {
-	combined := make([]string, 0, len(defaultKeys)+4)
-	seen := make(map[string]struct{}, len(defaultKeys)+4)
-
-	appendKey := func(key string) {
-		trimmed := strings.TrimSpace(key)
-		if trimmed == "" {
-			return
-		}
-		normalized := normalizeFieldAliasKey(trimmed)
-		if normalized == "" {
-			return
-		}
-		if _, exists := seen[normalized]; exists {
-			return
-		}
-		seen[normalized] = struct{}{}
-		combined = append(combined, trimmed)
-	}
-
-	for _, key := range defaultKeys {
-		appendKey(key)
-	}
-
-	if len(aliases) == 0 {
-		return combined
-	}
-
-	for _, canonicalKey := range canonicalKeys {
-		for _, alias := range aliases[canonicalKey] {
-			appendKey(alias)
-		}
-	}
-
-	return combined
 }

@@ -114,8 +114,10 @@ func TestBuildRuntimeRejectsUnsupportedSelectedProviderDriverOnStartup(t *testin
 	rawProvider := []byte(
 		"name: company-gateway\n" +
 			"driver: unsupported-driver\n" +
+			"model_source: discover\n" +
 			"api_key_env: COMPANY_GATEWAY_API_KEY\n" +
-			"base_url: https://api.example.com/v1\n",
+			"base_url: https://api.example.com/v1\n" +
+			"discovery_endpoint_path: /models\n",
 	)
 	if err := os.WriteFile(filepath.Join(providerDir, "provider.yaml"), rawProvider, 0o644); err != nil {
 		t.Fatalf("write provider config: %v", err)

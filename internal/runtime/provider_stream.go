@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"neo-code/internal/provider"
-	"neo-code/internal/provider/streaming"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/runtime/streaming"
 )
 
 // streamGenerateResult 统一承载一次流式生成的消息、用量与消费错误。

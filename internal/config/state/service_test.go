@@ -121,11 +121,12 @@ func TestSelectionServiceListModelsUsesCurrentSelectedProvider(t *testing.T) {
 
 	defaults := testDefaultConfig()
 	defaults.Providers = append(defaults.Providers, configpkg.ProviderConfig{
-		Name:      "company-gateway",
-		Driver:    "openaicompat",
-		BaseURL:   "https://llm.example.com/v1",
-		APIKeyEnv: "COMPANY_GATEWAY_API_KEY",
-		Source:    ProviderSourceCustom,
+		Name:                  "company-gateway",
+		Driver:                "openaicompat",
+		BaseURL:               "https://llm.example.com/v1",
+		APIKeyEnv:             "COMPANY_GATEWAY_API_KEY",
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+		Source:                ProviderSourceCustom,
 	})
 	defaults.SelectedProvider = "company-gateway"
 
@@ -250,11 +251,12 @@ func TestSelectionServiceSelectProviderRequiresDiscoveryOnCacheMiss(t *testing.T
 
 	defaults := testDefaultConfig()
 	defaults.Providers = append(defaults.Providers, configpkg.ProviderConfig{
-		Name:      "company-gateway",
-		Driver:    "openaicompat",
-		BaseURL:   "https://llm.example.com/v1",
-		APIKeyEnv: "COMPANY_GATEWAY_API_KEY",
-		Source:    ProviderSourceCustom,
+		Name:                  "company-gateway",
+		Driver:                "openaicompat",
+		BaseURL:               "https://llm.example.com/v1",
+		APIKeyEnv:             "COMPANY_GATEWAY_API_KEY",
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+		Source:                ProviderSourceCustom,
 	})
 
 	tracker := &catalogMethodCalls{}
@@ -340,11 +342,12 @@ func TestSelectionServiceEnsureSelectionRejectsUnsupportedSelectedProvider(t *te
 
 	defaults := testDefaultConfig()
 	defaults.Providers = append(defaults.Providers, configpkg.ProviderConfig{
-		Name:      "company-gateway",
-		Driver:    "anthropic",
-		BaseURL:   "https://llm.example.com/v1",
-		APIKeyEnv: "COMPANY_GATEWAY_API_KEY",
-		Source:    ProviderSourceCustom,
+		Name:                  "company-gateway",
+		Driver:                "anthropic",
+		BaseURL:               "https://llm.example.com/v1",
+		APIKeyEnv:             "COMPANY_GATEWAY_API_KEY",
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+		Source:                ProviderSourceCustom,
 	})
 	defaults.SelectedProvider = "company-gateway"
 	defaults.CurrentModel = "deepseek-coder"
@@ -372,11 +375,12 @@ func TestSelectionServiceEnsureSelectionFallsBackToFirstDiscoveredModel(t *testi
 
 	defaults := testDefaultConfig()
 	defaults.Providers = append(defaults.Providers, configpkg.ProviderConfig{
-		Name:      "company-gateway",
-		Driver:    "openaicompat",
-		BaseURL:   "https://llm.example.com/v1",
-		APIKeyEnv: "COMPANY_GATEWAY_API_KEY",
-		Source:    ProviderSourceCustom,
+		Name:                  "company-gateway",
+		Driver:                "openaicompat",
+		BaseURL:               "https://llm.example.com/v1",
+		APIKeyEnv:             "COMPANY_GATEWAY_API_KEY",
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+		Source:                ProviderSourceCustom,
 	})
 	defaults.SelectedProvider = "company-gateway"
 	defaults.CurrentModel = "unknown-model"
@@ -433,11 +437,12 @@ func TestSelectionServiceEnsureSelectionKeepsCustomSelectionWhenSnapshotMissing(
 
 	defaults := testDefaultConfig()
 	defaults.Providers = append(defaults.Providers, configpkg.ProviderConfig{
-		Name:      "company-gateway",
-		Driver:    "openaicompat",
-		BaseURL:   "https://llm.example.com/v1",
-		APIKeyEnv: "COMPANY_GATEWAY_API_KEY",
-		Source:    ProviderSourceCustom,
+		Name:                  "company-gateway",
+		Driver:                "openaicompat",
+		BaseURL:               "https://llm.example.com/v1",
+		APIKeyEnv:             "COMPANY_GATEWAY_API_KEY",
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+		Source:                ProviderSourceCustom,
 	})
 	defaults.SelectedProvider = "company-gateway"
 	defaults.CurrentModel = "unknown-model"
@@ -471,11 +476,12 @@ func TestSelectionServiceEnsureSelectionBackfillsEmptyCustomModelFromSynchronous
 
 	defaults := testDefaultConfig()
 	defaults.Providers = append(defaults.Providers, configpkg.ProviderConfig{
-		Name:      "company-gateway",
-		Driver:    "openaicompat",
-		BaseURL:   "https://llm.example.com/v1",
-		APIKeyEnv: "COMPANY_GATEWAY_API_KEY",
-		Source:    ProviderSourceCustom,
+		Name:                  "company-gateway",
+		Driver:                "openaicompat",
+		BaseURL:               "https://llm.example.com/v1",
+		APIKeyEnv:             "COMPANY_GATEWAY_API_KEY",
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+		Source:                ProviderSourceCustom,
 	})
 	defaults.SelectedProvider = "company-gateway"
 	defaults.CurrentModel = ""
@@ -515,11 +521,12 @@ func TestSelectionServiceEnsureSelectionKeepsEmptyCustomModelWhenSynchronousDisc
 
 	defaults := testDefaultConfig()
 	defaults.Providers = append(defaults.Providers, configpkg.ProviderConfig{
-		Name:      "company-gateway",
-		Driver:    "openaicompat",
-		BaseURL:   "https://llm.example.com/v1",
-		APIKeyEnv: "COMPANY_GATEWAY_API_KEY",
-		Source:    ProviderSourceCustom,
+		Name:                  "company-gateway",
+		Driver:                "openaicompat",
+		BaseURL:               "https://llm.example.com/v1",
+		APIKeyEnv:             "COMPANY_GATEWAY_API_KEY",
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+		Source:                ProviderSourceCustom,
 	})
 	defaults.SelectedProvider = "company-gateway"
 	defaults.CurrentModel = ""
@@ -557,11 +564,12 @@ func TestSelectionServiceEnsureSelectionReturnsBootstrappedSelectionWhenCustomDi
 	defaults := testDefaultConfig()
 	defaults.Providers = []configpkg.ProviderConfig{
 		{
-			Name:      "company-gateway",
-			Driver:    "openaicompat",
-			BaseURL:   "https://llm.example.com/v1",
-			APIKeyEnv: "COMPANY_GATEWAY_API_KEY",
-			Source:    ProviderSourceCustom,
+			Name:                  "company-gateway",
+			Driver:                "openaicompat",
+			BaseURL:               "https://llm.example.com/v1",
+			APIKeyEnv:             "COMPANY_GATEWAY_API_KEY",
+			DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+			Source:                ProviderSourceCustom,
 		},
 	}
 	defaults.SelectedProvider = ""
@@ -668,11 +676,12 @@ func TestSelectionServiceSelectCustomProviderDoesNotPersistWhenDiscoveryFails(t 
 
 	defaults := testDefaultConfig()
 	defaults.Providers = append(defaults.Providers, configpkg.ProviderConfig{
-		Name:      "company-gateway",
-		Driver:    "openaicompat",
-		BaseURL:   "https://llm.example.com/v1",
-		APIKeyEnv: "COMPANY_GATEWAY_API_KEY",
-		Source:    ProviderSourceCustom,
+		Name:                  "company-gateway",
+		Driver:                "openaicompat",
+		BaseURL:               "https://llm.example.com/v1",
+		APIKeyEnv:             "COMPANY_GATEWAY_API_KEY",
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+		Source:                ProviderSourceCustom,
 	})
 
 	manager := newSelectionTestManager(t, defaults)
@@ -1110,7 +1119,7 @@ func TestResolveCurrentModelHelper(t *testing.T) {
 	}
 }
 
-// ---- 测试辅助 ----
+// ---- 婵炴潙顑堥惁顖涙綇閸涱厼袠 ----
 
 type driverSupporterAll struct{}
 
@@ -1310,7 +1319,7 @@ func mustCatalogIdentity(t *testing.T, cfg configpkg.ProviderConfig) provider.Pr
 	return identity
 }
 
-// defaultModelsForInput 为给定 catalog 输入返回默认模型及其变体，便于选择逻辑测试复用。
+// defaultModelsForInput 基于 catalog 输入构造稳定的默认模型集合。
 func defaultModelsForInput(input provider.CatalogInput) []providertypes.ModelDescriptor {
 	defaults := providertypes.MergeModelDescriptors(input.DefaultModels)
 	if len(defaults) == 0 {

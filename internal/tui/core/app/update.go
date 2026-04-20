@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 	"time"
@@ -1079,7 +1080,7 @@ func runtimeEventPhaseChangedHandler(a *App, event agentruntime.RuntimeEvent) bo
 	return false
 }
 
-// runtimeEventStopReasonDecidedHandler 在运行结束原因落地后统一收敛状态与提示信息。
+// runtimeEventStopReasonDecidedHandler 处理运行结束原因并统一更新状态与活动日志。
 func runtimeEventStopReasonDecidedHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := event.Payload.(agentruntime.StopReasonDecidedPayload)
 	if !ok {
@@ -2869,6 +2870,7 @@ const (
 	providerAddFieldName providerAddFieldID = iota
 	providerAddFieldDriver
 	providerAddFieldModelSource
+	providerAddFieldChatAPIMode
 	providerAddFieldBaseURL
 	providerAddFieldChatEndpointPath
 	providerAddFieldDiscoveryEndpointPath
@@ -2881,11 +2883,16 @@ func providerAddVisibleFields(driver string, modelSource string) []providerAddFi
 		providerAddFieldName,
 		providerAddFieldDriver,
 		providerAddFieldModelSource,
+	}
+	if provider.NormalizeProviderDriver(driver) == provider.DriverOpenAICompat {
+		fields = append(fields, providerAddFieldChatAPIMode)
+	}
+	fields = append(fields,
 		providerAddFieldBaseURL,
 		providerAddFieldChatEndpointPath,
-	}
+	)
 
-	if provider.NormalizeModelSource(strings.TrimSpace(modelSource)) == provider.ModelSourceDiscover {
+	if config.NormalizeModelSource(strings.TrimSpace(modelSource)) == config.ModelSourceDiscover {
 		fields = append(fields, providerAddFieldDiscoveryEndpointPath)
 	}
 	fields = append(fields, providerAddFieldAPIKeyEnv, providerAddFieldAPIKey)
@@ -2924,7 +2931,7 @@ func currentProviderAddField(form *providerAddFormState) providerAddFieldID {
 // isProviderAddEnumField 判断当前新增 Provider 表单焦点是否在枚举字段（Driver/Model Source）。
 func isProviderAddEnumField(form *providerAddFormState) bool {
 	switch currentProviderAddField(form) {
-	case providerAddFieldDriver, providerAddFieldModelSource:
+	case providerAddFieldDriver, providerAddFieldModelSource, providerAddFieldChatAPIMode:
 		return true
 	default:
 		return false
@@ -2937,9 +2944,10 @@ func (a *App) startProviderAddForm() {
 		Step:                  0,
 		Name:                  "",
 		Driver:                provider.DriverOpenAICompat,
-		ModelSource:           provider.ModelSourceDiscover,
+		ModelSource:           config.ModelSourceDiscover,
+		ChatAPIMode:           provider.ChatAPIModeChatCompletions,
 		BaseURL:               "",
-		ChatEndpointPath:      "/chat/completions",
+		ChatEndpointPath:      providerAddDefaultChatEndpointPath(provider.DriverOpenAICompat),
 		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 		ManualModelsJSON:      "",
 		APIKeyEnv:             "",
@@ -2947,7 +2955,8 @@ func (a *App) startProviderAddForm() {
 		Error:                 "",
 		ErrorIsHard:           false,
 		Drivers:               []string{provider.DriverOpenAICompat, provider.DriverGemini, provider.DriverAnthropic},
-		ModelSources:          []string{provider.ModelSourceDiscover, provider.ModelSourceManual},
+		ModelSources:          []string{config.ModelSourceDiscover, config.ModelSourceManual},
+		ChatAPIModes:          []string{provider.ChatAPIModeChatCompletions, provider.ChatAPIModeResponses},
 	}
 	a.state.ActivePicker = pickerProviderAdd
 	a.state.StatusText = "Add new provider"
@@ -3032,8 +3041,10 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 			if currentIdx >= 0 {
+				previousDriver := a.providerAddForm.Driver
 				currentIdx = (currentIdx - 1 + len(a.providerAddForm.Drivers)) % len(a.providerAddForm.Drivers)
 				a.providerAddForm.Driver = a.providerAddForm.Drivers[currentIdx]
+				syncProviderAddDriverDefaults(a.providerAddForm, previousDriver)
 				clampProviderAddStep(a.providerAddForm)
 			}
 		} else if currentProviderAddField(a.providerAddForm) == providerAddFieldModelSource {
@@ -3047,6 +3058,19 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			currentIdx = (currentIdx - 1 + len(a.providerAddForm.ModelSources)) % len(a.providerAddForm.ModelSources)
 			a.providerAddForm.ModelSource = a.providerAddForm.ModelSources[currentIdx]
 			clampProviderAddStep(a.providerAddForm)
+		} else if currentProviderAddField(a.providerAddForm) == providerAddFieldChatAPIMode {
+			previousMode := a.providerAddForm.ChatAPIMode
+			currentIdx := 0
+			for i, mode := range a.providerAddForm.ChatAPIModes {
+				if mode == a.providerAddForm.ChatAPIMode {
+					currentIdx = i
+					break
+				}
+			}
+			currentIdx = (currentIdx - 1 + len(a.providerAddForm.ChatAPIModes)) % len(a.providerAddForm.ChatAPIModes)
+			a.providerAddForm.ChatAPIMode = a.providerAddForm.ChatAPIModes[currentIdx]
+			syncProviderAddOpenAICompatModeDefaults(a.providerAddForm, previousMode)
+			clampProviderAddStep(a.providerAddForm)
 		}
 		return a, nil
 	case typed.Type == tea.KeyDown || (isProviderAddEnumField(a.providerAddForm) && key.Matches(typed, a.keys.ScrollDown)):
@@ -3059,8 +3083,10 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 			if currentIdx >= 0 {
+				previousDriver := a.providerAddForm.Driver
 				currentIdx = (currentIdx + 1) % len(a.providerAddForm.Drivers)
 				a.providerAddForm.Driver = a.providerAddForm.Drivers[currentIdx]
+				syncProviderAddDriverDefaults(a.providerAddForm, previousDriver)
 				clampProviderAddStep(a.providerAddForm)
 			}
 		} else if currentProviderAddField(a.providerAddForm) == providerAddFieldModelSource {
@@ -3073,6 +3099,19 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			currentIdx = (currentIdx + 1) % len(a.providerAddForm.ModelSources)
 			a.providerAddForm.ModelSource = a.providerAddForm.ModelSources[currentIdx]
+			clampProviderAddStep(a.providerAddForm)
+		} else if currentProviderAddField(a.providerAddForm) == providerAddFieldChatAPIMode {
+			previousMode := a.providerAddForm.ChatAPIMode
+			currentIdx := 0
+			for i, mode := range a.providerAddForm.ChatAPIModes {
+				if mode == a.providerAddForm.ChatAPIMode {
+					currentIdx = i
+					break
+				}
+			}
+			currentIdx = (currentIdx + 1) % len(a.providerAddForm.ChatAPIModes)
+			a.providerAddForm.ChatAPIMode = a.providerAddForm.ChatAPIModes[currentIdx]
+			syncProviderAddOpenAICompatModeDefaults(a.providerAddForm, previousMode)
 			clampProviderAddStep(a.providerAddForm)
 		}
 		return a, nil
@@ -3110,20 +3149,27 @@ func (a *App) submitProviderAddForm() tea.Cmd {
 		return nil
 	}
 
-	request, validationErr := buildProviderAddRequest(*a.providerAddForm)
+	formForValidation := *a.providerAddForm
+	if formForValidation.Stage == providerAddFormStageFields &&
+		config.NormalizeModelSource(normalizeProviderAddFieldValue(formForValidation.ModelSource)) == config.ModelSourceManual &&
+		strings.TrimSpace(formForValidation.ManualModelsJSON) == "" {
+		formForValidation.ManualModelsJSON = providerAddManualModelsJSONTemplate
+	}
+
+	request, validationErr := buildProviderAddRequest(formForValidation)
 	if validationErr != "" {
 		a.providerAddForm.Error = "Please update the form: " + validationErr
 		a.providerAddForm.ErrorIsHard = false
 		return nil
 	}
-	if request.ModelSource == provider.ModelSourceManual && a.providerAddForm.Stage == providerAddFormStageFields {
+	if request.ModelSource == config.ModelSourceManual && a.providerAddForm.Stage == providerAddFormStageFields {
 		a.providerAddForm.Stage = providerAddFormStageManualModels
 		a.providerAddForm.Error = ""
 		a.providerAddForm.ErrorIsHard = false
 		a.state.StatusText = "Fill manual model JSON"
 		return nil
 	}
-	if request.ModelSource == provider.ModelSourceManual && strings.TrimSpace(request.ManualModelsJSON) == "" {
+	if request.ModelSource == config.ModelSourceManual && strings.TrimSpace(request.ManualModelsJSON) == "" {
 		a.providerAddForm.Error = "Please update the form: Model JSON is required for manual model source"
 		a.providerAddForm.ErrorIsHard = false
 		return nil
@@ -3142,6 +3188,7 @@ type providerAddRequest struct {
 	Name                  string
 	Driver                string
 	BaseURL               string
+	ChatAPIMode           string
 	ChatEndpointPath      string
 	ModelSource           string
 	ManualModelsJSON      string
@@ -3157,11 +3204,91 @@ type providerAddResultMsg struct {
 	Warning string
 }
 
+// providerAddDefaultChatEndpointPath 返回 provider add 表单的驱动默认聊天端点路径。
+func providerAddDefaultChatEndpointPath(driver string) string {
+	switch provider.NormalizeProviderDriver(driver) {
+	case provider.DriverGemini:
+		return "/models"
+	case provider.DriverAnthropic:
+		return "/messages"
+	default:
+		return "/chat/completions"
+	}
+}
+
+// providerAddDefaultOpenAICompatChatEndpointPath 根据 chat_api_mode 返回 openaicompat 的默认聊天端点路径。
+func providerAddDefaultOpenAICompatChatEndpointPath(chatAPIMode string) string {
+	mode, err := provider.NormalizeProviderChatAPIMode(chatAPIMode)
+	if err != nil || mode == "" {
+		mode = provider.DefaultProviderChatAPIMode()
+	}
+	if mode == provider.ChatAPIModeResponses {
+		return "/responses"
+	}
+	return "/chat/completions"
+}
+
+// syncProviderAddOpenAICompatModeDefaults 在切换 chat_api_mode 时同步默认 chat endpoint，避免默认值错配。
+func syncProviderAddOpenAICompatModeDefaults(form *providerAddFormState, previousMode string) {
+	if form == nil || provider.NormalizeProviderDriver(form.Driver) != provider.DriverOpenAICompat {
+		return
+	}
+
+	currentPath := strings.TrimSpace(form.ChatEndpointPath)
+	previousDefaultPath := providerAddDefaultOpenAICompatChatEndpointPath(previousMode)
+	if currentPath != "" && currentPath != previousDefaultPath {
+		return
+	}
+	form.ChatEndpointPath = providerAddDefaultOpenAICompatChatEndpointPath(form.ChatAPIMode)
+}
+
+// providerAddDefaultBaseURL 返回 provider add 表单的驱动默认 base URL。
+func providerAddDefaultBaseURL(driver string) string {
+	switch provider.NormalizeProviderDriver(driver) {
+	case provider.DriverOpenAICompat:
+		return config.OpenAIDefaultBaseURL
+	case provider.DriverGemini:
+		return config.GeminiDefaultBaseURL
+	case provider.DriverAnthropic:
+		return config.AnthropicDefaultBaseURL
+	default:
+		return ""
+	}
+}
+
+// syncProviderAddDriverDefaults 在切换 driver 时按需更新默认 base URL 与 chat endpoint。
+func syncProviderAddDriverDefaults(form *providerAddFormState, previousDriver string) {
+	if form == nil {
+		return
+	}
+	oldBaseURL := providerAddDefaultBaseURL(previousDriver)
+	newBaseURL := providerAddDefaultBaseURL(form.Driver)
+	currentBaseURL := strings.TrimSpace(form.BaseURL)
+	if newBaseURL != "" && (currentBaseURL == "" || (oldBaseURL != "" && currentBaseURL == oldBaseURL)) {
+		form.BaseURL = newBaseURL
+	}
+
+	oldChatPath := providerAddDefaultChatEndpointPath(previousDriver)
+	newChatPath := providerAddDefaultChatEndpointPath(form.Driver)
+	currentChatPath := strings.TrimSpace(form.ChatEndpointPath)
+	if currentChatPath == "" || currentChatPath == oldChatPath {
+		form.ChatEndpointPath = newChatPath
+	}
+	if provider.NormalizeProviderDriver(form.Driver) == provider.DriverOpenAICompat {
+		if _, err := provider.NormalizeProviderChatAPIMode(form.ChatAPIMode); err != nil || strings.TrimSpace(form.ChatAPIMode) == "" {
+			form.ChatAPIMode = provider.DefaultProviderChatAPIMode()
+		}
+	} else {
+		form.ChatAPIMode = ""
+	}
+}
+
 func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, string) {
 	request := providerAddRequest{
 		Name:                  normalizeProviderAddFieldValue(form.Name),
 		Driver:                provider.NormalizeProviderDriver(normalizeProviderAddFieldValue(form.Driver)),
-		ModelSource:           provider.NormalizeModelSource(normalizeProviderAddFieldValue(form.ModelSource)),
+		ModelSource:           config.NormalizeModelSource(normalizeProviderAddFieldValue(form.ModelSource)),
+		ChatAPIMode:           normalizeProviderAddFieldValue(form.ChatAPIMode),
 		BaseURL:               normalizeProviderAddFieldValue(form.BaseURL),
 		ChatEndpointPath:      normalizeProviderAddFieldValue(form.ChatEndpointPath),
 		ManualModelsJSON:      strings.TrimSpace(form.ManualModelsJSON),
@@ -3191,6 +3318,26 @@ func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, str
 	if config.IsProtectedEnvVarName(request.APIKeyEnv) {
 		return providerAddRequest{}, fmt.Sprintf("API Key Env %q is protected", request.APIKeyEnv)
 	}
+	normalizedMode, err := provider.NormalizeProviderChatAPIMode(request.ChatAPIMode)
+	if err != nil {
+		return providerAddRequest{}, err.Error()
+	}
+	if request.Driver == provider.DriverOpenAICompat {
+		if normalizedMode == "" {
+			normalizedMode = provider.DefaultProviderChatAPIMode()
+		}
+		request.ChatAPIMode = normalizedMode
+	} else {
+		request.ChatAPIMode = ""
+	}
+
+	if strings.TrimSpace(request.ChatEndpointPath) == "" {
+		if request.Driver == provider.DriverOpenAICompat {
+			request.ChatEndpointPath = providerAddDefaultOpenAICompatChatEndpointPath(request.ChatAPIMode)
+		} else {
+			request.ChatEndpointPath = providerAddDefaultChatEndpointPath(request.Driver)
+		}
+	}
 
 	switch request.Driver {
 	case provider.DriverOpenAICompat:
@@ -3203,7 +3350,7 @@ func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, str
 		}
 	case provider.DriverAnthropic:
 		if request.BaseURL == "" {
-			return providerAddRequest{}, "Base URL is required for anthropic provider"
+			request.BaseURL = config.AnthropicDefaultBaseURL
 		}
 	default:
 		if request.BaseURL == "" {
@@ -3211,28 +3358,106 @@ func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, str
 		}
 	}
 
-	normalizedProtocols, err := provider.NormalizeProviderProtocolSettings(
-		request.Driver,
-		"",
-		request.ChatEndpointPath,
-		"",
-		request.DiscoveryEndpointPath,
-		"",
-		"",
-		"",
-		"",
-	)
+	var manualModels []providertypes.ModelDescriptor
+	if request.ModelSource == config.ModelSourceManual {
+		if strings.TrimSpace(request.ManualModelsJSON) == "" {
+			return providerAddRequest{}, "Model JSON is required for manual model source"
+		}
+		models, err := parseProviderAddManualModelsJSON(request.ManualModelsJSON)
+		if err != nil {
+			return providerAddRequest{}, err.Error()
+		}
+		manualModels = models
+	}
+
+	normalizedInput, err := config.NormalizeCustomProviderInput(config.SaveCustomProviderInput{
+		Name:                  request.Name,
+		Driver:                request.Driver,
+		BaseURL:               request.BaseURL,
+		ChatAPIMode:           request.ChatAPIMode,
+		ChatEndpointPath:      request.ChatEndpointPath,
+		APIKeyEnv:             request.APIKeyEnv,
+		DiscoveryEndpointPath: request.DiscoveryEndpointPath,
+		ModelSource:           request.ModelSource,
+		Models:                manualModels,
+	})
 	if err != nil {
 		return providerAddRequest{}, err.Error()
 	}
-	request.ChatEndpointPath = normalizedProtocols.ChatEndpointPath
-	if request.ModelSource == provider.ModelSourceManual {
-		request.DiscoveryEndpointPath = ""
-		return request, ""
+
+	request.Name = normalizedInput.Name
+	request.Driver = normalizedInput.Driver
+	request.BaseURL = normalizedInput.BaseURL
+	request.ChatAPIMode = normalizedInput.ChatAPIMode
+	request.ChatEndpointPath = normalizedInput.ChatEndpointPath
+	request.APIKeyEnv = normalizedInput.APIKeyEnv
+	request.ModelSource = normalizedInput.ModelSource
+	request.DiscoveryEndpointPath = normalizedInput.DiscoveryEndpointPath
+	if request.ModelSource != config.ModelSourceManual {
+		request.ManualModelsJSON = ""
 	}
-	request.DiscoveryEndpointPath = normalizedProtocols.DiscoveryEndpointPath
 
 	return request, ""
+}
+
+type providerAddManualModelJSON struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	ContextWindow   *int   `json:"context_window,omitempty"`
+	MaxOutputTokens *int   `json:"max_output_tokens,omitempty"`
+}
+
+// parseProviderAddManualModelsJSON 解析 provider add 表单中的手工模型 JSON，并复用 config 归一化校验规则。
+func parseProviderAddManualModelsJSON(raw string) ([]providertypes.ModelDescriptor, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, errors.New("Model JSON is required for manual model source")
+	}
+
+	decoder := json.NewDecoder(strings.NewReader(trimmed))
+	decoder.DisallowUnknownFields()
+
+	var models []providerAddManualModelJSON
+	if err := decoder.Decode(&models); err != nil {
+		return nil, fmt.Errorf("parse manual model json: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, errors.New("parse manual model json: unexpected trailing content")
+	}
+	if len(models) == 0 {
+		return nil, errors.New("manual model list is empty")
+	}
+
+	descriptors := make([]providertypes.ModelDescriptor, 0, len(models))
+	seen := make(map[string]struct{}, len(models))
+	for _, model := range models {
+		descriptor := providertypes.ModelDescriptor{
+			ID:              strings.TrimSpace(model.ID),
+			Name:            strings.TrimSpace(model.Name),
+			ContextWindow:   config.ManualModelOptionalIntUnset,
+			MaxOutputTokens: config.ManualModelOptionalIntUnset,
+		}
+		key := provider.NormalizeKey(descriptor.ID)
+		if _, exists := seen[key]; exists {
+			return nil, fmt.Errorf("parse manual model json: models.id %q is duplicated", descriptor.ID)
+		}
+		seen[key] = struct{}{}
+		if model.ContextWindow != nil {
+			if *model.ContextWindow <= 0 {
+				return nil, fmt.Errorf("parse manual model json: models.context_window must be greater than 0")
+			}
+			descriptor.ContextWindow = *model.ContextWindow
+		}
+		if model.MaxOutputTokens != nil {
+			if *model.MaxOutputTokens <= 0 {
+				return nil, fmt.Errorf("parse manual model json: models.max_output_tokens must be greater than 0")
+			}
+			descriptor.MaxOutputTokens = *model.MaxOutputTokens
+		}
+		descriptors = append(descriptors, descriptor)
+	}
+	return descriptors, nil
 }
 
 // sanitizeProviderAddInputRunes 过滤 provider 表单输入中的控制字符，避免不可见字符污染配置字段。
@@ -3321,6 +3546,7 @@ func (a *App) runProviderAddFlow(request providerAddRequest) tea.Cmd {
 			Name:                  request.Name,
 			Driver:                request.Driver,
 			BaseURL:               request.BaseURL,
+			ChatAPIMode:           request.ChatAPIMode,
 			ChatEndpointPath:      request.ChatEndpointPath,
 			ModelSource:           request.ModelSource,
 			ManualModelsJSON:      request.ManualModelsJSON,

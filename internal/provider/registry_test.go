@@ -158,14 +158,13 @@ func TestRegistrySupports(t *testing.T) {
 func TestRegistryValidateCatalogIdentity(t *testing.T) {
 	t.Parallel()
 
-	t.Run("openaicompat catalog identity allows chat-only api_style drift", func(t *testing.T) {
+	t.Run("openaicompat catalog identity accepts default protocol settings", func(t *testing.T) {
 		t.Parallel()
 
 		registry := newTestRegistry(t)
 		err := registry.ValidateCatalogIdentity(provider.ProviderIdentity{
-			Driver:   "OPENAICOMPAT",
-			BaseURL:  config.OpenAIDefaultBaseURL,
-			APIStyle: "responses",
+			Driver:  "OPENAICOMPAT",
+			BaseURL: config.OpenAIDefaultBaseURL,
 		})
 		if err != nil {
 			t.Fatalf("expected catalog identity validation to pass, got %v", err)

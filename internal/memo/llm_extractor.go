@@ -12,6 +12,13 @@ import (
 	providertypes "neo-code/internal/provider/types"
 )
 
+var (
+	// ErrExtractionNoJSONArray 表示提取结果中找不到合法 JSON 数组起始。
+	ErrExtractionNoJSONArray = errors.New("memo: extraction response does not contain a JSON array")
+	// ErrExtractionIncompleteJSONArray 表示提取结果中的 JSON 数组不完整。
+	ErrExtractionIncompleteJSONArray = errors.New("memo: extraction response contains an incomplete JSON array")
+)
+
 // LLMExtractor 基于 LLM 分析最近对话，并返回结构化记忆条目。
 type LLMExtractor struct {
 	generator          TextGenerator
@@ -171,7 +178,7 @@ func normalizeKeywords(keywords []string) []string {
 func extractJSONArray(text string) (string, error) {
 	start := strings.Index(text, "[")
 	if start < 0 {
-		return "", errors.New("memo: extraction response does not contain a JSON array")
+		return "", ErrExtractionNoJSONArray
 	}
 
 	depth := 0
@@ -206,5 +213,5 @@ func extractJSONArray(text string) (string, error) {
 		}
 	}
 
-	return "", errors.New("memo: extraction response contains an incomplete JSON array")
+	return "", ErrExtractionIncompleteJSONArray
 }

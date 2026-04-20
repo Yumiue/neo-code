@@ -73,58 +73,51 @@ func TestJSONStoreRoundTrip(t *testing.T) {
 	}
 }
 
-func TestJSONStoreSeparatesDriverSpecificIdentityKeys(t *testing.T) {
+func TestJSONStoreSeparatesEndpointSpecificIdentityKeys(t *testing.T) {
 	t.Parallel()
 
 	store := newJSONStore(t.TempDir())
-	responsesIdentity := provider.ProviderIdentity{
-		Driver:   "openaicompat",
-		BaseURL:  "https://API.EXAMPLE.COM/v1/",
-		APIStyle: " Responses ",
+	firstIdentity := provider.ProviderIdentity{
+		Driver:           "openaicompat",
+		BaseURL:          "https://API.EXAMPLE.COM/v1/",
+		ChatEndpointPath: "/chat/completions",
 	}
-	chatIdentity := provider.ProviderIdentity{
-		Driver:   "openaicompat",
-		BaseURL:  "https://api.example.com/v1",
-		APIStyle: "chat_completions",
+	secondIdentity := provider.ProviderIdentity{
+		Driver:           "openaicompat",
+		BaseURL:          "https://api.example.com/v1",
+		ChatEndpointPath: "/v2/chat/completions",
 	}
 
 	if err := store.Save(context.Background(), ModelCatalog{
-		Identity: responsesIdentity,
+		Identity: firstIdentity,
 		Models: []providertypes.ModelDescriptor{
-			{ID: "responses-model", Name: "Responses Model"},
+			{ID: "first-model", Name: "First Model"},
 		},
 	}); err != nil {
-		t.Fatalf("save responses catalog: %v", err)
+		t.Fatalf("save first catalog: %v", err)
 	}
 	if err := store.Save(context.Background(), ModelCatalog{
-		Identity: chatIdentity,
+		Identity: secondIdentity,
 		Models: []providertypes.ModelDescriptor{
-			{ID: "chat-model", Name: "Chat Model"},
+			{ID: "second-model", Name: "Second Model"},
 		},
 	}); err != nil {
-		t.Fatalf("save chat catalog: %v", err)
+		t.Fatalf("save second catalog: %v", err)
 	}
 
-	responsesCatalog, err := store.Load(context.Background(), responsesIdentity)
+	firstCatalog, err := store.Load(context.Background(), firstIdentity)
 	if err != nil {
-		t.Fatalf("load responses catalog: %v", err)
+		t.Fatalf("load first catalog: %v", err)
 	}
-	if len(responsesCatalog.Models) != 1 || responsesCatalog.Models[0].ID != "responses-model" {
-		t.Fatalf("expected responses catalog to stay isolated, got %+v", responsesCatalog.Models)
+	if len(firstCatalog.Models) != 1 || firstCatalog.Models[0].ID != "first-model" {
+		t.Fatalf("expected first catalog to stay isolated, got %+v", firstCatalog.Models)
 	}
-	if responsesCatalog.Identity.APIStyle != "responses" {
-		t.Fatalf("expected normalized api_style=responses, got %+v", responsesCatalog.Identity)
-	}
-
-	chatCatalog, err := store.Load(context.Background(), chatIdentity)
+	secondCatalog, err := store.Load(context.Background(), secondIdentity)
 	if err != nil {
-		t.Fatalf("load chat catalog: %v", err)
+		t.Fatalf("load second catalog: %v", err)
 	}
-	if len(chatCatalog.Models) != 1 || chatCatalog.Models[0].ID != "chat-model" {
-		t.Fatalf("expected chat catalog to stay isolated, got %+v", chatCatalog.Models)
-	}
-	if chatCatalog.Identity.APIStyle != "chat_completions" {
-		t.Fatalf("expected normalized api_style=chat_completions, got %+v", chatCatalog.Identity)
+	if len(secondCatalog.Models) != 1 || secondCatalog.Models[0].ID != "second-model" {
+		t.Fatalf("expected second catalog to stay isolated, got %+v", secondCatalog.Models)
 	}
 }
 

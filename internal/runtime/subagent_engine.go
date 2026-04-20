@@ -11,8 +11,8 @@ import (
 	"neo-code/internal/config"
 	"neo-code/internal/partsrender"
 	"neo-code/internal/provider"
-	"neo-code/internal/provider/streaming"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/runtime/streaming"
 	"neo-code/internal/subagent"
 	"neo-code/internal/tools"
 )

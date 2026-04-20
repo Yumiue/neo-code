@@ -3,6 +3,7 @@ package memo
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -145,6 +146,39 @@ func TestAutoExtractorErrorsAreSilent(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("entries = %#v, want empty", entries)
+	}
+}
+
+func TestAutoExtractorProtocolMismatchIsDowngraded(t *testing.T) {
+	svc := newAutoExtractorTestService(t)
+	extractor := &stubMemoExtractor{
+		extractFn: func(ctx context.Context, messages []providertypes.Message) ([]Entry, error) {
+			return nil, ErrExtractionNoJSONArray
+		},
+	}
+	auto := NewAutoExtractor(extractor, svc, time.Second)
+	auto.debounce = 10 * time.Millisecond
+	logMessages := make(chan string, 2)
+	auto.logf = func(format string, args ...any) {
+		logMessages <- fmt.Sprintf(format, args...)
+	}
+	registerAutoExtractorCleanup(t, auto)
+
+	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{
+		providertypes.NewTextPart("x"),
+	}}})
+	waitFor(t, time.Second, func() bool { return extractor.Calls() == 1 })
+
+	select {
+	case message := <-logMessages:
+		if !strings.Contains(message, "skipped (protocol_mismatch)") {
+			t.Fatalf("expected protocol mismatch downgrade log, got %q", message)
+		}
+		if strings.Contains(message, "auto extract failed") {
+			t.Fatalf("unexpected failure-level log for protocol mismatch: %q", message)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected protocol mismatch log")
 	}
 }
 

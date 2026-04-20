@@ -35,6 +35,9 @@ func saveCustomProviderWithModelsForTest(
 	discoveryEndpointPath string,
 	chatEndpointPath string,
 ) error {
+	if strings.TrimSpace(discoveryEndpointPath) == "" {
+		discoveryEndpointPath = provider.DiscoveryEndpointPathModels
+	}
 	return SaveCustomProviderWithModels(baseDir, SaveCustomProviderInput{
 		Name:                  name,
 		Driver:                driver,
@@ -42,7 +45,7 @@ func saveCustomProviderWithModelsForTest(
 		ChatEndpointPath:      chatEndpointPath,
 		APIKeyEnv:             apiKeyEnv,
 		DiscoveryEndpointPath: discoveryEndpointPath,
-		ModelSource:           provider.ModelSourceDiscover,
+		ModelSource:           ModelSourceDiscover,
 	})
 }
 
@@ -238,6 +241,7 @@ name: company-gateway
 driver: openaicompat
 base_url: https://llm.example.com/v1
 api_key_env: COMPANY_GATEWAY_API_KEY
+discovery_endpoint_path: /models
 `
 	if err := os.WriteFile(filepath.Join(customDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
 		t.Fatalf("write provider.yaml: %v", err)
@@ -252,6 +256,68 @@ api_key_env: COMPANY_GATEWAY_API_KEY
 	}
 	if cfg.CurrentModel != "" {
 		t.Fatalf("expected empty current model before discovery, got %q", cfg.CurrentModel)
+	}
+}
+
+func TestLoaderLoadCustomProviderWithChatAPIMode(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	customDir := filepath.Join(loader.BaseDir(), providersDirName, "responses-gateway")
+	if err := os.MkdirAll(customDir, 0o755); err != nil {
+		t.Fatalf("mkdir custom provider dir: %v", err)
+	}
+
+	providerYAML := `
+name: responses-gateway
+driver: openaicompat
+base_url: https://llm.example.com/v1
+api_key_env: RESPONSES_GATEWAY_API_KEY
+chat_api_mode: responses
+chat_endpoint_path: /
+discovery_endpoint_path: /models
+`
+	if err := os.WriteFile(filepath.Join(customDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
+		t.Fatalf("write provider.yaml: %v", err)
+	}
+
+	cfg, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	loadedProvider, err := cfg.ProviderByName("responses-gateway")
+	if err != nil {
+		t.Fatalf("ProviderByName() error = %v", err)
+	}
+	if loadedProvider.ChatAPIMode != provider.ChatAPIModeResponses {
+		t.Fatalf("expected chat_api_mode responses, got %q", loadedProvider.ChatAPIMode)
+	}
+}
+
+func TestLoaderRejectsCustomProviderWithInvalidChatAPIMode(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	customDir := filepath.Join(loader.BaseDir(), providersDirName, "invalid-chat-mode")
+	if err := os.MkdirAll(customDir, 0o755); err != nil {
+		t.Fatalf("mkdir custom provider dir: %v", err)
+	}
+
+	providerYAML := `
+name: invalid-chat-mode
+driver: openaicompat
+base_url: https://llm.example.com/v1
+api_key_env: INVALID_CHAT_MODE_API_KEY
+chat_api_mode: unknown
+discovery_endpoint_path: /models
+`
+	if err := os.WriteFile(filepath.Join(customDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
+		t.Fatalf("write provider.yaml: %v", err)
+	}
+
+	_, err := loader.Load(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "chat_api_mode") {
+		t.Fatalf("expected invalid chat_api_mode rejection, got %v", err)
 	}
 }
 
@@ -342,6 +408,7 @@ name: company-gateway
 driver: openaicompat
 base_url: https://llm.example.com/v1
 api_key_env: COMPANY_GATEWAY_API_KEY
+discovery_endpoint_path: /models
 `
 	if err := os.WriteFile(filepath.Join(validDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
 		t.Fatalf("write provider.yaml: %v", err)
@@ -437,7 +504,7 @@ discovery_endpoint_path: /models
 	if err != nil {
 		t.Fatalf("ProviderByName(company-gateway) error = %v", err)
 	}
-	if loadedProvider.ModelSource != provider.ModelSourceManual {
+	if loadedProvider.ModelSource != ModelSourceManual {
 		t.Fatalf("expected model_source manual, got %q", loadedProvider.ModelSource)
 	}
 	if loadedProvider.DiscoveryEndpointPath != "" {
@@ -467,19 +534,9 @@ models:
 		t.Fatalf("write provider.yaml: %v", err)
 	}
 
-	cfg, err := loader.Load(context.Background())
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	loadedProvider, err := cfg.ProviderByName("company-gateway")
-	if err != nil {
-		t.Fatalf("ProviderByName(company-gateway) error = %v", err)
-	}
-	if loadedProvider.ModelSource != provider.ModelSourceDiscover {
-		t.Fatalf("expected default model_source discover, got %q", loadedProvider.ModelSource)
-	}
-	if loadedProvider.DiscoveryEndpointPath != provider.DiscoveryEndpointPathModels {
-		t.Fatalf("expected discovery endpoint to use default /models, got %q", loadedProvider.DiscoveryEndpointPath)
+	_, err := loader.Load(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "model_source discover requires discovery_endpoint_path") {
+		t.Fatalf("expected legacy discover config without endpoint to fail, got %v", err)
 	}
 }
 
@@ -556,6 +613,7 @@ name: company-gateway
 driver: openaicompat
 base_url: https://llm.example.com/v1
 api_key_env: COMPANY_GATEWAY_API_KEY
+discovery_endpoint_path: /models
 `
 	modelsYAML := `
 models:
@@ -773,6 +831,7 @@ name: openai
 driver: openaicompat
 base_url: https://api.example.com/v1
 api_key_env: OPENAI_GATEWAY_API_KEY
+discovery_endpoint_path: /models
 `
 	if err := os.WriteFile(filepath.Join(customDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
 		t.Fatalf("write provider.yaml: %v", err)
@@ -801,12 +860,14 @@ name: gateway-a
 driver: openaicompat
 base_url: https://api.example.com/v1/
 api_key_env: GATEWAY_A_API_KEY
+discovery_endpoint_path: /models
 `
 	providerB := `
 name: gateway-b
 driver: openaicompat
 base_url: https://API.EXAMPLE.COM/v1
 api_key_env: GATEWAY_B_API_KEY
+discovery_endpoint_path: /models
 `
 	if err := os.WriteFile(filepath.Join(customA, customProviderConfigName), []byte(strings.TrimSpace(providerA)+"\n"), 0o644); err != nil {
 		t.Fatalf("write provider a: %v", err)
@@ -879,6 +940,7 @@ shell: powershell
 name: company-gateway
 driver: openaicompat
 api_key_env: COMPANY_GATEWAY_API_KEY
+discovery_endpoint_path: /models
 `
 	if err := os.WriteFile(filepath.Join(customDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
 		t.Fatalf("write provider.yaml: %v", err)
@@ -1029,7 +1091,7 @@ func TestSaveCustomProviderRejectsManualSourceWithoutModels(t *testing.T) {
 		Driver:      provider.DriverOpenAICompat,
 		BaseURL:     "https://llm.example.com/v1",
 		APIKeyEnv:   "MANUAL_EMPTY_MODELS_API_KEY",
-		ModelSource: provider.ModelSourceManual,
+		ModelSource: ModelSourceManual,
 		Models:      nil,
 	})
 	if err == nil || !strings.Contains(err.Error(), "manual model source requires non-empty models") {
@@ -1045,13 +1107,13 @@ func TestSaveCustomProviderRejectsModelWithoutName(t *testing.T) {
 		Driver:      provider.DriverOpenAICompat,
 		BaseURL:     "https://llm.example.com/v1",
 		APIKeyEnv:   "MANUAL_MISSING_MODEL_NAME_API_KEY",
-		ModelSource: provider.ModelSourceManual,
+		ModelSource: ModelSourceManual,
 		Models: []providertypes.ModelDescriptor{
 			{ID: "manual-model-1"},
 		},
 	})
-	if err != nil {
-		t.Fatalf("expected model name optional in SaveCustomProviderWithModels, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "models[0].name is empty") {
+		t.Fatalf("expected model name required error, got %v", err)
 	}
 }
 
@@ -1070,6 +1132,107 @@ func TestSaveCustomProviderRejectsInvalidModelSource(t *testing.T) {
 	}
 }
 
+func TestSaveCustomProviderAndLoadCustomProviderStayConsistent(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	tests := []struct {
+		name                 string
+		input                SaveCustomProviderInput
+		wantModelSource      string
+		wantChatAPIMode      string
+		wantChatPath         string
+		wantDiscoveryPath    string
+		wantModelDescriptors int
+	}{
+		{
+			name: "discover source",
+			input: SaveCustomProviderInput{
+				Name:                  "roundtrip-discover",
+				Driver:                provider.DriverOpenAICompat,
+				BaseURL:               "https://llm.example.com/v1",
+				APIKeyEnv:             "ROUNDTRIP_DISCOVER_API_KEY",
+				ModelSource:           ModelSourceDiscover,
+				ChatAPIMode:           provider.ChatAPIModeResponses,
+				DiscoveryEndpointPath: "/models",
+			},
+			wantModelSource:      ModelSourceDiscover,
+			wantChatAPIMode:      provider.ChatAPIModeResponses,
+			wantChatPath:         "",
+			wantDiscoveryPath:    "/models",
+			wantModelDescriptors: 0,
+		},
+		{
+			name: "manual source",
+			input: SaveCustomProviderInput{
+				Name:                  "roundtrip-manual",
+				Driver:                provider.DriverOpenAICompat,
+				BaseURL:               "https://llm.example.com/v1",
+				APIKeyEnv:             "ROUNDTRIP_MANUAL_API_KEY",
+				ModelSource:           ModelSourceManual,
+				DiscoveryEndpointPath: "/should-be-cleared",
+				Models: []providertypes.ModelDescriptor{
+					{
+						ID:              "manual-model-1",
+						Name:            "Manual Model 1",
+						ContextWindow:   131072,
+						MaxOutputTokens: 8192,
+					},
+				},
+			},
+			wantModelSource:      ModelSourceManual,
+			wantChatAPIMode:      "",
+			wantChatPath:         "",
+			wantDiscoveryPath:    "",
+			wantModelDescriptors: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if err := SaveCustomProviderWithModels(baseDir, tt.input); err != nil {
+				t.Fatalf("SaveCustomProviderWithModels() error = %v", err)
+			}
+
+			loaded, err := loadCustomProvider(filepath.Join(baseDir, providersDirName, tt.input.Name))
+			if err != nil {
+				t.Fatalf("loadCustomProvider() error = %v", err)
+			}
+
+			if loaded.Name != tt.input.Name {
+				t.Fatalf("expected name %q, got %q", tt.input.Name, loaded.Name)
+			}
+			if loaded.Driver != tt.input.Driver {
+				t.Fatalf("expected driver %q, got %q", tt.input.Driver, loaded.Driver)
+			}
+			if loaded.BaseURL != tt.input.BaseURL {
+				t.Fatalf("expected base url %q, got %q", tt.input.BaseURL, loaded.BaseURL)
+			}
+			if loaded.APIKeyEnv != tt.input.APIKeyEnv {
+				t.Fatalf("expected api key env %q, got %q", tt.input.APIKeyEnv, loaded.APIKeyEnv)
+			}
+			if loaded.ModelSource != tt.wantModelSource {
+				t.Fatalf("expected model_source %q, got %q", tt.wantModelSource, loaded.ModelSource)
+			}
+			if loaded.ChatAPIMode != tt.wantChatAPIMode {
+				t.Fatalf("expected chat_api_mode %q, got %q", tt.wantChatAPIMode, loaded.ChatAPIMode)
+			}
+			if loaded.ChatEndpointPath != tt.wantChatPath {
+				t.Fatalf("expected chat endpoint %q, got %q", tt.wantChatPath, loaded.ChatEndpointPath)
+			}
+			if loaded.DiscoveryEndpointPath != tt.wantDiscoveryPath {
+				t.Fatalf("expected discovery endpoint %q, got %q", tt.wantDiscoveryPath, loaded.DiscoveryEndpointPath)
+			}
+			if len(loaded.Models) != tt.wantModelDescriptors {
+				t.Fatalf("expected model descriptors %d, got %+v", tt.wantModelDescriptors, loaded.Models)
+			}
+		})
+	}
+}
+
 func TestSaveCustomProviderManualModelsPersistOptionalFields(t *testing.T) {
 	t.Parallel()
 
@@ -1080,7 +1243,7 @@ func TestSaveCustomProviderManualModelsPersistOptionalFields(t *testing.T) {
 		Driver:      provider.DriverOpenAICompat,
 		BaseURL:     "https://llm.example.com/v1",
 		APIKeyEnv:   "MANUAL_MODELS_PROVIDER_API_KEY",
-		ModelSource: provider.ModelSourceManual,
+		ModelSource: ModelSourceManual,
 		Models: []providertypes.ModelDescriptor{
 			{
 				ID:   "manual-model-1",
@@ -1092,10 +1255,6 @@ func TestSaveCustomProviderManualModelsPersistOptionalFields(t *testing.T) {
 				ContextWindow:   131072,
 				MaxOutputTokens: 8192,
 			},
-			{
-				ID:   "Manual-Model-1",
-				Name: "Duplicate by key should be merged",
-			},
 		},
 	})
 	if err != nil {
@@ -1106,14 +1265,14 @@ func TestSaveCustomProviderManualModelsPersistOptionalFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadCustomProvider() error = %v", err)
 	}
-	if cfg.ModelSource != provider.ModelSourceManual {
+	if cfg.ModelSource != ModelSourceManual {
 		t.Fatalf("expected model source manual, got %q", cfg.ModelSource)
 	}
 	if cfg.DiscoveryEndpointPath != "" {
 		t.Fatalf("expected discovery settings to be empty in manual mode, got %+v", cfg)
 	}
 	if len(cfg.Models) != 2 {
-		t.Fatalf("expected merged model list with 2 entries, got %+v", cfg.Models)
+		t.Fatalf("expected model list with 2 entries, got %+v", cfg.Models)
 	}
 	if cfg.Models[0].ContextWindow != 0 || cfg.Models[0].MaxOutputTokens != 0 {
 		t.Fatalf("expected optional fields omitted for model-1, got %+v", cfg.Models[0])
@@ -1357,6 +1516,7 @@ name: company-gateway
 driver: custom-driver
 base_url: https://custom.example.com/v1
 api_key_env: COMPANY_GATEWAY_API_KEY
+discovery_endpoint_path: /catalog/models
 `
 	if err := os.WriteFile(filepath.Join(customDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
 		t.Fatalf("write provider.yaml: %v", err)

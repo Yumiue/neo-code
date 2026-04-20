@@ -14,9 +14,9 @@ type RuntimeConfig struct {
 	DefaultModel          string
 	APIKey                string
 	SessionAssetLimits    providertypes.SessionAssetLimits
+	ChatAPIMode           string
 	ChatEndpointPath      string
 	DiscoveryEndpointPath string
-	ModelFieldAliases     string
 }
 
 // Provider 定义模型生成能力，通过 channel 推送流式事件给上层消费。

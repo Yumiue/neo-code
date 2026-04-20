@@ -2,6 +2,12 @@
 ## 为什么需要 Provider 层
 不同模型 API 在消息结构、流式协议和工具调用格式上差异很大。NeoCode 将这些差异都封装在 `internal/provider` 内部，让 runtime 始终只面向一套干净的领域模型工作。
 
+## 当前边界
+- `internal/provider` 根包只保留统一契约、注册中心、错误类型、少量请求/事件 helper
+- `internal/provider/openaicompat`、`internal/provider/gemini`、`internal/provider/anthropic` 各自负责“统一入参 -> 协议请求 / SDK 请求”与“协议流 / SDK 流 -> 统一事件”
+- 流式累积、tool call 回放、`message_done` 兜底检查属于 `internal/runtime/streaming`，不再放在 provider 内部公共包
+- `ProviderIdentity` 只保留 discovery / cache 真正需要的连接语义；SDK driver 不再把整套协议矩阵塞进缓存键
+
 ## 内部标准结构
 - `Message`：统一消息格式，包含 `role`、`content`、可选工具调用和工具结果元信息
 - `ToolCall`：统一工具调用结构，包含 `id`、`name` 和完整 JSON 参数字符串
