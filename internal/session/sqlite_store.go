@@ -42,6 +42,8 @@ type sqliteMessageRow struct {
 	ToolMetadataJSON string
 }
 
+const maxSessionDeleteBatchSize = 900
+
 // SQLiteStore 使用单个工作区级 SQLite 数据库持久化会话。
 type SQLiteStore struct {
 	projectDir string
@@ -1169,25 +1171,48 @@ func listExpiredSessionIDs(ctx context.Context, tx *sql.Tx, cutoffMS int64) ([]s
 
 // deleteSessionsByIDSet 在事务内按固定 ID 集合删除会话，避免删除范围漂移。
 func deleteSessionsByIDSet(ctx context.Context, tx *sql.Tx, sessionIDs []string) (int, error) {
+	return deleteSessionsByIDSetWithBatchSize(ctx, tx, sessionIDs, maxSessionDeleteBatchSize)
+}
+
+// deleteSessionsByIDSetWithBatchSize 按批次删除固定 ID 集，避免 SQL 参数数量超过 SQLite 限制。
+func deleteSessionsByIDSetWithBatchSize(
+	ctx context.Context,
+	tx *sql.Tx,
+	sessionIDs []string,
+	batchSize int,
+) (int, error) {
 	if len(sessionIDs) == 0 {
 		return 0, nil
 	}
-	args := make([]any, 0, len(sessionIDs))
-	placeholders := make([]string, 0, len(sessionIDs))
-	for _, id := range sessionIDs {
-		args = append(args, id)
-		placeholders = append(placeholders, "?")
+	if batchSize <= 0 {
+		batchSize = maxSessionDeleteBatchSize
 	}
-	query := fmt.Sprintf(`DELETE FROM sessions WHERE id IN (%s)`, strings.Join(placeholders, ", "))
-	result, err := tx.ExecContext(ctx, query, args...)
-	if err != nil {
-		return 0, fmt.Errorf("session: cleanup expired sessions: %w", err)
+
+	totalAffected := 0
+	for start := 0; start < len(sessionIDs); start += batchSize {
+		end := start + batchSize
+		if end > len(sessionIDs) {
+			end = len(sessionIDs)
+		}
+		batch := sessionIDs[start:end]
+		args := make([]any, 0, len(batch))
+		placeholders := make([]string, 0, len(batch))
+		for _, id := range batch {
+			args = append(args, id)
+			placeholders = append(placeholders, "?")
+		}
+		query := fmt.Sprintf(`DELETE FROM sessions WHERE id IN (%s)`, strings.Join(placeholders, ", "))
+		result, err := tx.ExecContext(ctx, query, args...)
+		if err != nil {
+			return 0, fmt.Errorf("session: cleanup expired sessions: %w", err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return 0, fmt.Errorf("session: inspect expired cleanup rows: %w", err)
+		}
+		totalAffected += int(affected)
 	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("session: inspect expired cleanup rows: %w", err)
-	}
-	return int(affected), nil
+	return totalAffected, nil
 }
 
 // insertMessage 在事务内插入单条消息记录。

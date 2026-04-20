@@ -474,7 +474,18 @@ func cloneIndex(index *Index) *Index {
 		Entries:   make([]Entry, len(index.Entries)),
 		UpdatedAt: index.UpdatedAt,
 	}
-	copy(cloned.Entries, index.Entries)
+	for i, entry := range index.Entries {
+		cloned.Entries[i] = cloneEntry(entry)
+	}
+	return cloned
+}
+
+// cloneEntry 深拷贝单条记忆条目，避免 Keywords 等切片字段共享底层数组。
+func cloneEntry(entry Entry) Entry {
+	cloned := entry
+	if len(entry.Keywords) > 0 {
+		cloned.Keywords = append([]string(nil), entry.Keywords...)
+	}
 	return cloned
 }
 

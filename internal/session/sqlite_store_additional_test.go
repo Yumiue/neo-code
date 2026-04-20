@@ -399,3 +399,49 @@ func TestSQLiteStoreAppendMessagesCapsBatchAndSessionCount(t *testing.T) {
 		t.Fatalf("message rows = %d, want %d", rowCount, MaxSessionMessages)
 	}
 }
+
+func TestDeleteSessionsByIDSetWithBatchSizeDeletesAllBatches(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := newTestStore(t)
+	expiredAt := time.Now().UTC().Add(-DefaultSessionMaxAge - time.Hour).Truncate(time.Millisecond)
+	sessionIDs := []string{"cleanup_batch_01", "cleanup_batch_02", "cleanup_batch_03", "cleanup_batch_04", "cleanup_batch_05"}
+	for _, id := range sessionIDs {
+		if _, err := store.CreateSession(ctx, CreateSessionInput{
+			ID:        id,
+			Title:     id,
+			CreatedAt: expiredAt,
+			UpdatedAt: expiredAt,
+		}); err != nil {
+			t.Fatalf("CreateSession(%q) error = %v", id, err)
+		}
+	}
+
+	db, err := store.ensureDB(ctx)
+	if err != nil {
+		t.Fatalf("ensureDB() error = %v", err)
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx() error = %v", err)
+	}
+	defer rollbackTx(tx)
+
+	affected, err := deleteSessionsByIDSetWithBatchSize(ctx, tx, sessionIDs, 2)
+	if err != nil {
+		t.Fatalf("deleteSessionsByIDSetWithBatchSize() error = %v", err)
+	}
+	if affected != len(sessionIDs) {
+		t.Fatalf("affected = %d, want %d", affected, len(sessionIDs))
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+
+	for _, id := range sessionIDs {
+		if _, err := store.LoadSession(ctx, id); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("expected %q to be deleted, got %v", id, err)
+		}
+	}
+}

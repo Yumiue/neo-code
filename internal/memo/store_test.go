@@ -58,7 +58,7 @@ func TestFileStoreSaveAndLoadIndexByScope(t *testing.T) {
 func TestFileStoreLoadIndexReturnsClonedCacheContent(t *testing.T) {
 	store := NewFileStore(t.TempDir(), "/workspace/project")
 	if err := store.SaveIndex(context.Background(), ScopeUser, &Index{
-		Entries: []Entry{{Type: TypeUser, Title: "original", Content: "body"}},
+		Entries: []Entry{{Type: TypeUser, Title: "original", Content: "body", Keywords: []string{"go", "tabs"}}},
 	}); err != nil {
 		t.Fatalf("SaveIndex() error = %v", err)
 	}
@@ -68,6 +68,7 @@ func TestFileStoreLoadIndexReturnsClonedCacheContent(t *testing.T) {
 		t.Fatalf("LoadIndex(first) error = %v", err)
 	}
 	first.Entries[0].Title = "mutated in memory"
+	first.Entries[0].Keywords[0] = "mutated-keyword"
 
 	second, err := store.LoadIndex(context.Background(), ScopeUser)
 	if err != nil {
@@ -76,18 +77,22 @@ func TestFileStoreLoadIndexReturnsClonedCacheContent(t *testing.T) {
 	if got := second.Entries[0].Title; got != "original" {
 		t.Fatalf("cached title = %q, want %q", got, "original")
 	}
+	if got := second.Entries[0].Keywords[0]; got != "go" {
+		t.Fatalf("cached keyword = %q, want %q", got, "go")
+	}
 }
 
 func TestFileStoreSaveIndexCachesCloneOfInput(t *testing.T) {
 	store := NewFileStore(t.TempDir(), "/workspace/project")
 	index := &Index{
-		Entries: []Entry{{Type: TypeUser, Title: "saved", Content: "body"}},
+		Entries: []Entry{{Type: TypeUser, Title: "saved", Content: "body", Keywords: []string{"persisted"}}},
 	}
 	if err := store.SaveIndex(context.Background(), ScopeUser, index); err != nil {
 		t.Fatalf("SaveIndex() error = %v", err)
 	}
 
 	index.Entries[0].Title = "changed after save"
+	index.Entries[0].Keywords[0] = "changed-keyword"
 
 	loaded, err := store.LoadIndex(context.Background(), ScopeUser)
 	if err != nil {
@@ -95,6 +100,9 @@ func TestFileStoreSaveIndexCachesCloneOfInput(t *testing.T) {
 	}
 	if got := loaded.Entries[0].Title; got != "saved" {
 		t.Fatalf("loaded title = %q, want %q", got, "saved")
+	}
+	if got := loaded.Entries[0].Keywords[0]; got != "persisted" {
+		t.Fatalf("loaded keyword = %q, want %q", got, "persisted")
 	}
 }
 
