@@ -263,6 +263,38 @@ func TestAutoExtractorLoadsDedupIndexOutsideCurrentProcessState(t *testing.T) {
 	}
 }
 
+func TestAutoExtractorFailedRunDoesNotAdvanceFingerprint(t *testing.T) {
+	svc := newAutoExtractorTestService(t)
+	var attemptMu sync.Mutex
+	attempt := 0
+	extractor := &stubMemoExtractor{
+		extractFn: func(ctx context.Context, messages []providertypes.Message) ([]Entry, error) {
+			attemptMu.Lock()
+			defer attemptMu.Unlock()
+			attempt++
+			if attempt == 1 {
+				return nil, errors.New("boom")
+			}
+			return []Entry{{Type: TypeProject, Title: "retry", Content: "retry", Source: SourceAutoExtract}}, nil
+		},
+	}
+	auto := NewAutoExtractor(extractor, svc, time.Second)
+	auto.debounce = 5 * time.Millisecond
+	auto.logf = func(string, ...any) {}
+	registerAutoExtractorCleanup(t, auto)
+
+	messages := []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("same payload")}}}
+	auto.Schedule("session-1", messages)
+	waitFor(t, time.Second, func() bool { return extractor.Calls() == 1 })
+
+	auto.Schedule("session-1", messages)
+	waitFor(t, time.Second, func() bool { return extractor.Calls() == 2 })
+	waitFor(t, time.Second, func() bool {
+		entries, err := svc.List(context.Background(), ScopeProject)
+		return err == nil && len(entries) == 1
+	})
+}
+
 func waitFor(t *testing.T, timeout time.Duration, fn func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

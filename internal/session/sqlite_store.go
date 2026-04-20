@@ -97,33 +97,29 @@ func (s *SQLiteStore) CleanupExpiredSessions(ctx context.Context, maxAge time.Du
 	}
 
 	cutoffMS := toUnixMillis(time.Now().Add(-maxAge))
-
-	// 查询即将删除的会话 ID，用于清理附件目录
-	rows, err := db.QueryContext(ctx, `SELECT id FROM sessions WHERE updated_at_ms < ?`, cutoffMS)
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, fmt.Errorf("session: query expired sessions: %w", err)
+		return 0, fmt.Errorf("session: begin cleanup tx: %w", err)
 	}
-	var expiredIDs []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return 0, err
-		}
-		expiredIDs = append(expiredIDs, id)
+	defer rollbackTx(tx)
+
+	expiredIDs, err := listExpiredSessionIDs(ctx, tx, cutoffMS)
+	if err != nil {
+		return 0, err
 	}
-	rows.Close()
 
 	if len(expiredIDs) == 0 {
 		return 0, nil
 	}
 
-	// 删除数据库记录（CASCADE 清理 messages + session_assets）
-	result, err := db.ExecContext(ctx, `DELETE FROM sessions WHERE updated_at_ms < ?`, cutoffMS)
+	// 在同一事务内按固定 ID 集合删除记录，避免查询结果与实际删除集合不一致。
+	affected, err := deleteSessionsByIDSet(ctx, tx, expiredIDs)
 	if err != nil {
-		return 0, fmt.Errorf("session: cleanup expired sessions: %w", err)
+		return 0, err
 	}
-	affected, _ := result.RowsAffected()
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("session: commit cleanup tx: %w", err)
+	}
 
 	// 清理附件目录
 	for _, id := range expiredIDs {
@@ -280,6 +276,7 @@ func (s *SQLiteStore) AppendMessages(ctx context.Context, input AppendMessagesIn
 	if err != nil {
 		return err
 	}
+	normalizedMessages = trimMessagesToSessionLimit(normalizedMessages)
 	updatedAt := resolveUpdatedAt(input.UpdatedAt)
 
 	tx, err := db.BeginTx(ctx, nil)
@@ -1116,9 +1113,9 @@ func trimOverflowMessages(ctx context.Context, tx *sql.Tx, sessionID string, new
 	}
 	var currentCount int
 	if err := tx.QueryRowContext(ctx,
-		`SELECT message_count FROM sessions WHERE id = ?`, sessionID,
+		`SELECT COUNT(*) FROM messages WHERE session_id = ?`, sessionID,
 	).Scan(&currentCount); err != nil {
-		return fmt.Errorf("session: query message_count: %w", err)
+		return fmt.Errorf("session: query message rows: %w", err)
 	}
 	overflow := (currentCount + newCount) - MaxSessionMessages
 	if overflow <= 0 {
@@ -1137,6 +1134,60 @@ func trimOverflowMessages(ctx context.Context, tx *sql.Tx, sessionID string, new
 		return fmt.Errorf("session: update message_count after trim: %w", err)
 	}
 	return nil
+}
+
+// trimMessagesToSessionLimit 保留最新一批消息，使单次追加的消息数不会超过会话上限。
+func trimMessagesToSessionLimit(messages []providertypes.Message) []providertypes.Message {
+	if MaxSessionMessages <= 0 || len(messages) <= MaxSessionMessages {
+		return messages
+	}
+	start := len(messages) - MaxSessionMessages
+	return append([]providertypes.Message(nil), messages[start:]...)
+}
+
+// listExpiredSessionIDs 在事务内查询过期会话 ID，供后续按固定集合删除。
+func listExpiredSessionIDs(ctx context.Context, tx *sql.Tx, cutoffMS int64) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM sessions WHERE updated_at_ms < ?`, cutoffMS)
+	if err != nil {
+		return nil, fmt.Errorf("session: query expired sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var expiredIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("session: scan expired session id: %w", err)
+		}
+		expiredIDs = append(expiredIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("session: iterate expired sessions: %w", err)
+	}
+	return expiredIDs, nil
+}
+
+// deleteSessionsByIDSet 在事务内按固定 ID 集合删除会话，避免删除范围漂移。
+func deleteSessionsByIDSet(ctx context.Context, tx *sql.Tx, sessionIDs []string) (int, error) {
+	if len(sessionIDs) == 0 {
+		return 0, nil
+	}
+	args := make([]any, 0, len(sessionIDs))
+	placeholders := make([]string, 0, len(sessionIDs))
+	for _, id := range sessionIDs {
+		args = append(args, id)
+		placeholders = append(placeholders, "?")
+	}
+	query := fmt.Sprintf(`DELETE FROM sessions WHERE id IN (%s)`, strings.Join(placeholders, ", "))
+	result, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("session: cleanup expired sessions: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("session: inspect expired cleanup rows: %w", err)
+	}
+	return int(affected), nil
 }
 
 // insertMessage 在事务内插入单条消息记录。

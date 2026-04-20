@@ -163,10 +163,11 @@ func (a *AutoExtractor) handleDebounce(sessionID string, state *autoExtractState
 	state.timer = nil
 
 	go func() {
-		a.extractAndStore(req.extractor, req.messages)
-		state.mu.Lock()
-		state.lastFingerprint = fp
-		state.mu.Unlock()
+		if a.extractAndStore(req.extractor, req.messages) {
+			state.mu.Lock()
+			state.lastFingerprint = fp
+			state.mu.Unlock()
+		}
 		a.handleRunDone(sessionID, state)
 	}()
 }
@@ -222,20 +223,22 @@ func isIdleStateLocked(state *autoExtractState, seq uint64) bool {
 }
 
 // extractAndStore 执行提取，并在写入前做本地批次去重和持久化级别的原子去重。
-func (a *AutoExtractor) extractAndStore(extractor Extractor, messages []providertypes.Message) {
+// 返回值表示本次提取和写入流程是否成功完成，可用于更新增量指纹。
+func (a *AutoExtractor) extractAndStore(extractor Extractor, messages []providertypes.Message) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), a.extractTimeout)
 	defer cancel()
 
 	entries, err := extractor.Extract(ctx, messages)
 	if err != nil {
 		a.logError("memo: auto extract failed: %v", err)
-		return
+		return false
 	}
 	if len(entries) == 0 {
-		return
+		return true
 	}
 
 	seen := make(map[string]struct{}, len(entries))
+	succeeded := true
 	for _, entry := range entries {
 		entry.Source = SourceAutoExtract
 		key := autoExtractDedupKey(entry)
@@ -249,6 +252,7 @@ func (a *AutoExtractor) extractAndStore(extractor Extractor, messages []provider
 		added, err := a.svc.addAutoExtractIfAbsent(ctx, entry)
 		if err != nil {
 			a.logError("memo: auto extract add failed: %v", err)
+			succeeded = false
 			continue
 		}
 
@@ -257,6 +261,7 @@ func (a *AutoExtractor) extractAndStore(extractor Extractor, messages []provider
 			continue
 		}
 	}
+	return succeeded
 }
 
 // autoExtractDedupKey 生成自动提取条目的精确去重键。

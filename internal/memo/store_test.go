@@ -55,6 +55,49 @@ func TestFileStoreSaveAndLoadIndexByScope(t *testing.T) {
 	}
 }
 
+func TestFileStoreLoadIndexReturnsClonedCacheContent(t *testing.T) {
+	store := NewFileStore(t.TempDir(), "/workspace/project")
+	if err := store.SaveIndex(context.Background(), ScopeUser, &Index{
+		Entries: []Entry{{Type: TypeUser, Title: "original", Content: "body"}},
+	}); err != nil {
+		t.Fatalf("SaveIndex() error = %v", err)
+	}
+
+	first, err := store.LoadIndex(context.Background(), ScopeUser)
+	if err != nil {
+		t.Fatalf("LoadIndex(first) error = %v", err)
+	}
+	first.Entries[0].Title = "mutated in memory"
+
+	second, err := store.LoadIndex(context.Background(), ScopeUser)
+	if err != nil {
+		t.Fatalf("LoadIndex(second) error = %v", err)
+	}
+	if got := second.Entries[0].Title; got != "original" {
+		t.Fatalf("cached title = %q, want %q", got, "original")
+	}
+}
+
+func TestFileStoreSaveIndexCachesCloneOfInput(t *testing.T) {
+	store := NewFileStore(t.TempDir(), "/workspace/project")
+	index := &Index{
+		Entries: []Entry{{Type: TypeUser, Title: "saved", Content: "body"}},
+	}
+	if err := store.SaveIndex(context.Background(), ScopeUser, index); err != nil {
+		t.Fatalf("SaveIndex() error = %v", err)
+	}
+
+	index.Entries[0].Title = "changed after save"
+
+	loaded, err := store.LoadIndex(context.Background(), ScopeUser)
+	if err != nil {
+		t.Fatalf("LoadIndex() error = %v", err)
+	}
+	if got := loaded.Entries[0].Title; got != "saved" {
+		t.Fatalf("loaded title = %q, want %q", got, "saved")
+	}
+}
+
 func TestFileStoreSaveAndLoadTopicByScope(t *testing.T) {
 	store := NewFileStore(t.TempDir(), "/workspace/project")
 	content := "---\ntype: user\n---\n\nbody\n"

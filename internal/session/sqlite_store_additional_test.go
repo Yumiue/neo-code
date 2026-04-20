@@ -234,3 +234,168 @@ func TestResolveUpdatedAtReturnsProvidedValue(t *testing.T) {
 		t.Fatalf("resolveUpdatedAt should keep non-zero value, got %v want %v", got, provided)
 	}
 }
+
+func TestSQLiteStoreCleanupExpiredSessionsNoopBranches(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := newTestStore(t)
+	session, err := store.CreateSession(ctx, CreateSessionInput{
+		ID:        "cleanup_noop",
+		Title:     "cleanup noop",
+		CreatedAt: time.Now().UTC().Add(-time.Hour),
+		UpdatedAt: time.Now().UTC().Add(-time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	removed, err := store.CleanupExpiredSessions(ctx, 0)
+	if err != nil {
+		t.Fatalf("CleanupExpiredSessions(0) error = %v", err)
+	}
+	if removed != 0 {
+		t.Fatalf("CleanupExpiredSessions(0) removed = %d, want 0", removed)
+	}
+
+	removed, err = store.CleanupExpiredSessions(ctx, DefaultSessionMaxAge)
+	if err != nil {
+		t.Fatalf("CleanupExpiredSessions(DefaultSessionMaxAge) error = %v", err)
+	}
+	if removed != 0 {
+		t.Fatalf("CleanupExpiredSessions(DefaultSessionMaxAge) removed = %d, want 0", removed)
+	}
+
+	if _, err := store.LoadSession(ctx, session.ID); err != nil {
+		t.Fatalf("LoadSession() error = %v", err)
+	}
+}
+
+func TestSQLiteStoreCleanupExpiredSessionsRemovesExpiredSessionsAndAssets(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := newTestStore(t)
+	expiredAt := time.Now().UTC().Add(-DefaultSessionMaxAge - time.Hour).Truncate(time.Millisecond)
+	freshAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+
+	expired, err := store.CreateSession(ctx, CreateSessionInput{
+		ID:        "cleanup_expired",
+		Title:     "expired",
+		CreatedAt: expiredAt,
+		UpdatedAt: expiredAt,
+	})
+	if err != nil {
+		t.Fatalf("CreateSession(expired) error = %v", err)
+	}
+	fresh, err := store.CreateSession(ctx, CreateSessionInput{
+		ID:        "cleanup_fresh",
+		Title:     "fresh",
+		CreatedAt: freshAt,
+		UpdatedAt: freshAt,
+	})
+	if err != nil {
+		t.Fatalf("CreateSession(fresh) error = %v", err)
+	}
+
+	expiredAssetDir := filepath.Join(store.assetsDir, expired.ID)
+	freshAssetDir := filepath.Join(store.assetsDir, fresh.ID)
+	for _, dir := range []string{expiredAssetDir, freshAssetDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", dir, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "note.txt"), []byte("asset"), 0o644); err != nil {
+			t.Fatalf("WriteFile(%q) error = %v", dir, err)
+		}
+	}
+
+	removed, err := store.CleanupExpiredSessions(ctx, DefaultSessionMaxAge)
+	if err != nil {
+		t.Fatalf("CleanupExpiredSessions() error = %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("CleanupExpiredSessions() removed = %d, want 1", removed)
+	}
+
+	if _, err := store.LoadSession(ctx, expired.ID); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected expired session to be removed, got %v", err)
+	}
+	if _, err := store.LoadSession(ctx, fresh.ID); err != nil {
+		t.Fatalf("expected fresh session to remain, got %v", err)
+	}
+	if _, err := os.Stat(expiredAssetDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected expired asset dir to be removed, got %v", err)
+	}
+	if _, err := os.Stat(freshAssetDir); err != nil {
+		t.Fatalf("expected fresh asset dir to remain, got %v", err)
+	}
+}
+
+func TestSQLiteStoreAppendMessagesCapsBatchAndSessionCount(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := newTestStore(t)
+	session, err := store.CreateSession(ctx, CreateSessionInput{ID: "append_cap", Title: "append cap"})
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	if err := store.AppendMessages(ctx, AppendMessagesInput{
+		SessionID: session.ID,
+		Messages: []providertypes.Message{
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("seed-0")}},
+			{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("seed-1")}},
+		},
+	}); err != nil {
+		t.Fatalf("AppendMessages(seed) error = %v", err)
+	}
+
+	batch := make([]providertypes.Message, 0, MaxSessionMessages+2)
+	for i := 0; i < MaxSessionMessages+2; i++ {
+		batch = append(batch, providertypes.Message{
+			Role:  providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{providertypes.NewTextPart(buildIndexedSuffix(i))},
+		})
+	}
+	if err := store.AppendMessages(ctx, AppendMessagesInput{
+		SessionID: session.ID,
+		Messages:  batch,
+	}); err != nil {
+		t.Fatalf("AppendMessages(large batch) error = %v", err)
+	}
+
+	loaded, err := store.LoadSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("LoadSession() error = %v", err)
+	}
+	if len(loaded.Messages) != MaxSessionMessages {
+		t.Fatalf("len(Messages) = %d, want %d", len(loaded.Messages), MaxSessionMessages)
+	}
+	if got := renderSessionMessageParts(loaded.Messages[0]); got != buildIndexedSuffix(2) {
+		t.Fatalf("first kept message = %q, want %q", got, buildIndexedSuffix(2))
+	}
+	if got := renderSessionMessageParts(loaded.Messages[len(loaded.Messages)-1]); got != buildIndexedSuffix(MaxSessionMessages+1) {
+		t.Fatalf("last kept message = %q, want %q", got, buildIndexedSuffix(MaxSessionMessages+1))
+	}
+
+	db, err := store.ensureDB(ctx)
+	if err != nil {
+		t.Fatalf("ensureDB() error = %v", err)
+	}
+	var headerCount int
+	if err := db.QueryRowContext(ctx, `SELECT message_count FROM sessions WHERE id = ?`, session.ID).Scan(&headerCount); err != nil {
+		t.Fatalf("query message_count error = %v", err)
+	}
+	if headerCount != MaxSessionMessages {
+		t.Fatalf("message_count = %d, want %d", headerCount, MaxSessionMessages)
+	}
+
+	var rowCount int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM messages WHERE session_id = ?`, session.ID).Scan(&rowCount); err != nil {
+		t.Fatalf("query row count error = %v", err)
+	}
+	if rowCount != MaxSessionMessages {
+		t.Fatalf("message rows = %d, want %d", rowCount, MaxSessionMessages)
+	}
+}

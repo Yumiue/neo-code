@@ -395,3 +395,36 @@ func TestTrimIndexEntriesByBytesRemovesMinimalPrefix(t *testing.T) {
 		t.Fatalf("remaining entries = %#v", index.Entries)
 	}
 }
+
+func TestTrimIndexEntriesPrefersLowestPriorityEntries(t *testing.T) {
+	index := &Index{
+		Entries: []Entry{
+			{Type: TypeUser, Title: "user", Source: SourceAutoExtract},
+			{Type: TypeReference, Title: "reference", Source: SourceAutoExtract},
+			{Type: TypeProject, Title: "project", Source: SourceUserManual},
+		},
+	}
+
+	removed := trimIndexEntries(index, 2, 0)
+	if len(removed) != 1 || removed[0].Title != "reference" {
+		t.Fatalf("removed = %#v, want reference entry", removed)
+	}
+	if len(index.Entries) != 2 {
+		t.Fatalf("len(index.Entries) = %d, want 2", len(index.Entries))
+	}
+}
+
+func TestFindEvictionVictimBranches(t *testing.T) {
+	if got := findEvictionVictim(nil); got != -1 {
+		t.Fatalf("findEvictionVictim(nil) = %d, want -1", got)
+	}
+
+	entries := []Entry{
+		{Type: TypeReference, Title: "first", Source: SourceAutoExtract},
+		{Type: TypeReference, Title: "second", Source: SourceAutoExtract},
+		{Type: TypeProject, Title: "third", Source: SourceAutoExtract},
+	}
+	if got := findEvictionVictim(entries); got != 0 {
+		t.Fatalf("findEvictionVictim() = %d, want 0 for first lowest-priority entry", got)
+	}
+}

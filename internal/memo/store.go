@@ -80,24 +80,25 @@ func (s *FileStore) LoadIndex(ctx context.Context, scope Scope) (*Index, error) 
 	if err != nil {
 		return nil, err
 	}
+	cachedContent := cloneIndex(index)
 
 	if !cachedModTime.IsZero() {
 		s.cacheMu.Lock()
 		s.indexCache[scope] = &cachedIndex{
-			content: index,
+			content: cachedContent,
 			modTime: cachedModTime,
 		}
 		s.cacheMu.Unlock()
 	} else if info, statErr := os.Stat(indexPath); statErr == nil {
 		s.cacheMu.Lock()
 		s.indexCache[scope] = &cachedIndex{
-			content: index,
+			content: cachedContent,
 			modTime: info.ModTime(),
 		}
 		s.cacheMu.Unlock()
 	}
 
-	return index, nil
+	return cloneIndex(cachedContent), nil
 }
 
 // SaveIndex 将索引写入指定分层下的 MEMO.md 文件，采用临时文件 + 原子替换策略。
@@ -140,7 +141,7 @@ func (s *FileStore) SaveIndex(ctx context.Context, scope Scope, index *Index) er
 
 	s.cacheMu.Lock()
 	s.indexCache[scope] = &cachedIndex{
-		content: index,
+		content: cloneIndex(index),
 		modTime: cacheModTimeAfterSave(target),
 	}
 	s.cacheMu.Unlock()
