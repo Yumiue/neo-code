@@ -122,6 +122,28 @@ func TestSQLiteStoreLifecycleRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreCreateSessionDuplicateReturnsSentinel(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := newTestStore(t)
+	input := CreateSessionInput{ID: "dup_session", Title: "dup"}
+	if _, err := store.CreateSession(ctx, input); err != nil {
+		t.Fatalf("first CreateSession() error = %v", err)
+	}
+
+	_, err := store.CreateSession(ctx, input)
+	if err == nil {
+		t.Fatalf("expected duplicate CreateSession() to fail")
+	}
+	if !errors.Is(err, ErrSessionAlreadyExists) {
+		t.Fatalf("expected ErrSessionAlreadyExists, got %v", err)
+	}
+	if !errors.Is(err, os.ErrExist) {
+		t.Fatalf("expected os.ErrExist chain, got %v", err)
+	}
+}
+
 func TestSQLiteStoreListSummariesSortedAndLegacyJSONIgnored(t *testing.T) {
 	ctx := context.Background()
 	baseDir, err := os.MkdirTemp("", "session-base-")
@@ -282,9 +304,13 @@ func TestSQLiteStoreErrors(t *testing.T) {
 	}
 	if err := store.UpdateSessionState(ctx, UpdateSessionStateInput{SessionID: "missing", Title: "x"}); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected update missing session to return os.ErrNotExist, got %v", err)
+	} else if !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("expected update missing session to return ErrSessionNotFound, got %v", err)
 	}
 	if _, err := store.LoadSession(ctx, "missing"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected load missing session to return os.ErrNotExist, got %v", err)
+	} else if !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("expected load missing session to return ErrSessionNotFound, got %v", err)
 	}
 }
 
@@ -370,6 +396,8 @@ func TestSQLiteStoreAppendReplaceAndSchemaErrors(t *testing.T) {
 		},
 	}); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected append missing session to return os.ErrNotExist, got %v", err)
+	} else if !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("expected append missing session to return ErrSessionNotFound, got %v", err)
 	}
 
 	session, err := store.CreateSession(ctx, CreateSessionInput{ID: "invalid_message", Title: "invalid"})
@@ -406,6 +434,8 @@ func TestSQLiteStoreAppendReplaceAndSchemaErrors(t *testing.T) {
 		},
 	}); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected replace transcript missing session to return os.ErrNotExist, got %v", err)
+	} else if !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("expected replace transcript missing session to return ErrSessionNotFound, got %v", err)
 	}
 }
 

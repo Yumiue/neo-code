@@ -3059,6 +3059,7 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.providerAddForm.ModelSource = a.providerAddForm.ModelSources[currentIdx]
 			clampProviderAddStep(a.providerAddForm)
 		} else if currentProviderAddField(a.providerAddForm) == providerAddFieldChatAPIMode {
+			previousMode := a.providerAddForm.ChatAPIMode
 			currentIdx := 0
 			for i, mode := range a.providerAddForm.ChatAPIModes {
 				if mode == a.providerAddForm.ChatAPIMode {
@@ -3068,6 +3069,7 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			currentIdx = (currentIdx - 1 + len(a.providerAddForm.ChatAPIModes)) % len(a.providerAddForm.ChatAPIModes)
 			a.providerAddForm.ChatAPIMode = a.providerAddForm.ChatAPIModes[currentIdx]
+			syncProviderAddOpenAICompatModeDefaults(a.providerAddForm, previousMode)
 			clampProviderAddStep(a.providerAddForm)
 		}
 		return a, nil
@@ -3099,6 +3101,7 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.providerAddForm.ModelSource = a.providerAddForm.ModelSources[currentIdx]
 			clampProviderAddStep(a.providerAddForm)
 		} else if currentProviderAddField(a.providerAddForm) == providerAddFieldChatAPIMode {
+			previousMode := a.providerAddForm.ChatAPIMode
 			currentIdx := 0
 			for i, mode := range a.providerAddForm.ChatAPIModes {
 				if mode == a.providerAddForm.ChatAPIMode {
@@ -3108,6 +3111,7 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			currentIdx = (currentIdx + 1) % len(a.providerAddForm.ChatAPIModes)
 			a.providerAddForm.ChatAPIMode = a.providerAddForm.ChatAPIModes[currentIdx]
+			syncProviderAddOpenAICompatModeDefaults(a.providerAddForm, previousMode)
 			clampProviderAddStep(a.providerAddForm)
 		}
 		return a, nil
@@ -3212,6 +3216,32 @@ func providerAddDefaultChatEndpointPath(driver string) string {
 	}
 }
 
+// providerAddDefaultOpenAICompatChatEndpointPath 根据 chat_api_mode 返回 openaicompat 的默认聊天端点路径。
+func providerAddDefaultOpenAICompatChatEndpointPath(chatAPIMode string) string {
+	mode, err := provider.NormalizeProviderChatAPIMode(chatAPIMode)
+	if err != nil || mode == "" {
+		mode = provider.DefaultProviderChatAPIMode()
+	}
+	if mode == provider.ChatAPIModeResponses {
+		return "/responses"
+	}
+	return "/chat/completions"
+}
+
+// syncProviderAddOpenAICompatModeDefaults 在切换 chat_api_mode 时同步默认 chat endpoint，避免默认值错配。
+func syncProviderAddOpenAICompatModeDefaults(form *providerAddFormState, previousMode string) {
+	if form == nil || provider.NormalizeProviderDriver(form.Driver) != provider.DriverOpenAICompat {
+		return
+	}
+
+	currentPath := strings.TrimSpace(form.ChatEndpointPath)
+	previousDefaultPath := providerAddDefaultOpenAICompatChatEndpointPath(previousMode)
+	if currentPath != "" && currentPath != previousDefaultPath {
+		return
+	}
+	form.ChatEndpointPath = providerAddDefaultOpenAICompatChatEndpointPath(form.ChatAPIMode)
+}
+
 // providerAddDefaultBaseURL 返回 provider add 表单的驱动默认 base URL。
 func providerAddDefaultBaseURL(driver string) string {
 	switch provider.NormalizeProviderDriver(driver) {
@@ -3302,7 +3332,11 @@ func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, str
 	}
 
 	if strings.TrimSpace(request.ChatEndpointPath) == "" {
-		request.ChatEndpointPath = providerAddDefaultChatEndpointPath(request.Driver)
+		if request.Driver == provider.DriverOpenAICompat {
+			request.ChatEndpointPath = providerAddDefaultOpenAICompatChatEndpointPath(request.ChatAPIMode)
+		} else {
+			request.ChatEndpointPath = providerAddDefaultChatEndpointPath(request.Driver)
+		}
 	}
 
 	switch request.Driver {
@@ -3396,11 +3430,19 @@ func parseProviderAddManualModelsJSON(raw string) ([]providertypes.ModelDescript
 	}
 
 	descriptors := make([]providertypes.ModelDescriptor, 0, len(models))
+	seen := make(map[string]struct{}, len(models))
 	for _, model := range models {
 		descriptor := providertypes.ModelDescriptor{
-			ID:   strings.TrimSpace(model.ID),
-			Name: strings.TrimSpace(model.Name),
+			ID:              strings.TrimSpace(model.ID),
+			Name:            strings.TrimSpace(model.Name),
+			ContextWindow:   config.ManualModelOptionalIntUnset,
+			MaxOutputTokens: config.ManualModelOptionalIntUnset,
 		}
+		key := provider.NormalizeKey(descriptor.ID)
+		if _, exists := seen[key]; exists {
+			return nil, fmt.Errorf("parse manual model json: models.id %q is duplicated", descriptor.ID)
+		}
+		seen[key] = struct{}{}
 		if model.ContextWindow != nil {
 			if *model.ContextWindow <= 0 {
 				return nil, fmt.Errorf("parse manual model json: models.context_window must be greater than 0")
@@ -3415,7 +3457,7 @@ func parseProviderAddManualModelsJSON(raw string) ([]providertypes.ModelDescript
 		}
 		descriptors = append(descriptors, descriptor)
 	}
-	return config.NormalizeCustomProviderModels(descriptors)
+	return descriptors, nil
 }
 
 // sanitizeProviderAddInputRunes 过滤 provider 表单输入中的控制字符，避免不可见字符污染配置字段。

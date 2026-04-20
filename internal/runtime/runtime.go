@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"context"
+	"errors"
+	"os"
 	"fmt"
 	"strings"
 	"sync"
@@ -262,6 +264,60 @@ func (s *Service) LoadSession(ctx context.Context, id string) (agentsession.Sess
 		return agentsession.Session{}, err
 	}
 	return session, nil
+}
+
+// CreateSession 按给定 id 执行会话创建/加载（Upsert）并返回可用会话头。
+func (s *Service) CreateSession(ctx context.Context, id string) (agentsession.Session, error) {
+	if err := ctx.Err(); err != nil {
+		return agentsession.Session{}, err
+	}
+	sessionID := strings.TrimSpace(id)
+	if sessionID == "" {
+		return agentsession.Session{}, errors.New("runtime: session id is empty")
+	}
+	defaultWorkdir := ""
+	if s.configManager != nil {
+		defaultWorkdir = strings.TrimSpace(s.configManager.Get().Workdir)
+	}
+	sessionWorkdir, err := resolveWorkdirForSession(defaultWorkdir, "", "")
+	if err != nil {
+		return agentsession.Session{}, err
+	}
+
+	existing, err := s.sessionStore.LoadSession(ctx, sessionID)
+	if err == nil {
+		return existing, nil
+	}
+	if !isRuntimeSessionNotFoundError(err) {
+		return agentsession.Session{}, err
+	}
+
+	newSession := agentsession.NewWithWorkdir("New Session", sessionWorkdir)
+	newSession.ID = sessionID
+	created, createErr := s.sessionStore.CreateSession(ctx, createSessionInputFromSession(newSession))
+	if createErr == nil {
+		return created, nil
+	}
+	if isRuntimeSessionAlreadyExistsError(createErr) {
+		return s.sessionStore.LoadSession(ctx, sessionID)
+	}
+	return agentsession.Session{}, createErr
+}
+
+// isRuntimeSessionNotFoundError 判断错误是否代表会话文件/记录不存在。
+func isRuntimeSessionNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, agentsession.ErrSessionNotFound)
+}
+
+// isRuntimeSessionAlreadyExistsError 判断错误是否代表会话已被并发创建。
+func isRuntimeSessionAlreadyExistsError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, agentsession.ErrSessionAlreadyExists) || errors.Is(err, os.ErrExist)
 }
 
 // SetAutoCompactThresholdResolver 注入自动压缩阈值解析能力，避免 runtime 直接处理模型目录细节。

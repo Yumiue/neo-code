@@ -1232,11 +1232,11 @@ data: [DONE]
 	}
 }
 
-func TestGenerate_UsesDirectBaseURLWhenChatEndpointPathEmpty(t *testing.T) {
+func TestGenerate_UsesDefaultCompletionsEndpointWhenChatEndpointPathEmpty(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/text/chatcompletion_v2" {
+		if r.URL.Path != "/v1/text/chatcompletion_v2/chat/completions" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -1265,11 +1265,11 @@ data: [DONE]
 	}
 }
 
-func TestGenerate_UsesDirectBaseURLWithResponsesModeWhenChatEndpointPathEmpty(t *testing.T) {
+func TestGenerate_UsesDefaultResponsesEndpointWhenChatEndpointPathEmpty(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/text/chatcompletion_v2" {
+		if r.URL.Path != "/v1/text/chatcompletion_v2/responses" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")

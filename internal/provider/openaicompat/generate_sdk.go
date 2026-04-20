@@ -116,11 +116,28 @@ func (p *Provider) newSDKClient() openai.Client {
 }
 
 func resolveChatEndpoint(cfg provider.RuntimeConfig) (string, error) {
-	endpoint, err := provider.ResolveChatEndpointURL(cfg.BaseURL, cfg.ChatEndpointPath)
+	chatEndpointPath := resolveChatEndpointPathByMode(cfg.ChatEndpointPath, cfg.ChatAPIMode)
+	endpoint, err := provider.ResolveChatEndpointURL(cfg.BaseURL, chatEndpointPath)
 	if err != nil {
 		return "", fmt.Errorf("%sinvalid chat endpoint configuration: %w", errorPrefix, err)
 	}
 	return endpoint, nil
+}
+
+// resolveChatEndpointPathByMode 在 chat endpoint 为空时，根据 chat_api_mode 自动回填默认端点路径。
+func resolveChatEndpointPathByMode(rawPath string, chatAPIMode string) string {
+	if strings.TrimSpace(rawPath) != "" {
+		return rawPath
+	}
+
+	mode, err := provider.NormalizeProviderChatAPIMode(chatAPIMode)
+	if err != nil || mode == "" {
+		mode = provider.DefaultProviderChatAPIMode()
+	}
+	if mode == provider.ChatAPIModeResponses {
+		return chatEndpointPathResponses
+	}
+	return chatEndpointPathCompletions
 }
 
 // validateStreamingResponse 校验流式响应协议，避免非 SSE 响应被误交给流解析器。

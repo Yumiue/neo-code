@@ -324,8 +324,10 @@ func (a App) renderProviderAddForm() string {
 		case providerAddFieldChatEndpointPath:
 			note := ""
 			trimmedPath := strings.TrimSpace(a.providerAddForm.ChatEndpointPath)
-			if trimmedPath == "" || trimmedPath == "/" {
-				note = "留空或\"/\" 使用直连 base_url"
+			if trimmedPath == "" {
+				note = "留空会按 Chat API Mode 自动回填默认端点"
+			} else if trimmedPath == "/" {
+				note = "\"/\" 使用直连 base_url"
 			} else {
 				note = "以 \"/\" 开头的端点路径"
 			}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 
@@ -11,6 +12,7 @@ import (
 	"neo-code/internal/gateway"
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
+	agentsession "neo-code/internal/session"
 )
 
 const bridgeLocalSubjectID = "local_admin"
@@ -18,6 +20,10 @@ const bridgeRuntimeUnavailableErrMsg = "gateway runtime bridge: runtime is unava
 
 type runtimeRunCanceler interface {
 	CancelRun(runID string) bool
+}
+
+type runtimeSessionCreator interface {
+	CreateSession(ctx context.Context, id string) (agentsession.Session, error)
 }
 
 // defaultBuildGatewayRuntimePort 构建网关运行时 RuntimePort 适配器，并返回对应资源清理函数。
@@ -184,19 +190,20 @@ func (b *gatewayRuntimePortBridge) LoadSession(ctx context.Context, input gatewa
 	session, err := b.runtime.LoadSession(ctx, sessionID)
 	if err != nil {
 		if isRuntimeNotFoundError(err) {
-			return gateway.Session{}, gateway.ErrRuntimeResourceNotFound
+			creator, ok := b.runtime.(runtimeSessionCreator)
+			if !ok {
+				return gateway.Session{}, gateway.ErrRuntimeResourceNotFound
+			}
+			created, createErr := creator.CreateSession(ctx, sessionID)
+			if createErr != nil {
+				return gateway.Session{}, createErr
+			}
+			return convertRuntimeSessionToGatewaySession(created), nil
 		}
 		return gateway.Session{}, err
 	}
 
-	return gateway.Session{
-		ID:        strings.TrimSpace(session.ID),
-		Title:     strings.TrimSpace(session.Title),
-		CreatedAt: session.CreatedAt,
-		UpdatedAt: session.UpdatedAt,
-		Workdir:   strings.TrimSpace(session.Workdir),
-		Messages:  convertSessionMessages(session.Messages),
-	}, nil
+	return convertRuntimeSessionToGatewaySession(session), nil
 }
 
 // Close 主动停止桥接事件泵，避免网关关闭后后台协程悬挂。
@@ -346,6 +353,18 @@ func convertSessionMessages(messages []providertypes.Message) []gateway.SessionM
 	return converted
 }
 
+// convertRuntimeSessionToGatewaySession 将 runtime 会话结构映射为 gateway 契约返回值。
+func convertRuntimeSessionToGatewaySession(session agentsession.Session) gateway.Session {
+	return gateway.Session{
+		ID:        strings.TrimSpace(session.ID),
+		Title:     strings.TrimSpace(session.Title),
+		CreatedAt: session.CreatedAt,
+		UpdatedAt: session.UpdatedAt,
+		Workdir:   strings.TrimSpace(session.Workdir),
+		Messages:  convertSessionMessages(session.Messages),
+	}
+}
+
 // renderSessionMessageContent 将 provider 多段内容渲染为对外展示的单段文本摘要。
 func renderSessionMessageContent(parts []providertypes.ContentPart) string {
 	if len(parts) == 0 {
@@ -395,7 +414,7 @@ func isRuntimeNotFoundError(err error) bool {
 	if err == nil {
 		return false
 	}
-	return strings.Contains(strings.ToLower(err.Error()), "not found")
+	return errors.Is(err, agentsession.ErrSessionNotFound) || errors.Is(err, os.ErrNotExist)
 }
 
 var _ gateway.RuntimePort = (*gatewayRuntimePortBridge)(nil)

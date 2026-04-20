@@ -137,6 +137,9 @@ func (s *SQLiteStore) CreateSession(ctx context.Context, input CreateSessionInpu
 	if err := ctx.Err(); err != nil {
 		return Session{}, err
 	}
+	if err := s.ensureStorageDirs(); err != nil {
+		return Session{}, err
+	}
 	db, err := s.ensureDB(ctx)
 	if err != nil {
 		return Session{}, err
@@ -174,6 +177,9 @@ INSERT INTO sessions (
 		session.TokenOutputTotal,
 	)
 	if err != nil {
+		if isSQLiteSessionUniqueConstraintError(err) {
+			return Session{}, wrapSessionAlreadyExists(err)
+		}
 		return Session{}, fmt.Errorf("session: insert session %s: %w", session.ID, err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -715,6 +721,21 @@ func (s *SQLiteStore) initialize(ctx context.Context) error {
 	return nil
 }
 
+// ensureStorageDirs 统一保证 session 存储相关目录存在，避免新会话写入时因父目录缺失失败。
+func (s *SQLiteStore) ensureStorageDirs() error {
+	dbDir := filepath.Dir(s.dbPath)
+	if err := os.MkdirAll(dbDir, 0o755); err != nil {
+		return fmt.Errorf("session: create db dir: %w", err)
+	}
+	if err := os.MkdirAll(s.projectDir, 0o755); err != nil {
+		return fmt.Errorf("session: create project dir: %w", err)
+	}
+	if err := os.MkdirAll(s.assetsDir, 0o755); err != nil {
+		return fmt.Errorf("session: create assets dir: %w", err)
+	}
+	return nil
+}
+
 // loadAssetMeta 查询附件元数据并解析绝对路径。
 func (s *SQLiteStore) loadAssetMeta(ctx context.Context, sessionID string, assetID string) (AssetMeta, string, error) {
 	if err := validateStorageID("session id", sessionID); err != nil {
@@ -968,7 +989,7 @@ WHERE id = ?
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return sqliteSessionRow{}, os.ErrNotExist
+			return sqliteSessionRow{}, wrapSessionNotFound(sql.ErrNoRows)
 		}
 		return sqliteSessionRow{}, fmt.Errorf("session: query session %s: %w", sessionID, err)
 	}
@@ -1096,7 +1117,7 @@ func currentLastSeq(ctx context.Context, tx *sql.Tx, sessionID string) (int, err
 	err := tx.QueryRowContext(ctx, `SELECT last_seq FROM sessions WHERE id = ?`, sessionID).Scan(&lastSeq)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return 0, os.ErrNotExist
+			return 0, wrapSessionNotFound(sql.ErrNoRows)
 		}
 		return 0, fmt.Errorf("session: query last_seq for %s: %w", sessionID, err)
 	}
@@ -1275,9 +1296,25 @@ func expectRowsAffected(result sql.Result, sessionID string) error {
 		return fmt.Errorf("session: inspect rows affected for %s: %w", sessionID, err)
 	}
 	if rowsAffected == 0 {
-		return os.ErrNotExist
+		return wrapSessionNotFound(os.ErrNotExist)
 	}
 	return nil
+}
+
+// wrapSessionNotFound 统一包装会话缺失错误，确保上层可通过 ErrSessionNotFound 做精确判断。
+func wrapSessionNotFound(cause error) error {
+	if cause == nil {
+		cause = os.ErrNotExist
+	}
+	return fmt.Errorf("%w: %w", ErrSessionNotFound, fmt.Errorf("%w: %w", os.ErrNotExist, cause))
+}
+
+// wrapSessionAlreadyExists 统一包装会话重复创建错误，确保上层可通过 ErrSessionAlreadyExists 做精确判断。
+func wrapSessionAlreadyExists(cause error) error {
+	if cause == nil {
+		cause = os.ErrExist
+	}
+	return fmt.Errorf("%w: %w", ErrSessionAlreadyExists, fmt.Errorf("%w: %w", os.ErrExist, cause))
 }
 
 // cloneMessage 深拷贝消息，避免共享底层切片和映射。
@@ -1296,6 +1333,18 @@ func isSQLiteForeignKeyConstraintError(err error) bool {
 		return sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_FOREIGNKEY
 	}
 	return false
+}
+
+// isSQLiteSessionUniqueConstraintError 判断底层错误是否为 SQLite 主键/唯一约束失败。
+func isSQLiteSessionUniqueConstraintError(err error) bool {
+	var sqliteErr *sqlitedriver.Error
+	if !errors.As(err, &sqliteErr) {
+		return false
+	}
+	code := sqliteErr.Code()
+	return code == sqlite3.SQLITE_CONSTRAINT ||
+		code == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY ||
+		code == sqlite3.SQLITE_CONSTRAINT_UNIQUE
 }
 
 func cloneMessage(message providertypes.Message) providertypes.Message {

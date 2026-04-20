@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -28,6 +29,9 @@ type runtimeStub struct {
 	loadID          string
 	loadSession     agentsession.Session
 	loadErr         error
+	createID        string
+	createSession   agentsession.Session
+	createErr       error
 }
 
 const testBridgeSubjectID = bridgeLocalSubjectID
@@ -80,6 +84,11 @@ func (s *runtimeStub) LoadSession(_ context.Context, id string) (agentsession.Se
 	return s.loadSession, s.loadErr
 }
 
+func (s *runtimeStub) CreateSession(_ context.Context, id string) (agentsession.Session, error) {
+	s.createID = id
+	return s.createSession, s.createErr
+}
+
 func (s *runtimeStub) ActivateSessionSkill(context.Context, string, string) error {
 	return nil
 }
@@ -90,6 +99,50 @@ func (s *runtimeStub) DeactivateSessionSkill(context.Context, string, string) er
 
 func (s *runtimeStub) ListSessionSkills(context.Context, string) ([]agentruntime.SessionSkillState, error) {
 	return nil, nil
+}
+
+type runtimeWithoutCreator struct {
+	base *runtimeStub
+}
+
+func (r *runtimeWithoutCreator) Submit(ctx context.Context, input agentruntime.PrepareInput) error {
+	return r.base.Submit(ctx, input)
+}
+func (r *runtimeWithoutCreator) PrepareUserInput(ctx context.Context, input agentruntime.PrepareInput) (agentruntime.UserInput, error) {
+	return r.base.PrepareUserInput(ctx, input)
+}
+func (r *runtimeWithoutCreator) Run(ctx context.Context, input agentruntime.UserInput) error {
+	return r.base.Run(ctx, input)
+}
+func (r *runtimeWithoutCreator) Compact(ctx context.Context, input agentruntime.CompactInput) (agentruntime.CompactResult, error) {
+	return r.base.Compact(ctx, input)
+}
+func (r *runtimeWithoutCreator) ExecuteSystemTool(ctx context.Context, input agentruntime.SystemToolInput) (tools.ToolResult, error) {
+	return r.base.ExecuteSystemTool(ctx, input)
+}
+func (r *runtimeWithoutCreator) ResolvePermission(ctx context.Context, input agentruntime.PermissionResolutionInput) error {
+	return r.base.ResolvePermission(ctx, input)
+}
+func (r *runtimeWithoutCreator) CancelActiveRun() bool {
+	return r.base.CancelActiveRun()
+}
+func (r *runtimeWithoutCreator) Events() <-chan agentruntime.RuntimeEvent {
+	return r.base.Events()
+}
+func (r *runtimeWithoutCreator) ListSessions(ctx context.Context) ([]agentsession.Summary, error) {
+	return r.base.ListSessions(ctx)
+}
+func (r *runtimeWithoutCreator) LoadSession(ctx context.Context, id string) (agentsession.Session, error) {
+	return r.base.LoadSession(ctx, id)
+}
+func (r *runtimeWithoutCreator) ActivateSessionSkill(ctx context.Context, sessionID string, skillID string) error {
+	return r.base.ActivateSessionSkill(ctx, sessionID, skillID)
+}
+func (r *runtimeWithoutCreator) DeactivateSessionSkill(ctx context.Context, sessionID string, skillID string) error {
+	return r.base.DeactivateSessionSkill(ctx, sessionID, skillID)
+}
+func (r *runtimeWithoutCreator) ListSessionSkills(ctx context.Context, sessionID string) ([]agentruntime.SessionSkillState, error) {
+	return r.base.ListSessionSkills(ctx, sessionID)
 }
 
 func TestNewGatewayRuntimePortBridgeRuntimeUnavailable(t *testing.T) {
@@ -294,6 +347,57 @@ func TestGatewayRuntimePortBridgeRuntimeMethods(t *testing.T) {
 	}
 }
 
+func TestGatewayRuntimePortBridgeLoadSessionNotFoundBranches(t *testing.T) {
+	t.Parallel()
+
+	base := &runtimeStub{
+		loadErr: agentsession.ErrSessionNotFound,
+	}
+	bridgeWithoutCreator, err := newGatewayRuntimePortBridge(context.Background(), &runtimeWithoutCreator{base: base})
+	if err != nil {
+		t.Fatalf("new bridge without creator: %v", err)
+	}
+	t.Cleanup(func() { _ = bridgeWithoutCreator.Close() })
+
+	if _, err := bridgeWithoutCreator.LoadSession(context.Background(), gateway.LoadSessionInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "s-1",
+	}); !errors.Is(err, gateway.ErrRuntimeResourceNotFound) {
+		t.Fatalf("expected ErrRuntimeResourceNotFound, got %v", err)
+	}
+
+	stub := &runtimeStub{
+		loadErr:   os.ErrNotExist,
+		createErr: errors.New("create failed"),
+	}
+	bridgeWithCreator, err := newGatewayRuntimePortBridge(context.Background(), stub)
+	if err != nil {
+		t.Fatalf("new bridge with creator: %v", err)
+	}
+	t.Cleanup(func() { _ = bridgeWithCreator.Close() })
+
+	if _, err := bridgeWithCreator.LoadSession(context.Background(), gateway.LoadSessionInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "s-2",
+	}); err == nil || err.Error() != "create failed" {
+		t.Fatalf("expected create failed error, got %v", err)
+	}
+}
+
+func TestIsRuntimeNotFoundErrorIncludesOSErrNotExist(t *testing.T) {
+	t.Parallel()
+
+	if !isRuntimeNotFoundError(os.ErrNotExist) {
+		t.Fatalf("os.ErrNotExist should be treated as runtime not found")
+	}
+	if !isRuntimeNotFoundError(agentsession.ErrSessionNotFound) {
+		t.Fatalf("ErrSessionNotFound should be treated as runtime not found")
+	}
+	if isRuntimeNotFoundError(errors.New("session not found")) {
+		t.Fatalf("plain string not-found error should not be treated as runtime not found")
+	}
+}
+
 func TestGatewayRuntimePortBridgeRuntimeMethodErrors(t *testing.T) {
 	stub := &runtimeStub{
 		submitErr:     errors.New("submit failed"),
@@ -327,6 +431,72 @@ func TestGatewayRuntimePortBridgeRuntimeMethodErrors(t *testing.T) {
 		SessionID: "s-1",
 	}); err == nil {
 		t.Fatal("expected load_session error from runtime")
+	}
+}
+
+func TestGatewayRuntimePortBridgeLoadSessionUpsertWhenMissing(t *testing.T) {
+	now := time.Now()
+	stub := &runtimeStub{
+		loadErr: agentsession.ErrSessionNotFound,
+		createSession: agentsession.Session{
+			ID:        "session-new",
+			Title:     "New Session",
+			Workdir:   "/tmp/work",
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+	}
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub)
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+	defer bridge.Close()
+
+	session, err := bridge.LoadSession(context.Background(), gateway.LoadSessionInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: " session-new ",
+	})
+	if err != nil {
+		t.Fatalf("load_session upsert: %v", err)
+	}
+	if stub.loadID != "session-new" {
+		t.Fatalf("load id = %q, want %q", stub.loadID, "session-new")
+	}
+	if stub.createID != "session-new" {
+		t.Fatalf("create id = %q, want %q", stub.createID, "session-new")
+	}
+	if session.ID != "session-new" || session.Title != "New Session" || session.Workdir != "/tmp/work" {
+		t.Fatalf("upsert session = %#v, want created session snapshot", session)
+	}
+}
+
+func TestGatewayRuntimePortBridgeLoadSessionNoUpsertOnPlainStringNotFoundError(t *testing.T) {
+	now := time.Now()
+	stub := &runtimeStub{
+		loadErr: errors.New("open sessions/session-new.json: no such file"),
+		createSession: agentsession.Session{
+			ID:        "session-new",
+			Title:     "New Session",
+			Workdir:   "/tmp/work",
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+	}
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub)
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+	defer bridge.Close()
+
+	_, err = bridge.LoadSession(context.Background(), gateway.LoadSessionInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: " session-new ",
+	})
+	if err == nil || err.Error() != "open sessions/session-new.json: no such file" {
+		t.Fatalf("expected original string error passthrough, got %v", err)
+	}
+	if stub.createID != "" {
+		t.Fatalf("create should not be called for plain string error, got createID=%q", stub.createID)
 	}
 }
 

@@ -2463,6 +2463,28 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		}
 	})
 
+	t.Run("openai compat fills chat endpoint by chat api mode when empty", func(t *testing.T) {
+		req, err := buildProviderAddRequest(providerAddFormState{
+			Name:                  "openai-compat-responses-endpoint",
+			Driver:                provider.DriverOpenAICompat,
+			ModelSource:           config.ModelSourceDiscover,
+			ChatAPIMode:           provider.ChatAPIModeResponses,
+			ChatEndpointPath:      "",
+			APIKey:                "k",
+			APIKeyEnv:             "OPENAI_COMPAT_RESPONSES_ENDPOINT_API_KEY",
+			DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+		})
+		if err != "" {
+			t.Fatalf("unexpected error: %s", err)
+		}
+		if req.ChatAPIMode != provider.ChatAPIModeResponses {
+			t.Fatalf("expected chat api mode responses, got %q", req.ChatAPIMode)
+		}
+		if req.ChatEndpointPath != "/responses" {
+			t.Fatalf("expected responses endpoint path, got %q", req.ChatEndpointPath)
+		}
+	})
+
 	t.Run("strips control chars from env key before validation", func(t *testing.T) {
 		req, err := buildProviderAddRequest(providerAddFormState{
 			Name:                  "openai-compat",
@@ -3342,6 +3364,27 @@ func TestSlashSelectionAndProviderAddUtilityBranches(t *testing.T) {
 
 	app.providerAddForm = nil
 	app.handleProviderAddResultMsg(providerAddResultMsg{Name: "unused"})
+}
+
+func TestSyncProviderAddOpenAICompatModeDefaults(t *testing.T) {
+	t.Parallel()
+
+	form := &providerAddFormState{
+		Driver:           provider.DriverOpenAICompat,
+		ChatAPIMode:      provider.ChatAPIModeResponses,
+		ChatEndpointPath: "/chat/completions",
+	}
+	syncProviderAddOpenAICompatModeDefaults(form, provider.ChatAPIModeChatCompletions)
+	if form.ChatEndpointPath != "/responses" {
+		t.Fatalf("expected default endpoint to follow responses mode, got %q", form.ChatEndpointPath)
+	}
+
+	form.ChatAPIMode = provider.ChatAPIModeChatCompletions
+	form.ChatEndpointPath = "/custom/chat"
+	syncProviderAddOpenAICompatModeDefaults(form, provider.ChatAPIModeResponses)
+	if form.ChatEndpointPath != "/custom/chat" {
+		t.Fatalf("expected custom endpoint unchanged, got %q", form.ChatEndpointPath)
+	}
 }
 
 func TestRunProviderAddFlowDeadlineExceededBranch(t *testing.T) {
