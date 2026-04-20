@@ -83,6 +83,57 @@ func (s *SQLiteStore) Close() error {
 	return s.db.Close()
 }
 
+// CleanupExpiredSessions 删除超过指定时长未更新的会话及其附件，返回删除数量。
+func (s *SQLiteStore) CleanupExpiredSessions(ctx context.Context, maxAge time.Duration) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if maxAge <= 0 {
+		return 0, nil
+	}
+	db, err := s.ensureDB(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	cutoffMS := toUnixMillis(time.Now().Add(-maxAge))
+
+	// 查询即将删除的会话 ID，用于清理附件目录
+	rows, err := db.QueryContext(ctx, `SELECT id FROM sessions WHERE updated_at_ms < ?`, cutoffMS)
+	if err != nil {
+		return 0, fmt.Errorf("session: query expired sessions: %w", err)
+	}
+	var expiredIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		expiredIDs = append(expiredIDs, id)
+	}
+	rows.Close()
+
+	if len(expiredIDs) == 0 {
+		return 0, nil
+	}
+
+	// 删除数据库记录（CASCADE 清理 messages + session_assets）
+	result, err := db.ExecContext(ctx, `DELETE FROM sessions WHERE updated_at_ms < ?`, cutoffMS)
+	if err != nil {
+		return 0, fmt.Errorf("session: cleanup expired sessions: %w", err)
+	}
+	affected, _ := result.RowsAffected()
+
+	// 清理附件目录
+	for _, id := range expiredIDs {
+		assetDir := filepath.Join(s.assetsDir, id)
+		_ = os.RemoveAll(assetDir)
+	}
+
+	return int(affected), nil
+}
+
 // CreateSession 创建并持久化一个新的空会话头。
 func (s *SQLiteStore) CreateSession(ctx context.Context, input CreateSessionInput) (Session, error) {
 	if err := ctx.Err(); err != nil {
@@ -240,6 +291,11 @@ func (s *SQLiteStore) AppendMessages(ctx context.Context, input AppendMessagesIn
 	lastSeq, err := currentLastSeq(ctx, tx, input.SessionID)
 	if err != nil {
 		return err
+	}
+
+	// 自动裁剪超限的旧消息，保持会话消息数不超过 MaxSessionMessages。
+	if err := trimOverflowMessages(ctx, tx, input.SessionID, len(normalizedMessages)); err != nil {
+		return fmt.Errorf("session: trim overflow messages %s: %w", input.SessionID, err)
 	}
 
 	for _, message := range normalizedMessages {
@@ -635,10 +691,10 @@ func (s *SQLiteStore) ensureDB(ctx context.Context) (*sql.DB, error) {
 
 // initialize 打开数据库、设置 PRAGMA 并初始化 schema。
 func (s *SQLiteStore) initialize(ctx context.Context) error {
-	if err := os.MkdirAll(s.projectDir, 0o755); err != nil {
+	if err := os.MkdirAll(s.projectDir, 0o700); err != nil {
 		return fmt.Errorf("session: create project dir: %w", err)
 	}
-	if err := os.MkdirAll(s.assetsDir, 0o755); err != nil {
+	if err := os.MkdirAll(s.assetsDir, 0o700); err != nil {
 		return fmt.Errorf("session: create assets dir: %w", err)
 	}
 
@@ -657,6 +713,9 @@ func (s *SQLiteStore) initialize(ctx context.Context) error {
 		_ = db.Close()
 		return err
 	}
+
+	// 收紧数据库文件权限，仅 owner 可读写
+	_ = os.Chmod(s.dbPath, 0o600)
 
 	s.db = db
 	return nil
@@ -1048,6 +1107,36 @@ func currentLastSeq(ctx context.Context, tx *sql.Tx, sessionID string) (int, err
 		return 0, fmt.Errorf("session: query last_seq for %s: %w", sessionID, err)
 	}
 	return lastSeq, nil
+}
+
+// trimOverflowMessages 在事务内裁剪超限的旧消息，确保追加新消息后会话消息数不超过 MaxSessionMessages。
+func trimOverflowMessages(ctx context.Context, tx *sql.Tx, sessionID string, newCount int) error {
+	if MaxSessionMessages <= 0 || newCount <= 0 {
+		return nil
+	}
+	var currentCount int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT message_count FROM sessions WHERE id = ?`, sessionID,
+	).Scan(&currentCount); err != nil {
+		return fmt.Errorf("session: query message_count: %w", err)
+	}
+	overflow := (currentCount + newCount) - MaxSessionMessages
+	if overflow <= 0 {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM messages WHERE session_id = ? AND seq IN (SELECT seq FROM messages WHERE session_id = ? ORDER BY seq ASC LIMIT ?)`,
+		sessionID, sessionID, overflow,
+	); err != nil {
+		return fmt.Errorf("session: delete overflow messages: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE sessions SET message_count = message_count - ? WHERE id = ?`,
+		overflow, sessionID,
+	); err != nil {
+		return fmt.Errorf("session: update message_count after trim: %w", err)
+	}
+	return nil
 }
 
 // insertMessage 在事务内插入单条消息记录。

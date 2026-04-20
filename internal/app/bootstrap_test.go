@@ -721,6 +721,11 @@ func TestBuildRuntimeUsesWorkdirOverride(t *testing.T) {
 	if bundle.ConfigManager == nil || bundle.Runtime == nil || bundle.ProviderSelection == nil {
 		t.Fatalf("expected runtime bundle dependencies, got %+v", bundle)
 	}
+	if bundle.Close != nil {
+		t.Cleanup(func() {
+			_ = bundle.Close()
+		})
+	}
 }
 
 func TestBuildRuntimeSucceedsWhenSkillsRootMissing(t *testing.T) {

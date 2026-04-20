@@ -150,6 +150,11 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 	// 这意味着所有会话都归属到启动时指定的项目目录下，运行时不会因配置变更而迁移存储位置。
 	sessionStore := agentsession.NewStore(loader.BaseDir(), cfg.Workdir)
 
+	// 启动时自动清理过期会话，避免数据库无限膨胀。
+	if _, err := sessionStore.CleanupExpiredSessions(ctx, agentsession.DefaultSessionMaxAge); err != nil {
+		log.Printf("session cleanup warning: %v", err)
+	}
+
 	// 注册内置工具的内容摘要器，使 micro-compact 在清理旧工具结果时保留关键上下文。
 	tools.RegisterBuiltinSummarizers(toolRegistry)
 

@@ -2,6 +2,7 @@ package memo
 
 import (
 	"context"
+	"hash/fnv"
 	"log"
 	"strings"
 	"sync"
@@ -29,13 +30,14 @@ type AutoExtractor struct {
 }
 
 type autoExtractState struct {
-	mu          sync.Mutex
-	pending     *autoExtractRequest
-	running     bool
-	timer       *time.Timer
-	idleTimer   *time.Timer
-	scheduleSeq uint64
-	idleSeq     uint64
+	mu              sync.Mutex
+	pending         *autoExtractRequest
+	running         bool
+	timer           *time.Timer
+	idleTimer       *time.Timer
+	scheduleSeq     uint64
+	idleSeq         uint64
+	lastFingerprint uint64
 }
 
 type autoExtractRequest struct {
@@ -134,7 +136,7 @@ func (a *AutoExtractor) armDebounceTimerLocked(
 	})
 }
 
-// handleDebounce 在防抖窗口结束后启动一次后台提取。
+// handleDebounce 在防抖窗口结束后启动一次后台提取，若消息未变化则跳过以避免重复 LLM 调用。
 func (a *AutoExtractor) handleDebounce(sessionID string, state *autoExtractState, seq uint64) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -149,11 +151,22 @@ func (a *AutoExtractor) handleDebounce(sessionID string, state *autoExtractState
 
 	req := *state.pending
 	state.pending = nil
+
+	// 增量检测：消息未变化时跳过提取
+	fp := computeMessageFingerprint(req.messages)
+	if fp == state.lastFingerprint {
+		a.armIdleTimerLocked(sessionID, state)
+		return
+	}
+
 	state.running = true
 	state.timer = nil
 
 	go func() {
 		a.extractAndStore(req.extractor, req.messages)
+		state.mu.Lock()
+		state.lastFingerprint = fp
+		state.mu.Unlock()
 		a.handleRunDone(sessionID, state)
 	}()
 }
@@ -306,4 +319,20 @@ func (a *AutoExtractor) logError(format string, args ...any) {
 	if a != nil && a.logf != nil {
 		a.logf(format, args...)
 	}
+}
+
+// computeMessageFingerprint 使用 FNV-1a 64bit 哈希计算消息窗口的内容指纹，用于增量提取检测。
+func computeMessageFingerprint(messages []providertypes.Message) uint64 {
+	h := fnv.New64a()
+	for _, msg := range messages {
+		_, _ = h.Write([]byte(msg.Role))
+		_, _ = h.Write([]byte{0})
+		for _, part := range msg.Parts {
+			if part.Kind == providertypes.ContentPartText {
+				_, _ = h.Write([]byte(part.Text))
+				_, _ = h.Write([]byte{0})
+			}
+		}
+	}
+	return h.Sum64()
 }

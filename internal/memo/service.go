@@ -478,20 +478,38 @@ func cloneIndex(index *Index) *Index {
 	return cloned
 }
 
-// trimIndexEntries 先按条目数、再按索引字节数裁剪最旧条目，并返回被删除的记录。
+// trimIndexEntries 按优先级和条目数裁剪索引，优先移除低优先级条目，并返回被删除的记录。
 func trimIndexEntries(index *Index, maxEntries int, maxIndexBytes int) []Entry {
 	if index == nil {
 		return nil
 	}
 	removed := make([]Entry, 0)
 	for maxEntries > 0 && len(index.Entries) > maxEntries {
-		removed = append(removed, index.Entries[0])
-		index.Entries = index.Entries[1:]
+		victimIdx := findEvictionVictim(index.Entries)
+		removed = append(removed, index.Entries[victimIdx])
+		index.Entries = append(index.Entries[:victimIdx], index.Entries[victimIdx+1:]...)
 	}
 	if maxIndexBytes > 0 && len(index.Entries) > 0 {
 		removed = append(removed, trimIndexEntriesByBytes(index, maxIndexBytes)...)
 	}
 	return removed
+}
+
+// findEvictionVictim 找到优先级最低的条目索引；同优先级时优先移除最旧（靠前）的条目。
+func findEvictionVictim(entries []Entry) int {
+	if len(entries) == 0 {
+		return -1
+	}
+	minPriority := entries[0].evictionPriority()
+	victimIdx := 0
+	for i, entry := range entries {
+		p := entry.evictionPriority()
+		if p < minPriority {
+			minPriority = p
+			victimIdx = i
+		}
+	}
+	return victimIdx
 }
 
 // trimIndexEntriesByBytes 在索引超过字节阈值时，通过二分定位最小移除数量并返回被删除条目。
