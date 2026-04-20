@@ -1,12 +1,14 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
 	"neo-code/internal/runtime/controlplane"
+	agentsession "neo-code/internal/session"
 	tuiservices "neo-code/internal/tui/services"
 )
 
@@ -251,6 +253,257 @@ func TestHandleRuntimeEventRoutesByRegistryWithoutBindingTransientSession(t *tes
 
 	if app.handleRuntimeEvent(agentruntime.RuntimeEvent{Type: "unknown_event", SessionID: "session-1"}) {
 		t.Fatalf("expected unknown event handler result to be false")
+	}
+}
+
+func TestSubAgentEventPayloadParsers(t *testing.T) {
+	t.Parallel()
+
+	payload, ok := parseSubAgentEventPayload(agentruntime.SubAgentEventPayload{
+		TaskID:    "task-1",
+		Reason:    "ok",
+		Error:     "none",
+		Attempts:  2,
+		QueueSize: 3,
+		Running:   1,
+	})
+	if !ok || payload.TaskID != "task-1" || payload.Attempts != 2 {
+		t.Fatalf("parseSubAgentEventPayload(struct) = %+v, %v", payload, ok)
+	}
+
+	payload, ok = parseSubAgentEventPayload(&agentruntime.SubAgentEventPayload{TaskID: "task-2"})
+	if !ok || payload.TaskID != "task-2" {
+		t.Fatalf("parseSubAgentEventPayload(pointer) = %+v, %v", payload, ok)
+	}
+
+	if _, ok := parseSubAgentEventPayload((*agentruntime.SubAgentEventPayload)(nil)); ok {
+		t.Fatalf("parseSubAgentEventPayload(nil pointer) should fail")
+	}
+
+	payload, ok = parseSubAgentEventPayload(map[string]any{
+		"task_id":    " task-3 ",
+		"reason":     " blocked ",
+		"error":      " denied ",
+		"attempts":   int64(4),
+		"queue_size": float64(5),
+		"running":    "bad",
+	})
+	if !ok {
+		t.Fatalf("parseSubAgentEventPayload(map) should succeed")
+	}
+	if payload.TaskID != "task-3" || payload.Reason != "blocked" || payload.Error != "denied" {
+		t.Fatalf("unexpected parsed payload: %+v", payload)
+	}
+	if payload.Attempts != 4 || payload.QueueSize != 5 || payload.Running != 0 {
+		t.Fatalf("unexpected numeric parsing: %+v", payload)
+	}
+
+	if _, ok := parseSubAgentEventPayload(123); ok {
+		t.Fatalf("parseSubAgentEventPayload(non-map) should fail")
+	}
+	if got := parsePayloadInt(true); got != 0 {
+		t.Fatalf("parsePayloadInt(bool) = %d, want 0", got)
+	}
+}
+
+func TestRuntimeEventSubAgentTaskLifecycleHandlerBranches(t *testing.T) {
+	t.Parallel()
+
+	app, runtime := newTestApp(t)
+	app.state.ActiveSessionID = "s1"
+	runtime.loadSessions = map[string]agentsession.Session{
+		"s1": agentsession.New("s1"),
+	}
+
+	if handled := runtimeEventSubAgentTaskLifecycleHandler(&app, agentruntime.RuntimeEvent{Payload: "bad"}); handled {
+		t.Fatalf("expected invalid payload to return false")
+	}
+
+	tests := []struct {
+		name       string
+		eventType  agentruntime.EventType
+		payload    any
+		wantTitle  string
+		wantError  bool
+		wantLabel  string
+		wantKnown  bool
+		sessionID  string
+		loadErr    error
+		wantDetail string
+	}{
+		{
+			name:      "started sets progress",
+			eventType: agentruntime.EventSubAgentTaskStarted,
+			payload: map[string]any{
+				"task_id":  "task-start",
+				"reason":   "boot",
+				"attempts": 1,
+			},
+			wantTitle:  "Subagent task started",
+			wantLabel:  "Running subagent",
+			wantKnown:  true,
+			wantDetail: "task=task-start attempt=1 reason=boot",
+		},
+		{
+			name:      "progress defaults task id and reason",
+			eventType: agentruntime.EventSubAgentTaskProgress,
+			payload: map[string]any{
+				"task_id":  "",
+				"attempts": 0,
+			},
+			wantTitle:  "Subagent task progress",
+			wantLabel:  "Subagent progressing",
+			wantKnown:  true,
+			wantDetail: "task=unknown-task attempt=0 reason=ok",
+		},
+		{
+			name:      "retried uses error fallback reason",
+			eventType: agentruntime.EventSubAgentTaskRetried,
+			payload: map[string]any{
+				"task_id":    "task-retry",
+				"attempts":   2,
+				"reason":     "",
+				"error":      "timeout",
+				"queue_size": 1,
+			},
+			wantTitle:  "Subagent task retried",
+			wantDetail: "task=task-retry attempt=2 reason=timeout",
+		},
+		{
+			name:      "blocked",
+			eventType: agentruntime.EventSubAgentTaskBlocked,
+			payload: map[string]any{
+				"task_id":  "task-blocked",
+				"reason":   "deps_unmet",
+				"attempts": 3,
+			},
+			wantTitle:  "Subagent task blocked",
+			wantDetail: "task=task-blocked attempt=3 reason=deps_unmet",
+		},
+		{
+			name:      "completed sets progress",
+			eventType: agentruntime.EventSubAgentTaskCompleted,
+			payload: map[string]any{
+				"task_id":  "task-done",
+				"attempts": 1,
+				"reason":   "ok",
+			},
+			wantTitle:  "Subagent task completed",
+			wantLabel:  "Subagent completed",
+			wantKnown:  true,
+			wantDetail: "task=task-done attempt=1 reason=ok",
+		},
+		{
+			name:      "failed marks error and falls back active session id",
+			eventType: agentruntime.EventSubAgentTaskFailed,
+			payload: map[string]any{
+				"task_id":  "task-failed",
+				"attempts": 2,
+				"reason":   "boom",
+			},
+			sessionID:  "",
+			wantTitle:  "Subagent task failed",
+			wantError:  true,
+			wantDetail: "task=task-failed attempt=2 reason=boom",
+		},
+		{
+			name:      "canceled refresh failure still emits activity",
+			eventType: agentruntime.EventSubAgentTaskCanceled,
+			payload: map[string]any{
+				"task_id":  "task-canceled",
+				"attempts": 5,
+				"reason":   "stopped",
+			},
+			sessionID:  "s1",
+			loadErr:    errors.New("load failed"),
+			wantTitle:  "Subagent task canceled",
+			wantError:  true,
+			wantDetail: "task=task-canceled attempt=5 reason=stopped",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			runtime.loadSessionErr = tt.loadErr
+			before := len(app.activities)
+
+			sessionID := tt.sessionID
+			if sessionID == "" {
+				sessionID = "s1"
+			}
+			runtimeEventSubAgentTaskLifecycleHandler(&app, agentruntime.RuntimeEvent{
+				Type:      tt.eventType,
+				SessionID: sessionID,
+				Payload:   tt.payload,
+			})
+
+			if len(app.activities) <= before {
+				t.Fatalf("expected activity appended")
+			}
+			last := app.activities[len(app.activities)-1]
+			if last.Title != tt.wantTitle {
+				t.Fatalf("activity title = %q, want %q", last.Title, tt.wantTitle)
+			}
+			if last.IsError != tt.wantError {
+				t.Fatalf("activity IsError = %v, want %v", last.IsError, tt.wantError)
+			}
+			if !strings.Contains(last.Detail, tt.wantDetail) {
+				t.Fatalf("activity detail = %q, want contains %q", last.Detail, tt.wantDetail)
+			}
+			if tt.wantKnown && (!app.runProgressKnown || app.runProgressLabel != tt.wantLabel) {
+				t.Fatalf("run progress = known:%v label:%q, want known true label %q", app.runProgressKnown, app.runProgressLabel, tt.wantLabel)
+			}
+		})
+	}
+}
+
+func TestRuntimeEventSubAgentDispatchFinishedHandler(t *testing.T) {
+	t.Parallel()
+
+	app, runtime := newTestApp(t)
+	app.state.ActiveSessionID = "active"
+	runtime.loadSessions = map[string]agentsession.Session{
+		"active": agentsession.New("active"),
+	}
+
+	if handled := runtimeEventSubAgentDispatchFinishedHandler(&app, agentruntime.RuntimeEvent{Payload: 1}); handled {
+		t.Fatalf("expected invalid payload to return false")
+	}
+
+	before := len(app.activities)
+	runtimeEventSubAgentDispatchFinishedHandler(&app, agentruntime.RuntimeEvent{
+		Type:      agentruntime.EventSubAgentDispatchFinished,
+		SessionID: "active",
+		Payload: map[string]any{
+			"queue_size": 3,
+			"running":    1,
+			"reason":     "dispatch_round_finished",
+		},
+	})
+	if len(app.activities) != before+1 {
+		t.Fatalf("expected one dispatch activity appended")
+	}
+	last := app.activities[len(app.activities)-1]
+	if last.Title != "Subagent dispatch finished" || last.IsError {
+		t.Fatalf("unexpected dispatch activity: %+v", last)
+	}
+	if !strings.Contains(last.Detail, "queue=3 running=1 reason=dispatch_round_finished") {
+		t.Fatalf("dispatch detail = %q", last.Detail)
+	}
+
+	runtime.loadSessionErr = errors.New("load failed")
+	before = len(app.activities)
+	runtimeEventSubAgentDispatchFinishedHandler(&app, agentruntime.RuntimeEvent{
+		SessionID: "active",
+		Payload: map[string]any{
+			"queue_size": 0,
+			"running":    0,
+			"reason":     "none",
+		},
+	})
+	if len(app.activities) != before+2 {
+		t.Fatalf("expected refresh error + dispatch activities, got delta=%d", len(app.activities)-before)
 	}
 }
 
