@@ -71,19 +71,20 @@ func NewRemoteRuntimeAdapter(options RemoteRuntimeAdapterOptions) (*RemoteRuntim
 	if timeout <= 0 {
 		timeout = defaultRemoteRuntimeTimeout
 	}
+	retryCount := normalizeRemoteRuntimeRetryCount(options.RetryCount)
 
 	rpcClient, err := newGatewayRPCClientFactory(GatewayRPCClientOptions{
 		ListenAddress:  strings.TrimSpace(options.ListenAddress),
 		TokenFile:      strings.TrimSpace(options.TokenFile),
 		RequestTimeout: timeout,
-		RetryCount:     options.RetryCount,
+		RetryCount:     retryCount,
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	streamClient := newGatewayStreamClientFactory(rpcClient.Notifications())
-	adapter := newRemoteRuntimeAdapterWithClients(rpcClient, streamClient, timeout, options.RetryCount)
+	adapter := newRemoteRuntimeAdapterWithClients(rpcClient, streamClient, timeout, retryCount)
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -100,6 +101,7 @@ func newRemoteRuntimeAdapterWithClients(
 	timeout time.Duration,
 	retryCount int,
 ) *RemoteRuntimeAdapter {
+	retryCount = normalizeRemoteRuntimeRetryCount(retryCount)
 	adapter := &RemoteRuntimeAdapter{
 		rpcClient:    rpcClient,
 		streamClient: streamClient,
@@ -113,7 +115,7 @@ func newRemoteRuntimeAdapterWithClients(
 	return adapter
 }
 
-// Submit 将用户输入提交到网关：先 authenticate，再 loadSession 预热，随后 bindStream，最后 run。
+// Submit 将用户输入提交到网关：先 authenticate，再 bindStream，随后 loadSession，最后 run。
 func (r *RemoteRuntimeAdapter) Submit(ctx context.Context, input agentruntime.PrepareInput) error {
 	sessionID := strings.TrimSpace(input.SessionID)
 	if sessionID == "" {
@@ -127,10 +129,10 @@ func (r *RemoteRuntimeAdapter) Submit(ctx context.Context, input agentruntime.Pr
 	if err := r.authenticate(ctx); err != nil {
 		return err
 	}
-	if err := r.preloadSession(ctx, sessionID); err != nil {
+	if err := r.bindStream(ctx, sessionID, runID); err != nil {
 		return err
 	}
-	if err := r.bindStream(ctx, sessionID, runID); err != nil {
+	if err := r.preloadSession(ctx, sessionID); err != nil {
 		return err
 	}
 
@@ -495,9 +497,21 @@ func (r *RemoteRuntimeAdapter) setActiveRun(runID string, sessionID string) {
 func (r *RemoteRuntimeAdapter) clearActiveRun(runID string) {
 	r.activeMu.Lock()
 	defer r.activeMu.Unlock()
-	if strings.TrimSpace(runID) == "" || strings.EqualFold(strings.TrimSpace(runID), strings.TrimSpace(r.activeRunID)) {
+	normalizedRunID := strings.TrimSpace(runID)
+	if normalizedRunID == "" {
+		return
+	}
+	if strings.EqualFold(normalizedRunID, strings.TrimSpace(r.activeRunID)) {
 		r.activeRunID = ""
 	}
+}
+
+// normalizeRemoteRuntimeRetryCount 统一归一化重试次数，避免零值关闭默认重试兜底。
+func normalizeRemoteRuntimeRetryCount(retryCount int) int {
+	if retryCount <= 0 {
+		return defaultGatewayRPCRetryCount
+	}
+	return retryCount
 }
 
 func (r *RemoteRuntimeAdapter) activeRun() (string, string) {

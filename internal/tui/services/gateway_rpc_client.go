@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"strings"
 	"sync"
@@ -413,14 +412,12 @@ func (c *GatewayRPCClient) startNotificationDispatcher() {
 	})
 }
 
-// enqueueNotification 以无阻塞方式投递通知；队列满时丢弃并记录告警，避免反压读循环。
+// enqueueNotification 以阻塞方式投递通知，确保 gateway.event 不会因队列满被静默丢弃。
 func (c *GatewayRPCClient) enqueueNotification(notification gatewayRPCNotification) {
 	select {
 	case <-c.closed:
 		return
 	case c.notificationQueue <- notification:
-	default:
-		log.Printf("gateway rpc client: drop notification method=%q reason=queue_full", notification.Method)
 	}
 }
 

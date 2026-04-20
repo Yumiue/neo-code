@@ -219,7 +219,7 @@ func TestGatewayRPCClientCallWithEmptyMethodReturnsError(t *testing.T) {
 	}
 }
 
-func TestGatewayRPCClientReadLoopDoesNotBlockOnNotifications(t *testing.T) {
+func TestGatewayRPCClientReadLoopSustainsBackpressureWhenNotificationsAreConsumed(t *testing.T) {
 	tokenFile, _ := createTestAuthTokenFile(t)
 
 	client, err := NewGatewayRPCClient(GatewayRPCClientOptions{
@@ -256,6 +256,11 @@ func TestGatewayRPCClientReadLoopDoesNotBlockOnNotifications(t *testing.T) {
 		t.Fatalf("NewGatewayRPCClient() error = %v", err)
 	}
 	t.Cleanup(func() { _ = client.Close() })
+
+	go func() {
+		for range client.Notifications() {
+		}
+	}()
 
 	callErr := client.CallWithOptions(
 		context.Background(),

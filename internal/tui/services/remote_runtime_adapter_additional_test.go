@@ -72,12 +72,16 @@ func TestNewRemoteRuntimeAdapterBranches(t *testing.T) {
 	adapter, err := NewRemoteRuntimeAdapter(RemoteRuntimeAdapterOptions{
 		ListenAddress:  "ok",
 		RequestTimeout: -1,
+		RetryCount:     0,
 	})
 	if err != nil {
 		t.Fatalf("NewRemoteRuntimeAdapter() error = %v", err)
 	}
 	if adapter.timeout != defaultRemoteRuntimeTimeout {
 		t.Fatalf("timeout = %v, want %v", adapter.timeout, defaultRemoteRuntimeTimeout)
+	}
+	if adapter.retryCount != defaultGatewayRPCRetryCount {
+		t.Fatalf("retryCount = %d, want %d", adapter.retryCount, defaultGatewayRPCRetryCount)
 	}
 	_ = adapter.Close()
 }
@@ -304,6 +308,62 @@ func TestRemoteRuntimeAdapterEventObservationAndActiveRunState(t *testing.T) {
 	if runID != "" {
 		t.Fatalf("expected cleared run id, got %q", runID)
 	}
+
+	adapter.setActiveRun("run-c", "session-c")
+	adapter.observeEvent(agentruntime.RuntimeEvent{Type: agentruntime.EventError})
+	runID, sessionID = adapter.activeRun()
+	if runID != "run-c" || sessionID != "session-c" {
+		t.Fatalf("event error without run id should not clear active run, got run=%q session=%q", runID, sessionID)
+	}
+}
+
+func TestNewRemoteRuntimeAdapterWithClientsNormalizesRetryCount(t *testing.T) {
+	t.Parallel()
+
+	adapter := newRemoteRuntimeAdapterWithClients(
+		&stubRemoteRPCClient{notifications: make(chan gatewayRPCNotification)},
+		&stubRemoteStreamClient{events: make(chan agentruntime.RuntimeEvent)},
+		time.Second,
+		0,
+	)
+	t.Cleanup(func() { _ = adapter.Close() })
+
+	if adapter.retryCount != defaultGatewayRPCRetryCount {
+		t.Fatalf("retryCount = %d, want %d", adapter.retryCount, defaultGatewayRPCRetryCount)
+	}
+}
+
+func TestRemoteRuntimeAdapterUsesDefaultRetryWhenOptionsZero(t *testing.T) {
+	t.Parallel()
+
+	rpcClient := &stubRemoteRPCClient{
+		frames: map[string]gateway.MessageFrame{
+			protocol.MethodGatewayListSessions: {
+				Type:    gateway.FrameTypeAck,
+				Action:  gateway.FrameActionListSessions,
+				Payload: map[string]any{"sessions": []gateway.SessionSummary{}},
+			},
+		},
+		notifications: make(chan gatewayRPCNotification),
+	}
+	adapter := newRemoteRuntimeAdapterWithClients(
+		rpcClient,
+		&stubRemoteStreamClient{events: make(chan agentruntime.RuntimeEvent)},
+		time.Second,
+		0,
+	)
+	t.Cleanup(func() { _ = adapter.Close() })
+
+	if _, err := adapter.ListSessions(context.Background()); err != nil {
+		t.Fatalf("ListSessions() error = %v", err)
+	}
+	options, ok := rpcClient.snapshotOptions()[protocol.MethodGatewayListSessions]
+	if !ok {
+		t.Fatalf("expected listSessions call options to be captured")
+	}
+	if options.Retries != defaultGatewayRPCRetryCount {
+		t.Fatalf("listSessions retries = %d, want %d", options.Retries, defaultGatewayRPCRetryCount)
+	}
 }
 
 func TestRemoteRuntimeAdapterLoadSessionAndCancelErrorPaths(t *testing.T) {
@@ -347,9 +407,13 @@ func TestRemoteRuntimeAdapterSubmitAndCompactErrorPaths(t *testing.T) {
 	if err := adapter.Submit(context.Background(), agentruntime.PrepareInput{}); err == nil || !strings.Contains(err.Error(), "bind failed") {
 		t.Fatalf("expected bind failed submit error, got %v", err)
 	}
-	params := rpcClient.snapshotParams()[protocol.MethodGatewayLoadSession].(protocol.LoadSessionParams)
-	if strings.TrimSpace(params.SessionID) == "" {
-		t.Fatalf("Submit() should generate default session id")
+	methods := rpcClient.snapshotMethods()
+	if len(methods) != 1 || methods[0] != protocol.MethodGatewayBindStream {
+		t.Fatalf("Submit() should fail after bindStream and before loadSession, methods=%#v", methods)
+	}
+	bindParams, ok := rpcClient.snapshotParams()[protocol.MethodGatewayBindStream].(protocol.BindStreamParams)
+	if !ok || strings.TrimSpace(bindParams.SessionID) == "" {
+		t.Fatalf("Submit() should generate default session id for bindStream, params=%#v", rpcClient.snapshotParams()[protocol.MethodGatewayBindStream])
 	}
 
 	rpcClient.authErr = errors.New("auth failed")

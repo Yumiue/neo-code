@@ -351,7 +351,7 @@ func TestGatewayRuntimePortBridgeLoadSessionNotFoundBranches(t *testing.T) {
 	t.Parallel()
 
 	base := &runtimeStub{
-		loadErr: errors.New("session not found"),
+		loadErr: agentsession.ErrSessionNotFound,
 	}
 	bridgeWithoutCreator, err := newGatewayRuntimePortBridge(context.Background(), &runtimeWithoutCreator{base: base})
 	if err != nil {
@@ -367,7 +367,7 @@ func TestGatewayRuntimePortBridgeLoadSessionNotFoundBranches(t *testing.T) {
 	}
 
 	stub := &runtimeStub{
-		loadErr:   errors.New("file does not exist"),
+		loadErr:   os.ErrNotExist,
 		createErr: errors.New("create failed"),
 	}
 	bridgeWithCreator, err := newGatewayRuntimePortBridge(context.Background(), stub)
@@ -389,6 +389,12 @@ func TestIsRuntimeNotFoundErrorIncludesOSErrNotExist(t *testing.T) {
 
 	if !isRuntimeNotFoundError(os.ErrNotExist) {
 		t.Fatalf("os.ErrNotExist should be treated as runtime not found")
+	}
+	if !isRuntimeNotFoundError(agentsession.ErrSessionNotFound) {
+		t.Fatalf("ErrSessionNotFound should be treated as runtime not found")
+	}
+	if isRuntimeNotFoundError(errors.New("session not found")) {
+		t.Fatalf("plain string not-found error should not be treated as runtime not found")
 	}
 }
 
@@ -431,7 +437,7 @@ func TestGatewayRuntimePortBridgeRuntimeMethodErrors(t *testing.T) {
 func TestGatewayRuntimePortBridgeLoadSessionUpsertWhenMissing(t *testing.T) {
 	now := time.Now()
 	stub := &runtimeStub{
-		loadErr: errors.New("file does not exist"),
+		loadErr: agentsession.ErrSessionNotFound,
 		createSession: agentsession.Session{
 			ID:        "session-new",
 			Title:     "New Session",
@@ -464,7 +470,7 @@ func TestGatewayRuntimePortBridgeLoadSessionUpsertWhenMissing(t *testing.T) {
 	}
 }
 
-func TestGatewayRuntimePortBridgeLoadSessionUpsertWhenMissingNoSuchFile(t *testing.T) {
+func TestGatewayRuntimePortBridgeLoadSessionNoUpsertOnPlainStringNotFoundError(t *testing.T) {
 	now := time.Now()
 	stub := &runtimeStub{
 		loadErr: errors.New("open sessions/session-new.json: no such file"),
@@ -482,18 +488,15 @@ func TestGatewayRuntimePortBridgeLoadSessionUpsertWhenMissingNoSuchFile(t *testi
 	}
 	defer bridge.Close()
 
-	session, err := bridge.LoadSession(context.Background(), gateway.LoadSessionInput{
+	_, err = bridge.LoadSession(context.Background(), gateway.LoadSessionInput{
 		SubjectID: testBridgeSubjectID,
 		SessionID: " session-new ",
 	})
-	if err != nil {
-		t.Fatalf("load_session upsert no such file: %v", err)
+	if err == nil || err.Error() != "open sessions/session-new.json: no such file" {
+		t.Fatalf("expected original string error passthrough, got %v", err)
 	}
-	if stub.createID != "session-new" {
-		t.Fatalf("create id = %q, want %q", stub.createID, "session-new")
-	}
-	if session.ID != "session-new" {
-		t.Fatalf("upsert session id = %q, want %q", session.ID, "session-new")
+	if stub.createID != "" {
+		t.Fatalf("create should not be called for plain string error, got createID=%q", stub.createID)
 	}
 }
 

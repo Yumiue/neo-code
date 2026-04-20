@@ -16,7 +16,7 @@ import (
 	"neo-code/internal/tools"
 )
 
-func TestRemoteRuntimeAdapterSubmitAuthenticatesPreloadsBindsAndRuns(t *testing.T) {
+func TestRemoteRuntimeAdapterSubmitAuthenticatesBindsPreloadsAndRuns(t *testing.T) {
 	rpcClient := &stubRemoteRPCClient{
 		frames: map[string]gateway.MessageFrame{
 			protocol.MethodGatewayLoadSession: {
@@ -61,8 +61,8 @@ func TestRemoteRuntimeAdapterSubmitAuthenticatesPreloadsBindsAndRuns(t *testing.
 
 	methods := rpcClient.snapshotMethods()
 	if len(methods) != 3 ||
-		methods[0] != protocol.MethodGatewayLoadSession ||
-		methods[1] != protocol.MethodGatewayBindStream ||
+		methods[0] != protocol.MethodGatewayBindStream ||
+		methods[1] != protocol.MethodGatewayLoadSession ||
 		methods[2] != protocol.MethodGatewayRun {
 		t.Fatalf("rpc methods = %#v", methods)
 	}
@@ -117,10 +117,10 @@ func TestRemoteRuntimeAdapterSubmitFailFastOnAuthenticateError(t *testing.T) {
 	}
 }
 
-func TestRemoteRuntimeAdapterSubmitFailFastOnLoadSessionError(t *testing.T) {
+func TestRemoteRuntimeAdapterSubmitFailFastOnBindStreamError(t *testing.T) {
 	rpcClient := &stubRemoteRPCClient{
 		callErrs: map[string]error{
-			protocol.MethodGatewayLoadSession: errors.New("session preload failed"),
+			protocol.MethodGatewayBindStream: errors.New("stream bind failed"),
 		},
 		notifications: make(chan gatewayRPCNotification),
 	}
@@ -133,13 +133,13 @@ func TestRemoteRuntimeAdapterSubmitFailFastOnLoadSessionError(t *testing.T) {
 		RunID:     "run-1",
 		Text:      "hello",
 	})
-	if err == nil || !strings.Contains(err.Error(), "session preload failed") {
-		t.Fatalf("expected loadSession failure, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "stream bind failed") {
+		t.Fatalf("expected bindStream failure, got %v", err)
 	}
 
 	methods := rpcClient.snapshotMethods()
-	if len(methods) != 1 || methods[0] != protocol.MethodGatewayLoadSession {
-		t.Fatalf("expected only loadSession call before failure, got %#v", methods)
+	if len(methods) != 1 || methods[0] != protocol.MethodGatewayBindStream {
+		t.Fatalf("expected only bindStream call before failure, got %#v", methods)
 	}
 }
 
@@ -263,6 +263,7 @@ type stubRemoteRPCClient struct {
 
 	methods []string
 	params  map[string]any
+	options map[string]GatewayRPCCallOptions
 
 	callErrs map[string]error
 	frames   map[string]gateway.MessageFrame
@@ -284,14 +285,18 @@ func (s *stubRemoteRPCClient) CallWithOptions(
 	method string,
 	params any,
 	result any,
-	_ GatewayRPCCallOptions,
+	options GatewayRPCCallOptions,
 ) error {
 	s.mu.Lock()
 	s.methods = append(s.methods, method)
 	if s.params == nil {
 		s.params = map[string]any{}
 	}
+	if s.options == nil {
+		s.options = map[string]GatewayRPCCallOptions{}
+	}
 	s.params[method] = params
+	s.options[method] = options
 	callErr := s.callErrs[method]
 	frame, hasFrame := s.frames[method]
 	s.mu.Unlock()
@@ -344,6 +349,16 @@ func (s *stubRemoteRPCClient) snapshotParams() map[string]any {
 	defer s.mu.Unlock()
 	cloned := make(map[string]any, len(s.params))
 	for key, value := range s.params {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func (s *stubRemoteRPCClient) snapshotOptions() map[string]GatewayRPCCallOptions {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cloned := make(map[string]GatewayRPCCallOptions, len(s.options))
+	for key, value := range s.options {
 		cloned[key] = value
 	}
 	return cloned

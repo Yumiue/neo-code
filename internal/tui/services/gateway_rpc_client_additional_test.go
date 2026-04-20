@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -454,6 +455,59 @@ func TestGatewayRPCClientNotificationDispatcherStopsOnQueueClose(t *testing.T) {
 	client.startNotificationDispatcher()
 	close(client.notificationQueue)
 	client.notificationWG.Wait()
+}
+
+func TestGatewayRPCClientEnqueueNotificationDoesNotDropUnderQueuePressure(t *testing.T) {
+	t.Parallel()
+
+	const total = 256
+	client := &GatewayRPCClient{
+		closed:            make(chan struct{}),
+		pending:           make(map[string]chan gatewayRPCResponse),
+		notifications:     make(chan gatewayRPCNotification, 1),
+		notificationQueue: make(chan gatewayRPCNotification, 1),
+	}
+	client.startNotificationDispatcher()
+	t.Cleanup(func() { _ = client.Close() })
+
+	receivedCh := make(chan struct{}, total)
+	go func() {
+		for range client.Notifications() {
+			receivedCh <- struct{}{}
+		}
+	}()
+
+	var enqueueWG sync.WaitGroup
+	for i := 0; i < total; i++ {
+		enqueueWG.Add(1)
+		go func(index int) {
+			defer enqueueWG.Done()
+			client.enqueueNotification(gatewayRPCNotification{
+				Method: protocol.MethodGatewayEvent,
+				Params: json.RawMessage(`{"index":` + strconv.Itoa(index) + `}`),
+			})
+		}(i)
+	}
+
+	waitDone := make(chan struct{})
+	go func() {
+		enqueueWG.Wait()
+		close(waitDone)
+	}()
+
+	select {
+	case <-waitDone:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("enqueue notifications timed out under queue pressure")
+	}
+
+	for i := 0; i < total; i++ {
+		select {
+		case <-receivedCh:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("expected %d notifications, got %d", total, i)
+		}
+	}
 }
 
 func TestGatewayRPCClientWriteRequestFailure(t *testing.T) {

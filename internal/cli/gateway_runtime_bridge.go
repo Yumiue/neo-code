@@ -414,15 +414,7 @@ func isRuntimeNotFoundError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, os.ErrNotExist) {
-		return true
-	}
-	normalized := strings.ToLower(strings.TrimSpace(err.Error()))
-	return strings.Contains(normalized, "not found") ||
-		strings.Contains(normalized, "file does not exist") ||
-		strings.Contains(normalized, "does not exist") ||
-		strings.Contains(normalized, "no such file") ||
-		strings.Contains(normalized, "no such file or directory")
+	return errors.Is(err, agentsession.ErrSessionNotFound) || errors.Is(err, os.ErrNotExist)
 }
 
 var _ gateway.RuntimePort = (*gatewayRuntimePortBridge)(nil)
