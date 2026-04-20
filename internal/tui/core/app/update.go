@@ -51,6 +51,7 @@ const providerAddManualModelsJSONTemplate = "[\n  {\n    \"id\": \"model-id\",\n
 const sessionSwitchBusyMessage = "cannot switch sessions while run or compact is active"
 const logViewerEntryLimit = 500
 const logViewerPersistDir = "log-viewer"
+const logViewerPersistDebounce = 300 * time.Millisecond
 const footerErrorFlashDuration = 4 * time.Second
 
 var panelOrder = []panel{panelTranscript, panelInput}
@@ -66,6 +67,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	a.spinner, spinCmd = a.spinner.Update(msg)
 	if a.isBusy() {
 		cmds = append(cmds, spinCmd)
+	}
+	if a.deferredLogPersistCmd != nil {
+		cmds = append(cmds, a.deferredLogPersistCmd)
+		a.deferredLogPersistCmd = nil
 	}
 
 	switch typed := msg.(type) {
@@ -89,6 +94,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.rebuildTranscript()
 		}
 		cmds = append(cmds, ListenForRuntimeEvent(a.runtime.Events()))
+		return a, tea.Batch(cmds...)
+	case logPersistFlushMsg:
+		if typed.Version != a.logPersistVersion || !a.logPersistDirty {
+			return a, tea.Batch(cmds...)
+		}
+		a.persistLogEntriesForActiveSession()
 		return a, tea.Batch(cmds...)
 	case RuntimeClosedMsg:
 		a.state.IsAgentRunning = false
@@ -613,6 +624,17 @@ func (a App) now() time.Time {
 		return time.Now()
 	}
 	return a.nowFn()
+}
+
+type logPersistFlushMsg struct {
+	Version int
+}
+
+// scheduleLogPersistFlush 在短暂静默后触发日志落盘，避免每条活动都同步刷盘。
+func scheduleLogPersistFlush(version int) tea.Cmd {
+	return tea.Tick(logViewerPersistDebounce, func(time.Time) tea.Msg {
+		return logPersistFlushMsg{Version: version}
+	})
 }
 
 func (a *App) shouldTreatEnterAsNewline(typed tea.KeyMsg, now time.Time) bool {
@@ -1666,7 +1688,12 @@ func (a *App) addLogEntry(kind string, title string, detail string) {
 	if a.logViewerOffset > maxOffset {
 		a.logViewerOffset = maxOffset
 	}
-	a.persistLogEntriesForActiveSession()
+	if strings.TrimSpace(a.state.ActiveSessionID) == "" {
+		return
+	}
+	a.logPersistDirty = true
+	a.logPersistVersion++
+	a.deferredLogPersistCmd = scheduleLogPersistFlush(a.logPersistVersion)
 }
 
 func (a *App) syncActivityViewport(previousCount int) {
@@ -2565,6 +2592,9 @@ func (a *App) setActiveSessionID(sessionID string) {
 		a.state.ActiveSessionID = next
 		return
 	}
+	if current != "" && a.logPersistDirty {
+		a.persistLogEntriesForActiveSession()
+	}
 
 	previousEntries := a.logEntries
 	a.state.ActiveSessionID = next
@@ -2617,11 +2647,13 @@ func (a *App) readLogEntriesForSession(sessionID string) []logEntry {
 func (a *App) persistLogEntriesForActiveSession() {
 	sessionID := strings.TrimSpace(a.state.ActiveSessionID)
 	if sessionID == "" {
+		a.logPersistDirty = false
 		return
 	}
 
 	logPath := a.sessionLogEntriesPath(sessionID)
 	if logPath == "" {
+		a.logPersistDirty = false
 		return
 	}
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
@@ -2629,6 +2661,7 @@ func (a *App) persistLogEntriesForActiveSession() {
 	}
 	payload, _ := json.Marshal(clampLogEntries(a.logEntries))
 	_ = os.WriteFile(logPath, payload, 0o600)
+	a.logPersistDirty = false
 }
 
 func (a App) sessionLogEntriesPath(sessionID string) string {
@@ -2837,7 +2870,7 @@ func currentProviderAddField(form *providerAddFormState) providerAddFieldID {
 	return fields[form.Step]
 }
 
-// isProviderAddEnumField 鍒ゆ柇褰撳墠鏂板 Provider 琛ㄥ崟鐒︾偣鏄惁鍦ㄦ灇涓惧瓧娈碉紙Driver/Model Source锛夈€
+// isProviderAddEnumField 判断当前新增 Provider 表单焦点是否在枚举字段（Driver/Model Source）。
 func isProviderAddEnumField(form *providerAddFormState) bool {
 	switch currentProviderAddField(form) {
 	case providerAddFieldDriver, providerAddFieldModelSource:
