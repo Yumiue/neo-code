@@ -3531,6 +3531,11 @@ func TestSessionLogViewerPersistenceAndCap(t *testing.T) {
 	if !strings.Contains(app.logEntries[0].Message, "entry-020") {
 		t.Fatalf("expected oldest in-memory entry to be entry-020, got %q", app.logEntries[0].Message)
 	}
+	if app.deferredLogPersistCmd == nil {
+		t.Fatalf("expected deferred log persistence command to be queued")
+	}
+	model, _ := app.Update(logPersistFlushMsg{Version: app.logPersistVersion})
+	app = model.(App)
 	if _, err := os.Stat(app.sessionLogEntriesPath("session-one")); err != nil {
 		t.Fatalf("expected persisted log file for session-one, got err=%v", err)
 	}
