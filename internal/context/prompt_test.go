@@ -125,6 +125,12 @@ func TestDefaultToolUsagePromptIncludesPermissionAndAntiLoopGuidance(t *testing.
 	if !strings.Contains(toolUsage, "`todo_write`") {
 		t.Fatalf("expected Tool Usage to mention todo_write for task state, got %q", toolUsage)
 	}
+	if !strings.Contains(toolUsage, "Execute Todos sequentially in the main loop") {
+		t.Fatalf("expected Tool Usage to enforce sequential todo execution, got %q", toolUsage)
+	}
+	if !strings.Contains(toolUsage, "`spawn_subagent` is an immediate execution tool call") {
+		t.Fatalf("expected Tool Usage to describe immediate spawn_subagent semantics, got %q", toolUsage)
+	}
 	if !strings.Contains(toolUsage, "`filesystem_read_file`, `filesystem_grep`, and `filesystem_glob`") {
 		t.Fatalf("expected Tool Usage to prefer structured read/search tools, got %q", toolUsage)
 	}
