@@ -9,6 +9,7 @@ import (
 	"neo-code/internal/provider"
 	"neo-code/internal/provider/openaicompat/chatcompletions"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/session"
 )
 
 const errorPrefix = "openaicompat provider: "
@@ -33,16 +34,18 @@ func BuildRequest(ctx context.Context, cfg provider.RuntimeConfig, req providert
 		payload.Instructions = req.SystemPrompt
 	}
 
-	assetLimits := providertypes.NormalizeSessionAssetLimits(cfg.SessionAssetLimits)
+	assetPolicy := session.NormalizeAssetPolicy(cfg.SessionAssetPolicy)
+	requestBudget := provider.NormalizeRequestAssetBudget(cfg.RequestAssetBudget, assetPolicy.MaxSessionAssetBytes)
 	var usedSessionAssetBytes int64
 	for _, message := range req.Messages {
-		remainingSessionAssetBytes := assetLimits.MaxSessionAssetsTotalBytes - usedSessionAssetBytes
+		remainingSessionAssetBytes := requestBudget.MaxSessionAssetsTotalBytes - usedSessionAssetBytes
 		items, consumedBytes, err := toResponsesInputItems(
 			ctx,
 			message,
 			req.SessionAssetReader,
 			remainingSessionAssetBytes,
-			assetLimits,
+			assetPolicy.MaxSessionAssetBytes,
+			requestBudget,
 		)
 		if err != nil {
 			return Request{}, err
@@ -73,14 +76,16 @@ func toResponsesInputItems(
 	message providertypes.Message,
 	assetReader providertypes.SessionAssetReader,
 	remainingAssetBudget int64,
-	assetLimits providertypes.SessionAssetLimits,
+	maxSessionAssetBytes int64,
+	requestBudget provider.RequestAssetBudget,
 ) ([]InputItem, int64, error) {
 	openaiMessage, consumedBytes, err := chatcompletions.ToOpenAIMessageWithBudget(
 		ctx,
 		message,
 		assetReader,
 		remainingAssetBudget,
-		assetLimits,
+		maxSessionAssetBytes,
+		requestBudget,
 	)
 	if err != nil {
 		return nil, 0, err

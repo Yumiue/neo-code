@@ -15,9 +15,13 @@ func ReadSessionAssetImage(
 	assetReader providertypes.SessionAssetReader,
 	asset *providertypes.AssetRef,
 	remainingBudget int64,
-	assetLimits providertypes.SessionAssetLimits,
+	maxSessionAssetBytes int64,
+	requestBudget RequestAssetBudget,
 ) (string, []byte, int64, error) {
-	normalizedAssetLimits := providertypes.NormalizeSessionAssetLimits(assetLimits)
+	normalizedBudget := NormalizeRequestAssetBudget(requestBudget, maxSessionAssetBytes)
+	if maxSessionAssetBytes <= 0 {
+		maxSessionAssetBytes = normalizedBudget.MaxSessionAssetsTotalBytes
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -33,7 +37,7 @@ func ReadSessionAssetImage(
 	if remainingBudget <= 0 {
 		return "", nil, 0, fmt.Errorf(
 			"session_asset total exceeds %d bytes",
-			normalizedAssetLimits.MaxSessionAssetsTotalBytes,
+			normalizedBudget.MaxSessionAssetsTotalBytes,
 		)
 	}
 
@@ -43,7 +47,7 @@ func ReadSessionAssetImage(
 	}
 	defer func() { _ = reader.Close() }()
 
-	readLimit := normalizedAssetLimits.MaxSessionAssetBytes
+	readLimit := maxSessionAssetBytes
 	if remainingBudget < readLimit {
 		readLimit = remainingBudget
 	}
@@ -56,13 +60,13 @@ func ReadSessionAssetImage(
 		return "", nil, 0, err
 	}
 	if int64(len(data)) > readLimit {
-		if readLimit < normalizedAssetLimits.MaxSessionAssetBytes {
+		if readLimit < maxSessionAssetBytes {
 			return "", nil, 0, fmt.Errorf(
 				"session_asset total exceeds %d bytes",
-				normalizedAssetLimits.MaxSessionAssetsTotalBytes,
+				normalizedBudget.MaxSessionAssetsTotalBytes,
 			)
 		}
-		return "", nil, 0, fmt.Errorf("session_asset %q exceeds %d bytes", asset.ID, normalizedAssetLimits.MaxSessionAssetBytes)
+		return "", nil, 0, fmt.Errorf("session_asset %q exceeds %d bytes", asset.ID, maxSessionAssetBytes)
 	}
 	if len(data) == 0 {
 		return "", nil, 0, fmt.Errorf("session_asset %q is empty", asset.ID)

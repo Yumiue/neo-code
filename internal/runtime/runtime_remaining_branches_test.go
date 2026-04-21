@@ -199,19 +199,20 @@ func TestResolveCompactProviderSelectionSessionBranchInjectsRuntimeAssetLimits(t
 		t.Fatalf("expected model=session-model, got %q", model)
 	}
 
-	expected := cfg.Runtime.ResolveSessionAssetLimits()
-	if resolved.SessionAssetLimits.MaxSessionAssetBytes != expected.MaxSessionAssetBytes {
+	expectedPolicy := cfg.Runtime.ResolveSessionAssetPolicy()
+	expectedBudget := cfg.Runtime.ResolveRequestAssetBudget()
+	if resolved.SessionAssetPolicy.MaxSessionAssetBytes != expectedPolicy.MaxSessionAssetBytes {
 		t.Fatalf(
 			"expected MaxSessionAssetBytes=%d, got %d",
-			expected.MaxSessionAssetBytes,
-			resolved.SessionAssetLimits.MaxSessionAssetBytes,
+			expectedPolicy.MaxSessionAssetBytes,
+			resolved.SessionAssetPolicy.MaxSessionAssetBytes,
 		)
 	}
-	if resolved.SessionAssetLimits.MaxSessionAssetsTotalBytes != expected.MaxSessionAssetsTotalBytes {
+	if resolved.RequestAssetBudget.MaxSessionAssetsTotalBytes != expectedBudget.MaxSessionAssetsTotalBytes {
 		t.Fatalf(
 			"expected MaxSessionAssetsTotalBytes=%d, got %d",
-			expected.MaxSessionAssetsTotalBytes,
-			resolved.SessionAssetLimits.MaxSessionAssetsTotalBytes,
+			expectedBudget.MaxSessionAssetsTotalBytes,
+			resolved.RequestAssetBudget.MaxSessionAssetsTotalBytes,
 		)
 	}
 }

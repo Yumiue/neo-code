@@ -106,7 +106,8 @@ func TestFetchModelsAndGenerateExtraBranches(t *testing.T) {
 		},
 		client: &http.Client{},
 	}
-	if _, err := discoverRawModels(context.Background(), p); err == nil || !strings.Contains(err.Error(), "build models request") {
+	cfg, _ := RequestConfigFromRuntime(p.cfg)
+	if _, err := DiscoverRawModels(context.Background(), p.client, cfg); err == nil || !strings.Contains(err.Error(), "build models request") {
 		t.Fatalf("expected build models request error, got %v", err)
 	}
 
@@ -120,7 +121,8 @@ func TestFetchModelsAndGenerateExtraBranches(t *testing.T) {
 		},
 		client: &http.Client{},
 	}
-	if _, err := discoverRawModels(context.Background(), p); err == nil || !provider.IsDiscoveryConfigError(err) {
+	cfg, _ = RequestConfigFromRuntime(p.cfg)
+	if _, err := DiscoverRawModels(context.Background(), p.client, cfg); err == nil || !provider.IsDiscoveryConfigError(err) {
 		t.Fatalf("expected discovery config error, got %v", err)
 	}
 
@@ -137,19 +139,21 @@ func TestFetchModelsAndGenerateExtraBranches(t *testing.T) {
 			Name:                  DriverName,
 			Driver:                DriverName,
 			BaseURL:               server.URL,
-			APIKey:                "   ",
+			APIKey:                "test-key",
 			DiscoveryEndpointPath: "/models",
 		},
 		client: server.Client(),
 	}
-	if _, err := discoverRawModels(context.Background(), p); err != nil {
-		t.Fatalf("discoverRawModels() error = %v", err)
+
+	cfg, _ = RequestConfigFromRuntime(p.cfg)
+	if _, err := DiscoverRawModels(context.Background(), p.client, cfg); err != nil {
+		t.Fatalf("DiscoverRawModels() error = %v", err)
 	}
-	if auth != "" {
-		t.Fatalf("expected no authorization header, got %q", auth)
+	if auth != "Bearer test-key" {
+		t.Fatalf("expected bearer authorization header, got %q", auth)
 	}
 
-	p, err := New(provider.RuntimeConfig{
+	p2, err := New(provider.RuntimeConfig{
 		Name:         DriverName,
 		Driver:       provider.DriverAnthropic,
 		BaseURL:      "https://api.example.com/v1",
@@ -159,7 +163,7 @@ func TestFetchModelsAndGenerateExtraBranches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	err = p.Generate(context.Background(), providertypes.GenerateRequest{
+	err = p2.Generate(context.Background(), providertypes.GenerateRequest{
 		Messages: []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
 	}, nil)
 	if err == nil || !strings.Contains(err.Error(), "unsupported") {

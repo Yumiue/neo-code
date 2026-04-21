@@ -129,20 +129,21 @@ func TestRuntimeAssetsConfigZeroValuesResolveToDefaults(t *testing.T) {
 		MaxSessionAssetBytes:       0,
 		MaxSessionAssetsTotalBytes: 0,
 	}
-	resolved := cfg.ResolveSessionAssetLimits()
+	resolvedPolicy := cfg.ResolveSessionAssetPolicy()
+	resolvedBudget := cfg.ResolveRequestAssetBudget()
 	defaults := defaultRuntimeAssetsConfig()
-	if resolved.MaxSessionAssetBytes != defaults.MaxSessionAssetBytes {
+	if resolvedPolicy.MaxSessionAssetBytes != defaults.MaxSessionAssetBytes {
 		t.Fatalf(
 			"expected MaxSessionAssetBytes to fallback to default=%d, got %d",
 			defaults.MaxSessionAssetBytes,
-			resolved.MaxSessionAssetBytes,
+			resolvedPolicy.MaxSessionAssetBytes,
 		)
 	}
-	if resolved.MaxSessionAssetsTotalBytes != defaults.MaxSessionAssetsTotalBytes {
+	if resolvedBudget.MaxSessionAssetsTotalBytes != defaults.MaxSessionAssetsTotalBytes {
 		t.Fatalf(
 			"expected MaxSessionAssetsTotalBytes to fallback to default=%d, got %d",
 			defaults.MaxSessionAssetsTotalBytes,
-			resolved.MaxSessionAssetsTotalBytes,
+			resolvedBudget.MaxSessionAssetsTotalBytes,
 		)
 	}
 }

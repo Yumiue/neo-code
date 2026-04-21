@@ -184,7 +184,8 @@ func resolveCompactProviderSelection(session agentsession.Session, cfg config.Co
 		if err != nil {
 			return config.ResolvedProviderConfig{}, "", err
 		}
-		resolved.SessionAssetLimits = cfg.Runtime.ResolveSessionAssetLimits()
+		resolved.SessionAssetPolicy = cfg.Runtime.ResolveSessionAssetPolicy()
+		resolved.RequestAssetBudget = cfg.Runtime.ResolveRequestAssetBudget()
 		return resolved, sessionModel, nil
 	}
 

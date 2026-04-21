@@ -259,9 +259,8 @@ func TestMergeModelCapabilityHints(t *testing.T) {
 		ToolCalling: ModelCapabilityStateSupported,
 	}
 	secondary := ModelCapabilityHints{
-		ToolCalling:   ModelCapabilityStateUnsupported,
-		ImageInput:    ModelCapabilityStateUnsupported,
-		ReasoningMode: ModelReasoningModeConfigurable,
+		ToolCalling: ModelCapabilityStateUnsupported,
+		ImageInput:  ModelCapabilityStateUnsupported,
 	}
 
 	result := mergeModelCapabilityHints(primary, secondary)
@@ -270,9 +269,6 @@ func TestMergeModelCapabilityHints(t *testing.T) {
 	}
 	if result.ImageInput != ModelCapabilityStateUnsupported {
 		t.Fatalf("expected image input to be backfilled, got %+v", result)
-	}
-	if result.ReasoningMode != ModelReasoningModeConfigurable {
-		t.Fatalf("expected reasoning mode to be backfilled, got %+v", result)
 	}
 }
 
@@ -308,9 +304,8 @@ func TestCloneModelDescriptorsReturnsNormalizedIndependentCopy(t *testing.T) {
 			Name:        " ",
 			Description: " desc ",
 			CapabilityHints: ModelCapabilityHints{
-				ToolCalling:   " supported ",
-				ImageInput:    " unsupported ",
-				ReasoningMode: " native ",
+				ToolCalling: " supported ",
+				ImageInput:  " unsupported ",
 			},
 		},
 	}
@@ -323,8 +318,7 @@ func TestCloneModelDescriptorsReturnsNormalizedIndependentCopy(t *testing.T) {
 		t.Fatalf("expected normalized clone, got %+v", cloned[0])
 	}
 	if cloned[0].CapabilityHints.ToolCalling != ModelCapabilityStateSupported ||
-		cloned[0].CapabilityHints.ImageInput != ModelCapabilityStateUnsupported ||
-		cloned[0].CapabilityHints.ReasoningMode != ModelReasoningModeNative {
+		cloned[0].CapabilityHints.ImageInput != ModelCapabilityStateUnsupported {
 		t.Fatalf("expected normalized capability hints, got %+v", cloned[0].CapabilityHints)
 	}
 
@@ -335,25 +329,5 @@ func TestCloneModelDescriptorsReturnsNormalizedIndependentCopy(t *testing.T) {
 
 	if got := CloneModelDescriptors(nil); got != nil {
 		t.Fatalf("expected nil clone for nil source, got %+v", got)
-	}
-}
-
-func TestNormalizeModelReasoningMode(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		input string
-		want  ModelReasoningMode
-	}{
-		{input: " native ", want: ModelReasoningModeNative},
-		{input: "CONFIGURABLE", want: ModelReasoningModeConfigurable},
-		{input: "unknown", want: ModelReasoningModeUnknown},
-		{input: "invalid", want: ""},
-	}
-
-	for _, tt := range tests {
-		if got := normalizeModelReasoningMode(tt.input); got != tt.want {
-			t.Fatalf("normalizeModelReasoningMode(%q) = %q, want %q", tt.input, got, tt.want)
-		}
 	}
 }

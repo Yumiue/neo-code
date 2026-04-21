@@ -11,7 +11,7 @@ require (
 	github.com/charmbracelet/glamour v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
 	github.com/creativeprojects/go-selfupdate v1.5.2
-	github.com/openai/openai-go/v3 v3.30.0
+	github.com/openai/openai-go/v3 v3.32.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0

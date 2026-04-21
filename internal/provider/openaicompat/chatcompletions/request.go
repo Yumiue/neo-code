@@ -12,12 +12,13 @@ import (
 
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/session"
 )
 
 const errorPrefix = "openaicompat provider: "
 
-const maxSessionAssetReadBytes = providertypes.MaxSessionAssetBytes
-const maxSessionAssetsTotalBytes = providertypes.MaxSessionAssetsTotalBytes
+const maxSessionAssetReadBytes = session.MaxSessionAssetBytes
+const maxSessionAssetsTotalBytes = provider.MaxSessionAssetsTotalBytes
 
 const htmlErrorSnippetMaxRunes = 320
 
@@ -37,7 +38,8 @@ func BuildRequest(ctx context.Context, cfg provider.RuntimeConfig, req providert
 		Stream:   true,
 		Messages: make([]Message, 0, len(req.Messages)+1),
 	}
-	assetLimits := providertypes.NormalizeSessionAssetLimits(cfg.SessionAssetLimits)
+	assetPolicy := session.NormalizeAssetPolicy(cfg.SessionAssetPolicy)
+	requestBudget := provider.NormalizeRequestAssetBudget(cfg.RequestAssetBudget, assetPolicy.MaxSessionAssetBytes)
 
 	if strings.TrimSpace(req.SystemPrompt) != "" {
 		payload.Messages = append(payload.Messages, Message{
@@ -48,13 +50,14 @@ func BuildRequest(ctx context.Context, cfg provider.RuntimeConfig, req providert
 
 	var usedSessionAssetBytes int64
 	for _, message := range req.Messages {
-		remainingSessionAssetBytes := assetLimits.MaxSessionAssetsTotalBytes - usedSessionAssetBytes
+		remainingSessionAssetBytes := requestBudget.MaxSessionAssetsTotalBytes - usedSessionAssetBytes
 		msg, consumedBytes, err := toOpenAIMessageWithBudget(
 			ctx,
 			message,
 			req.SessionAssetReader,
 			remainingSessionAssetBytes,
-			assetLimits,
+			assetPolicy.MaxSessionAssetBytes,
+			requestBudget,
 		)
 		if err != nil {
 			return Request{}, err
@@ -94,7 +97,8 @@ func ToOpenAIMessage(ctx context.Context, message providertypes.Message, assetRe
 		message,
 		assetReader,
 		maxSessionAssetsTotalBytes,
-		providertypes.DefaultSessionAssetLimits(),
+		session.DefaultAssetPolicy().MaxSessionAssetBytes,
+		provider.DefaultRequestAssetBudget(),
 	)
 	return msg, err
 }
@@ -105,9 +109,10 @@ func ToOpenAIMessageWithBudget(
 	message providertypes.Message,
 	assetReader providertypes.SessionAssetReader,
 	remainingAssetBudget int64,
-	assetLimits providertypes.SessionAssetLimits,
+	maxSessionAssetBytes int64,
+	requestBudget provider.RequestAssetBudget,
 ) (Message, int64, error) {
-	return toOpenAIMessageWithBudget(ctx, message, assetReader, remainingAssetBudget, assetLimits)
+	return toOpenAIMessageWithBudget(ctx, message, assetReader, remainingAssetBudget, maxSessionAssetBytes, requestBudget)
 }
 
 // toOpenAIMessageWithBudget 将通用 Message 转换为 OpenAI 协议消息格式，并记录 session_asset 消耗字节数。
@@ -116,9 +121,9 @@ func toOpenAIMessageWithBudget(
 	message providertypes.Message,
 	assetReader providertypes.SessionAssetReader,
 	remainingAssetBudget int64,
-	assetLimits providertypes.SessionAssetLimits,
+	maxSessionAssetBytes int64,
+	requestBudget provider.RequestAssetBudget,
 ) (Message, int64, error) {
-	normalizedAssetLimits := providertypes.NormalizeSessionAssetLimits(assetLimits)
 	if remainingAssetBudget < 0 {
 		remainingAssetBudget = 0
 	}
@@ -175,17 +180,18 @@ func toOpenAIMessageWithBudget(
 					if assetReader == nil {
 						return Message{}, 0, errors.New("session_asset reader is not configured")
 					}
-					imageURL, readBytes, err := resolveSessionAssetDataURL(
+					imageURL, consumedBudgetBytes, err := resolveSessionAssetDataURL(
 						ctx,
 						assetReader,
 						part.Image.Asset,
 						remainingAssetBudget-usedAssetBytes,
-						normalizedAssetLimits,
+						maxSessionAssetBytes,
+						requestBudget,
 					)
 					if err != nil {
 						return Message{}, 0, err
 					}
-					usedAssetBytes += readBytes
+					usedAssetBytes += consumedBudgetBytes
 					contentParts = append(contentParts, MessageContentPart{
 						Type: "image_url",
 						ImageURL: &ImageURL{
@@ -225,20 +231,27 @@ func resolveSessionAssetDataURL(
 	assetReader providertypes.SessionAssetReader,
 	asset *providertypes.AssetRef,
 	remainingBudget int64,
-	assetLimits providertypes.SessionAssetLimits,
+	maxSessionAssetBytes int64,
+	requestBudget provider.RequestAssetBudget,
 ) (string, int64, error) {
 	normalizedMime, data, readBytes, err := provider.ReadSessionAssetImage(
 		ctx,
 		assetReader,
 		asset,
 		remainingBudget,
-		assetLimits,
+		maxSessionAssetBytes,
+		requestBudget,
 	)
 	if err != nil {
 		return "", 0, err
 	}
+	normalizedBudget := provider.NormalizeRequestAssetBudget(requestBudget, maxSessionAssetBytes)
+	transportBytes := provider.EstimateDataURLTransportBytes(readBytes, normalizedMime)
+	if transportBytes > remainingBudget {
+		return "", 0, fmt.Errorf("session_asset total exceeds %d bytes", normalizedBudget.MaxSessionAssetsTotalBytes)
+	}
 	encoded := base64.StdEncoding.EncodeToString(data)
-	return fmt.Sprintf("data:%s;base64,%s", normalizedMime, encoded), readBytes, nil
+	return fmt.Sprintf("data:%s;base64,%s", normalizedMime, encoded), transportBytes, nil
 }
 
 // ParseError 解析 HTTP 错误响应并包装为 ProviderError。

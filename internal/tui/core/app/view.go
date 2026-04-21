@@ -465,6 +465,10 @@ func (a App) renderMessageBlockWithCopy(message providertypes.Message, width int
 		content = emptyMessageText
 	}
 
+	if message.Role == roleAssistant && content == emptyMessageText && len(message.ToolCalls) == 0 {
+		return "", nil
+	}
+
 	var (
 		contentBlock string
 		copyButtons  []copyCodeButtonBinding

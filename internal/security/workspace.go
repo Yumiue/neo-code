@@ -286,7 +286,7 @@ func absoluteWorkspaceTarget(root string, target string) (string, error) {
 		return "", err
 	}
 
-	return filepath.Clean(absoluteTarget), nil
+	return cleanedPathKey(absoluteTarget), nil
 }
 
 // ensureNoSymlinkEscape resolves the nearest existing path on the way to target

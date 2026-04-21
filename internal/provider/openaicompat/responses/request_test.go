@@ -8,6 +8,7 @@ import (
 
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/session"
 )
 
 type stubAssetReader struct {
@@ -145,8 +146,10 @@ func TestBuildRequestValidationErrors(t *testing.T) {
 
 		_, err := BuildRequest(context.Background(), provider.RuntimeConfig{
 			DefaultModel: "m",
-			SessionAssetLimits: providertypes.SessionAssetLimits{
-				MaxSessionAssetBytes:       2,
+			SessionAssetPolicy: session.AssetPolicy{
+				MaxSessionAssetBytes: 2,
+			},
+			RequestAssetBudget: provider.RequestAssetBudget{
 				MaxSessionAssetsTotalBytes: 3,
 			},
 		}, providertypes.GenerateRequest{
