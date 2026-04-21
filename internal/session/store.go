@@ -138,10 +138,10 @@ type Store interface {
 // NewSQLiteStore 创建基于 SQLite 的会话存储实现。
 func NewSQLiteStore(baseDir string, workspaceRoot string) *SQLiteStore {
 	return &SQLiteStore{
-		projectDir: projectDirectory(baseDir, workspaceRoot),
-		assetsDir:  assetsDirectory(baseDir, workspaceRoot),
-		dbPath:     databasePath(baseDir, workspaceRoot),
-		limits:     providertypes.DefaultSessionAssetLimits(),
+		projectDir:  projectDirectory(baseDir, workspaceRoot),
+		assetsDir:   assetsDirectory(baseDir, workspaceRoot),
+		dbPath:      databasePath(baseDir, workspaceRoot),
+		assetPolicy: DefaultAssetPolicy(),
 	}
 }
 

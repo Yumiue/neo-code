@@ -9,6 +9,7 @@ import (
 
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/session"
 )
 
 type ProviderSource string
@@ -34,8 +35,9 @@ type ProviderConfig struct {
 
 type ResolvedProviderConfig struct {
 	ProviderConfig
-	APIKey             string                           `yaml:"-"`
-	SessionAssetLimits providertypes.SessionAssetLimits `yaml:"-"`
+	APIKey             string                      `yaml:"-"`
+	SessionAssetPolicy session.AssetPolicy         `yaml:"-"`
+	RequestAssetBudget provider.RequestAssetBudget `yaml:"-"`
 }
 
 // ResolveSelectedProvider 解析当前配置中选中的 provider，并补全运行时所需的密钥信息。
@@ -53,7 +55,8 @@ func ResolveSelectedProvider(cfg Config) (ResolvedProviderConfig, error) {
 	if err != nil {
 		return ResolvedProviderConfig{}, err
 	}
-	resolved.SessionAssetLimits = cfg.Runtime.ResolveSessionAssetLimits()
+	resolved.SessionAssetPolicy = cfg.Runtime.ResolveSessionAssetPolicy()
+	resolved.RequestAssetBudget = cfg.Runtime.ResolveRequestAssetBudget()
 	return resolved, nil
 }
 
@@ -261,7 +264,8 @@ func (p ResolvedProviderConfig) ToRuntimeConfig() (provider.RuntimeConfig, error
 		BaseURL:               baseURL,
 		DefaultModel:          p.Model,
 		APIKey:                p.APIKey,
-		SessionAssetLimits:    p.SessionAssetLimits,
+		SessionAssetPolicy:    p.SessionAssetPolicy,
+		RequestAssetBudget:    p.RequestAssetBudget,
 		ChatAPIMode:           chatAPIMode,
 		ChatEndpointPath:      chatEndpointPath,
 		DiscoveryEndpointPath: discoveryEndpointPath,

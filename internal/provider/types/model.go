@@ -14,21 +14,10 @@ const (
 	ModelCapabilityStateSupported   ModelCapabilityState = "supported"
 )
 
-// ModelReasoningMode 表示模型推理能力的模式提示。
-type ModelReasoningMode string
-
-const (
-	ModelReasoningModeUnknown      ModelReasoningMode = "unknown"
-	ModelReasoningModeNone         ModelReasoningMode = "none"
-	ModelReasoningModeNative       ModelReasoningMode = "native"
-	ModelReasoningModeConfigurable ModelReasoningMode = "configurable"
-)
-
 // ModelCapabilityHints 描述 discovery/catalog 链路共享的模型能力提示。
 type ModelCapabilityHints struct {
-	ToolCalling   ModelCapabilityState `json:"tool_calling,omitempty"`
-	ImageInput    ModelCapabilityState `json:"image_input,omitempty"`
-	ReasoningMode ModelReasoningMode   `json:"reasoning_mode,omitempty"`
+	ToolCalling ModelCapabilityState `json:"tool_calling,omitempty"`
+	ImageInput  ModelCapabilityState `json:"image_input,omitempty"`
 }
 
 // ModelDescriptor 表示 discovery/catalog 链路共享的模型元数据描述符。
@@ -181,9 +170,6 @@ func mergeModelCapabilityHints(primary ModelCapabilityHints, secondary ModelCapa
 	if primary.ImageInput == "" {
 		primary.ImageInput = secondary.ImageInput
 	}
-	if primary.ReasoningMode == "" {
-		primary.ReasoningMode = secondary.ReasoningMode
-	}
 	return normalizeModelCapabilityHints(primary)
 }
 
@@ -191,7 +177,6 @@ func mergeModelCapabilityHints(primary ModelCapabilityHints, secondary ModelCapa
 func normalizeModelCapabilityHints(hints ModelCapabilityHints) ModelCapabilityHints {
 	hints.ToolCalling = normalizeModelCapabilityState(string(hints.ToolCalling))
 	hints.ImageInput = normalizeModelCapabilityState(string(hints.ImageInput))
-	hints.ReasoningMode = normalizeModelReasoningMode(string(hints.ReasoningMode))
 	return hints
 }
 
@@ -236,22 +221,6 @@ func normalizeModelCapabilityState(value string) ModelCapabilityState {
 		return ModelCapabilityStateUnsupported
 	case ModelCapabilityStateUnknown:
 		return ModelCapabilityStateUnknown
-	default:
-		return ""
-	}
-}
-
-// normalizeModelReasoningMode 将 reasoning_mode 字符串规范化为受支持的枚举值。
-func normalizeModelReasoningMode(value string) ModelReasoningMode {
-	switch ModelReasoningMode(normalizeKey(value)) {
-	case ModelReasoningModeNone:
-		return ModelReasoningModeNone
-	case ModelReasoningModeNative:
-		return ModelReasoningModeNative
-	case ModelReasoningModeConfigurable:
-		return ModelReasoningModeConfigurable
-	case ModelReasoningModeUnknown:
-		return ModelReasoningModeUnknown
 	default:
 		return ""
 	}

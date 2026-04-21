@@ -4,6 +4,7 @@ import (
 	"context"
 
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/session"
 )
 
 // RuntimeConfig 表示 provider 构建与模型发现使用的最小运行时输入。
@@ -13,7 +14,8 @@ type RuntimeConfig struct {
 	BaseURL               string
 	DefaultModel          string
 	APIKey                string
-	SessionAssetLimits    providertypes.SessionAssetLimits
+	SessionAssetPolicy    session.AssetPolicy
+	RequestAssetBudget    RequestAssetBudget
 	ChatAPIMode           string
 	ChatEndpointPath      string
 	DiscoveryEndpointPath string

@@ -8,6 +8,7 @@ import (
 
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/session"
 )
 
 type stubAssetReader struct {
@@ -100,7 +101,7 @@ func TestBuildRequestAndToOpenAIMessageErrors(t *testing.T) {
 					SourceType: "unsupported",
 				},
 			}},
-		}, nil, 1024, providertypes.DefaultSessionAssetLimits())
+		}, nil, 1024, session.MaxSessionAssetBytes, provider.DefaultRequestAssetBudget())
 		if err == nil || !strings.Contains(err.Error(), "unsupported source type") {
 			t.Fatalf("expected unsupported source type error, got %v", err)
 		}
@@ -125,7 +126,7 @@ func TestToOpenAIMessageMapsToolCallsAndSessionAsset(t *testing.T) {
 			Name:      "read_file",
 			Arguments: "{\"path\":\"README.md\"}",
 		}},
-	}, reader, 1024, providertypes.DefaultSessionAssetLimits())
+	}, reader, 1024, session.MaxSessionAssetBytes, provider.DefaultRequestAssetBudget())
 	if err != nil {
 		t.Fatalf("toOpenAIMessageWithBudget() error = %v", err)
 	}

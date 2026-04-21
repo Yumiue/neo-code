@@ -3,7 +3,8 @@ package config
 import (
 	"errors"
 
-	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/provider"
+	"neo-code/internal/session"
 )
 
 const (
@@ -36,8 +37,8 @@ func defaultRuntimeConfig() RuntimeConfig {
 // defaultRuntimeAssetsConfig 返回 runtime 附件限制配置默认值。
 func defaultRuntimeAssetsConfig() RuntimeAssetsConfig {
 	return RuntimeAssetsConfig{
-		MaxSessionAssetBytes:       providertypes.MaxSessionAssetBytes,
-		MaxSessionAssetsTotalBytes: providertypes.MaxSessionAssetsTotalBytes,
+		MaxSessionAssetBytes:       session.MaxSessionAssetBytes,
+		MaxSessionAssetsTotalBytes: provider.MaxSessionAssetsTotalBytes,
 	}
 }
 
@@ -78,9 +79,14 @@ func (c RuntimeConfig) Validate() error {
 	return nil
 }
 
-// ResolveSessionAssetLimits 归一化 runtime 附件限制并施加代码硬上限兜底。
-func (c RuntimeConfig) ResolveSessionAssetLimits() providertypes.SessionAssetLimits {
-	return c.Assets.ResolveSessionAssetLimits()
+// ResolveSessionAssetPolicy 归一化 runtime 附件存储策略并施加代码硬上限兜底。
+func (c RuntimeConfig) ResolveSessionAssetPolicy() session.AssetPolicy {
+	return c.Assets.ResolveSessionAssetPolicy()
+}
+
+// ResolveRequestAssetBudget 归一化 runtime 附件请求预算并施加代码硬上限兜底。
+func (c RuntimeConfig) ResolveRequestAssetBudget() provider.RequestAssetBudget {
+	return c.Assets.ResolveRequestAssetBudget()
 }
 
 // Clone 复制附件限制配置，避免调用方共享可变状态。
@@ -112,10 +118,17 @@ func (c RuntimeAssetsConfig) Validate() error {
 	return nil
 }
 
-// ResolveSessionAssetLimits 归一化附件限制并应用代码硬上限。
-func (c RuntimeAssetsConfig) ResolveSessionAssetLimits() providertypes.SessionAssetLimits {
-	return providertypes.NormalizeSessionAssetLimits(providertypes.SessionAssetLimits{
-		MaxSessionAssetBytes:       c.MaxSessionAssetBytes,
-		MaxSessionAssetsTotalBytes: c.MaxSessionAssetsTotalBytes,
+// ResolveSessionAssetPolicy 归一化附件存储策略并应用代码硬上限。
+func (c RuntimeAssetsConfig) ResolveSessionAssetPolicy() session.AssetPolicy {
+	return session.NormalizeAssetPolicy(session.AssetPolicy{
+		MaxSessionAssetBytes: c.MaxSessionAssetBytes,
 	})
+}
+
+// ResolveRequestAssetBudget 归一化附件请求预算并应用代码硬上限。
+func (c RuntimeAssetsConfig) ResolveRequestAssetBudget() provider.RequestAssetBudget {
+	assetPolicy := c.ResolveSessionAssetPolicy()
+	return provider.NormalizeRequestAssetBudget(provider.RequestAssetBudget{
+		MaxSessionAssetsTotalBytes: c.MaxSessionAssetsTotalBytes,
+	}, assetPolicy.MaxSessionAssetBytes)
 }

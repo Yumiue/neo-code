@@ -1,12 +1,8 @@
 package openaicompat
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"io"
-	"log"
-	"mime"
 	"net/http"
 	"strings"
 
@@ -19,12 +15,7 @@ import (
 	providertypes "neo-code/internal/provider/types"
 )
 
-const (
-	maxStreamingErrorSummaryBytes int64 = 8 * 1024
-	streamProbeBytes                    = 512
-)
-
-// generateSDKChatCompletions 走 SDK chat/completions 发送请求，复用本地 wire 解析。
+// generateSDKChatCompletions 走 SDK chat/completions 发送请求
 func (p *Provider) generateSDKChatCompletions(
 	ctx context.Context,
 	req providertypes.GenerateRequest,
@@ -34,11 +25,60 @@ func (p *Provider) generateSDKChatCompletions(
 	if err != nil {
 		return err
 	}
-	endpoint, err := resolveChatEndpoint(p.cfg)
-	if err != nil {
-		return err
+
+	client := p.newSDKClient()
+	params := convertToChatCompletionParams(payload)
+
+	stream := client.Chat.Completions.NewStreaming(ctx, params)
+	return chatcompletions.EmitFromSDKStream(ctx, stream, events)
+}
+
+func convertToChatCompletionParams(req chatcompletions.Request) openai.ChatCompletionNewParams {
+	params := openai.ChatCompletionNewParams{
+		Model: openai.ChatModel(req.Model),
 	}
-	return p.sendSDKStreamRequest(ctx, endpoint, payload, chatcompletions.ConsumeStream, ParseError, events)
+
+	messages := make([]openai.ChatCompletionMessageParamUnion, 0, len(req.Messages))
+	for _, msg := range req.Messages {
+		messages = append(messages, convertToSDKMessage(msg))
+	}
+	params.Messages = messages
+
+	if len(req.Tools) > 0 {
+		tools := make([]openai.ChatCompletionToolUnionParam, 0, len(req.Tools))
+		for _, spec := range req.Tools {
+			tools = append(tools, openai.ChatCompletionFunctionTool(openai.FunctionDefinitionParam{
+				Name:        spec.Function.Name,
+				Description: openai.String(spec.Function.Description),
+				Parameters:  openai.FunctionParameters(spec.Function.Parameters),
+			}))
+		}
+		params.Tools = tools
+		if req.ToolChoice != "" {
+			params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+				OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoAuto)),
+			}
+		}
+	}
+
+	return params
+}
+
+func convertToSDKMessage(msg chatcompletions.Message) openai.ChatCompletionMessageParamUnion {
+	switch msg.Role {
+	case "system":
+		return openai.SystemMessage(msg.Content.(string))
+	case "user":
+		if content, ok := msg.Content.(string); ok {
+			return openai.UserMessage(content)
+		}
+		// Handle multi-part content if needed
+		return openai.UserMessage(fmt.Sprintf("%v", msg.Content))
+	case "assistant":
+		return openai.AssistantMessage(msg.Content.(string))
+	default:
+		return openai.UserMessage(fmt.Sprintf("%v", msg.Content))
+	}
 }
 
 // generateSDKResponses 走 SDK responses 发送请求，复用本地流事件映射。
@@ -55,21 +95,10 @@ func (p *Provider) generateSDKResponses(
 	if err != nil {
 		return err
 	}
-	return p.sendSDKStreamRequest(ctx, endpoint, payload, responses.ConsumeStream, ParseError, events)
-}
 
-func (p *Provider) sendSDKStreamRequest(
-	ctx context.Context,
-	endpoint string,
-	payload any,
-	consumeStream func(context.Context, io.Reader, chan<- providertypes.StreamEvent) error,
-	parseError func(*http.Response) error,
-	events chan<- providertypes.StreamEvent,
-) error {
 	client := p.newSDKClient()
 	var resp *http.Response
-
-	err := client.Post(
+	err = client.Post(
 		ctx,
 		strings.TrimSpace(endpoint),
 		payload,
@@ -78,34 +107,15 @@ func (p *Provider) sendSDKStreamRequest(
 		option.WithHeader("Accept", "text/event-stream"),
 	)
 	if err != nil {
-		if resp != nil && resp.StatusCode >= http.StatusBadRequest {
-			if resp.Body != nil {
-				defer func(body io.ReadCloser) {
-					if closeErr := body.Close(); closeErr != nil {
-						log.Printf("%sclose response body: %v", errorPrefix, closeErr)
-					}
-				}(resp.Body)
-			}
-			return parseError(resp)
-		}
 		return fmt.Errorf("%ssend request: %w", errorPrefix, err)
 	}
-	if resp == nil {
-		return fmt.Errorf("%ssend request: empty response", errorPrefix)
-	}
-	defer func(body io.ReadCloser) {
-		if closeErr := body.Close(); closeErr != nil {
-			log.Printf("%sclose response body: %v", errorPrefix, closeErr)
-		}
-	}(resp.Body)
+	defer resp.Body.Close()
 
 	if resp.StatusCode >= http.StatusBadRequest {
-		return parseError(resp)
+		return ParseError(resp)
 	}
-	if err := validateStreamingResponse(resp); err != nil {
-		return err
-	}
-	return consumeStream(ctx, resp.Body, events)
+
+	return responses.EmitFromStream(ctx, resp.Body, events)
 }
 
 func (p *Provider) newSDKClient() openai.Client {
@@ -138,57 +148,4 @@ func resolveChatEndpointPathByMode(rawPath string, chatAPIMode string) string {
 		return chatEndpointPathResponses
 	}
 	return chatEndpointPathCompletions
-}
-
-// validateStreamingResponse 校验流式响应协议，避免非 SSE 响应被误交给流解析器。
-func validateStreamingResponse(resp *http.Response) error {
-	if resp == nil || resp.Body == nil {
-		return fmt.Errorf("%sstream response is empty", errorPrefix)
-	}
-
-	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
-	mediaType, _, _ := mime.ParseMediaType(contentType)
-	mediaType = strings.TrimSpace(strings.ToLower(mediaType))
-
-	if mediaType == "text/event-stream" {
-		return nil
-	}
-
-	reader := bufio.NewReader(resp.Body)
-	originalBody := resp.Body
-	resp.Body = struct {
-		io.Reader
-		io.Closer
-	}{
-		Reader: reader,
-		Closer: originalBody,
-	}
-
-	if mediaType == "" {
-		peek, _ := reader.Peek(streamProbeBytes)
-		if !looksLikeHTMLPayload(peek) {
-			return nil
-		}
-	}
-
-	summary := readHTTPErrorSummary(reader, maxStreamingErrorSummaryBytes)
-	if looksLikeHTMLPayload([]byte(summary)) {
-		summary = strings.TrimSpace(htmlTagPattern.ReplaceAllString(summary, " "))
-	}
-	message := "upstream did not return an SSE stream"
-	if mediaType == "" {
-		message += " (missing content-type)"
-	} else {
-		message += fmt.Sprintf(" (content-type=%s)", mediaType)
-	}
-	if summary != "" {
-		message += "; upstream body: " + summary
-	}
-	return provider.NewProviderErrorFromStatus(http.StatusBadGateway, message)
-}
-
-// looksLikeHTMLPayload 判断响应片段是否明显是 HTML 页面内容。
-func looksLikeHTMLPayload(payload []byte) bool {
-	trimmed := strings.TrimSpace(strings.ToLower(string(payload)))
-	return strings.HasPrefix(trimmed, "<!doctype html") || strings.HasPrefix(trimmed, "<html")
 }

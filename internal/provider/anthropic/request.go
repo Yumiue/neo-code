@@ -12,10 +12,11 @@ import (
 
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/session"
 )
 
 const defaultMaxTokens = 4096
-const maxSessionAssetsTotalBytes = providertypes.MaxSessionAssetsTotalBytes
+const maxSessionAssetsTotalBytes = provider.MaxSessionAssetsTotalBytes
 
 // BuildRequest 将通用 GenerateRequest 直接转换为 Anthropic SDK 入参。
 func BuildRequest(ctx context.Context, cfg provider.RuntimeConfig, req providertypes.GenerateRequest) (anthropic.MessageNewParams, error) {
@@ -36,16 +37,18 @@ func BuildRequest(ctx context.Context, cfg provider.RuntimeConfig, req providert
 		params.System = []anthropic.TextBlockParam{{Text: req.SystemPrompt}}
 	}
 
-	assetLimits := providertypes.NormalizeSessionAssetLimits(cfg.SessionAssetLimits)
+	assetPolicy := session.NormalizeAssetPolicy(cfg.SessionAssetPolicy)
+	requestBudget := provider.NormalizeRequestAssetBudget(cfg.RequestAssetBudget, assetPolicy.MaxSessionAssetBytes)
 	var usedSessionAssetBytes int64
 	for _, message := range req.Messages {
-		remainingSessionAssetBytes := assetLimits.MaxSessionAssetsTotalBytes - usedSessionAssetBytes
+		remainingSessionAssetBytes := requestBudget.MaxSessionAssetsTotalBytes - usedSessionAssetBytes
 		converted, consumedBytes, include, err := toAnthropicMessageWithBudget(
 			ctx,
 			message,
 			req.SessionAssetReader,
 			remainingSessionAssetBytes,
-			assetLimits,
+			assetPolicy.MaxSessionAssetBytes,
+			requestBudget,
 		)
 		if err != nil {
 			return anthropic.MessageNewParams{}, err
@@ -75,29 +78,14 @@ func BuildRequest(ctx context.Context, cfg provider.RuntimeConfig, req providert
 	return params, nil
 }
 
-// toAnthropicMessage 将通用消息映射为 Anthropic SDK MessageParam。
-func toAnthropicMessage(
-	ctx context.Context,
-	message providertypes.Message,
-	assetReader providertypes.SessionAssetReader,
-) (anthropic.MessageParam, error) {
-	converted, _, _, err := toAnthropicMessageWithBudget(
-		ctx,
-		message,
-		assetReader,
-		maxSessionAssetsTotalBytes,
-		providertypes.DefaultSessionAssetLimits(),
-	)
-	return converted, err
-}
-
 // toAnthropicMessageWithBudget 将通用消息映射为 Anthropic SDK MessageParam，并记录 session_asset 消耗字节数。
 func toAnthropicMessageWithBudget(
 	ctx context.Context,
 	message providertypes.Message,
 	assetReader providertypes.SessionAssetReader,
 	remainingAssetBudget int64,
-	assetLimits providertypes.SessionAssetLimits,
+	maxSessionAssetBytes int64,
+	requestBudget provider.RequestAssetBudget,
 ) (anthropic.MessageParam, int64, bool, error) {
 	if err := providertypes.ValidateParts(message.Parts); err != nil {
 		return anthropic.MessageParam{}, 0, false, fmt.Errorf("%sinvalid message parts: %w", errorPrefix, err)
@@ -105,7 +93,6 @@ func toAnthropicMessageWithBudget(
 	if remainingAssetBudget < 0 {
 		remainingAssetBudget = 0
 	}
-	normalizedAssetLimits := providertypes.NormalizeSessionAssetLimits(assetLimits)
 	var usedAssetBytes int64
 
 	switch strings.TrimSpace(message.Role) {
@@ -117,7 +104,8 @@ func toAnthropicMessageWithBudget(
 			message.Parts,
 			assetReader,
 			remainingAssetBudget,
-			normalizedAssetLimits,
+			maxSessionAssetBytes,
+			requestBudget,
 		)
 		if err != nil {
 			return anthropic.MessageParam{}, 0, false, err
@@ -133,7 +121,8 @@ func toAnthropicMessageWithBudget(
 			message,
 			assetReader,
 			remainingAssetBudget,
-			normalizedAssetLimits,
+			maxSessionAssetBytes,
+			requestBudget,
 		)
 		if err != nil {
 			return anthropic.MessageParam{}, 0, false, err
@@ -160,9 +149,9 @@ func toAnthropicTextBlocksWithBudget(
 	parts []providertypes.ContentPart,
 	assetReader providertypes.SessionAssetReader,
 	remainingAssetBudget int64,
-	assetLimits providertypes.SessionAssetLimits,
+	maxSessionAssetBytes int64,
+	requestBudget provider.RequestAssetBudget,
 ) ([]anthropic.ContentBlockParamUnion, int64, error) {
-	normalizedAssetLimits := providertypes.NormalizeSessionAssetLimits(assetLimits)
 	if remainingAssetBudget < 0 {
 		remainingAssetBudget = 0
 	}
@@ -193,7 +182,8 @@ func toAnthropicTextBlocksWithBudget(
 					assetReader,
 					part.Image.Asset,
 					remainingAssetBudget-usedAssetBytes,
-					normalizedAssetLimits,
+					maxSessionAssetBytes,
+					requestBudget,
 				)
 				if err != nil {
 					return nil, 0, err
@@ -214,14 +204,16 @@ func toAnthropicAssistantBlocksWithBudget(
 	message providertypes.Message,
 	assetReader providertypes.SessionAssetReader,
 	remainingAssetBudget int64,
-	assetLimits providertypes.SessionAssetLimits,
+	maxSessionAssetBytes int64,
+	requestBudget provider.RequestAssetBudget,
 ) ([]anthropic.ContentBlockParamUnion, int64, error) {
 	blocks, consumedBytes, err := toAnthropicTextBlocksWithBudget(
 		ctx,
 		message.Parts,
 		assetReader,
 		remainingAssetBudget,
-		assetLimits,
+		maxSessionAssetBytes,
+		requestBudget,
 	)
 	if err != nil {
 		return nil, 0, err
@@ -282,14 +274,16 @@ func resolveSessionAssetImageSource(
 	assetReader providertypes.SessionAssetReader,
 	asset *providertypes.AssetRef,
 	remainingBudget int64,
-	assetLimits providertypes.SessionAssetLimits,
+	maxSessionAssetBytes int64,
+	requestBudget provider.RequestAssetBudget,
 ) (string, string, int64, error) {
 	normalizedMime, data, readBytes, err := provider.ReadSessionAssetImage(
 		ctx,
 		assetReader,
 		asset,
 		remainingBudget,
-		assetLimits,
+		maxSessionAssetBytes,
+		requestBudget,
 	)
 	if err != nil {
 		return "", "", 0, err

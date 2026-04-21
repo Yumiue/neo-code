@@ -7,6 +7,7 @@ import (
 
 	providerpkg "neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/session"
 )
 
 func TestContainsProviderName(t *testing.T) {
@@ -62,7 +63,7 @@ func TestResolveSelectedProviderNotFound(t *testing.T) {
 	}
 }
 
-func TestResolveSelectedProviderIncludesRuntimeSessionAssetLimits(t *testing.T) {
+func TestResolveSelectedProviderIncludesRuntimeAssetPolicyAndBudget(t *testing.T) {
 	const (
 		maxSingle = int64(128)
 		maxTotal  = int64(512)
@@ -94,14 +95,14 @@ func TestResolveSelectedProviderIncludesRuntimeSessionAssetLimits(t *testing.T) 
 		t.Fatalf("ResolveSelectedProvider() error = %v", err)
 	}
 
-	if resolved.SessionAssetLimits.MaxSessionAssetBytes != maxSingle {
-		t.Fatalf("expected MaxSessionAssetBytes=%d, got %d", maxSingle, resolved.SessionAssetLimits.MaxSessionAssetBytes)
+	if resolved.SessionAssetPolicy.MaxSessionAssetBytes != maxSingle {
+		t.Fatalf("expected MaxSessionAssetBytes=%d, got %d", maxSingle, resolved.SessionAssetPolicy.MaxSessionAssetBytes)
 	}
-	if resolved.SessionAssetLimits.MaxSessionAssetsTotalBytes != maxTotal {
+	if resolved.RequestAssetBudget.MaxSessionAssetsTotalBytes != maxTotal {
 		t.Fatalf(
 			"expected MaxSessionAssetsTotalBytes=%d, got %d",
 			maxTotal,
-			resolved.SessionAssetLimits.MaxSessionAssetsTotalBytes,
+			resolved.RequestAssetBudget.MaxSessionAssetsTotalBytes,
 		)
 	}
 }
@@ -657,8 +658,10 @@ func TestResolvedProviderConfigToRuntimeConfig(t *testing.T) {
 			Model:   "server-default",
 		},
 		APIKey: "secret-key",
-		SessionAssetLimits: providertypes.SessionAssetLimits{
-			MaxSessionAssetBytes:       1024,
+		SessionAssetPolicy: session.AssetPolicy{
+			MaxSessionAssetBytes: 1024,
+		},
+		RequestAssetBudget: providerpkg.RequestAssetBudget{
 			MaxSessionAssetsTotalBytes: 2048,
 		},
 	}
@@ -673,8 +676,10 @@ func TestResolvedProviderConfigToRuntimeConfig(t *testing.T) {
 		BaseURL:      "https://llm.example.com/v1",
 		DefaultModel: "server-default",
 		APIKey:       "secret-key",
-		SessionAssetLimits: providertypes.SessionAssetLimits{
-			MaxSessionAssetBytes:       1024,
+		SessionAssetPolicy: session.AssetPolicy{
+			MaxSessionAssetBytes: 1024,
+		},
+		RequestAssetBudget: providerpkg.RequestAssetBudget{
 			MaxSessionAssetsTotalBytes: 2048,
 		},
 		ChatAPIMode:           "",

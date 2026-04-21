@@ -2,6 +2,7 @@ package openaicompat
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -18,7 +19,7 @@ func TestParseErrorHTMLBodyReturnsSanitizedSummary(t *testing.T) {
 		Header: http.Header{
 			"Content-Type": []string{"text/html; charset=utf-8"},
 		},
-		Body: ioNopCloser(`<!doctype html><html><body><h1>Gateway error</h1><p>api_key=sk-secret-abcdef12</p></body></html>`),
+		Body: io.NopCloser(strings.NewReader(`<!doctype html><html><body><h1>Gateway error</h1><p>api_key=sk-secret-abcdef12</p></body></html>`)),
 	}
 
 	err := ParseError(resp)

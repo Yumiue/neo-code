@@ -9,8 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	providertypes "neo-code/internal/provider/types"
 )
 
 func TestSQLiteStoreSaveAssetOpenAndStat(t *testing.T) {
@@ -149,12 +147,11 @@ func TestSQLiteStoreAssetMethodsRespectContext(t *testing.T) {
 	}
 }
 
-func TestSQLiteStoreSaveAssetRespectsConfiguredAssetLimit(t *testing.T) {
+func TestSQLiteStoreSaveAssetRespectsConfiguredAssetPolicy(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
-	store.SetSessionAssetLimits(providertypes.SessionAssetLimits{
-		MaxSessionAssetBytes:       1,
-		MaxSessionAssetsTotalBytes: 1,
+	store.SetAssetPolicy(AssetPolicy{
+		MaxSessionAssetBytes: 1,
 	})
 	session, err := store.CreateSession(ctx, CreateSessionInput{ID: "session_assets_limit", Title: "assets"})
 	if err != nil {
@@ -167,7 +164,7 @@ func TestSQLiteStoreSaveAssetRespectsConfiguredAssetLimit(t *testing.T) {
 }
 
 func MaxSessionAssetBytesForTest() int64 {
-	return 20 * 1024 * 1024
+	return MaxSessionAssetBytes
 }
 
 func TestSQLiteStoreOpenMissingAssetReturnsNotExist(t *testing.T) {

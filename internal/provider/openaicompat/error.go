@@ -98,6 +98,13 @@ func isHTMLResponse(contentType string, payload []byte) bool {
 
 // sanitizeHTMLSummary 将 HTML 片段转换为可读摘要，避免标签污染错误信息。
 func sanitizeHTMLSummary(payload []byte, truncated bool) string {
-	sanitized := htmlTagPattern.ReplaceAllString(string(payload), " ")
-	return summarizeErrorBody([]byte(sanitized), truncated)
+	summary := summarizeErrorBody(payload, truncated)
+	summary = strings.TrimSpace(htmlTagPattern.ReplaceAllString(summary, " "))
+	return summary
+}
+
+// looksLikeHTMLPayload 判断响应片段是否明显是 HTML 页面内容。
+func looksLikeHTMLPayload(payload []byte) bool {
+	trimmed := strings.TrimSpace(strings.ToLower(string(payload)))
+	return strings.HasPrefix(trimmed, "<!doctype html") || strings.HasPrefix(trimmed, "<html")
 }

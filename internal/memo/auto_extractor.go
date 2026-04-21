@@ -3,8 +3,8 @@ package memo
 import (
 	"context"
 	"encoding/json"
-	"hash/fnv"
 	"errors"
+	"hash/fnv"
 	"log"
 	"strings"
 	"sync"

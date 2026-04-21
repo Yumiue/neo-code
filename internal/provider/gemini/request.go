@@ -10,9 +10,10 @@ import (
 
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/session"
 )
 
-const maxSessionAssetsTotalBytes = providertypes.MaxSessionAssetsTotalBytes
+const maxSessionAssetsTotalBytes = provider.MaxSessionAssetsTotalBytes
 
 // BuildRequest 将通用 GenerateRequest 直接转换为 Gemini SDK 入参，避免中间协议结构。
 func BuildRequest(
@@ -29,16 +30,18 @@ func BuildRequest(
 	}
 
 	contents := make([]*genai.Content, 0, len(req.Messages))
-	assetLimits := providertypes.NormalizeSessionAssetLimits(cfg.SessionAssetLimits)
+	assetPolicy := session.NormalizeAssetPolicy(cfg.SessionAssetPolicy)
+	requestBudget := provider.NormalizeRequestAssetBudget(cfg.RequestAssetBudget, assetPolicy.MaxSessionAssetBytes)
 	var usedSessionAssetBytes int64
 	for _, message := range req.Messages {
-		remainingSessionAssetBytes := assetLimits.MaxSessionAssetsTotalBytes - usedSessionAssetBytes
+		remainingSessionAssetBytes := requestBudget.MaxSessionAssetsTotalBytes - usedSessionAssetBytes
 		content, consumedBytes, err := toGeminiContentWithBudget(
 			ctx,
 			message,
 			req.SessionAssetReader,
 			remainingSessionAssetBytes,
-			assetLimits,
+			assetPolicy.MaxSessionAssetBytes,
+			requestBudget,
 		)
 		if err != nil {
 			return "", nil, nil, err
@@ -74,25 +77,14 @@ func BuildRequest(
 	return model, contents, config, nil
 }
 
-// toGeminiContent 将通用消息转换为 Gemini Content，并保留工具调用语义。
-func toGeminiContent(ctx context.Context, message providertypes.Message, assetReader providertypes.SessionAssetReader) (*genai.Content, error) {
-	content, _, err := toGeminiContentWithBudget(
-		ctx,
-		message,
-		assetReader,
-		maxSessionAssetsTotalBytes,
-		providertypes.DefaultSessionAssetLimits(),
-	)
-	return content, err
-}
-
 // toGeminiContentWithBudget 将通用消息转换为 Gemini Content，并记录 session_asset 消耗字节数。
 func toGeminiContentWithBudget(
 	ctx context.Context,
 	message providertypes.Message,
 	assetReader providertypes.SessionAssetReader,
 	remainingAssetBudget int64,
-	assetLimits providertypes.SessionAssetLimits,
+	maxSessionAssetBytes int64,
+	requestBudget provider.RequestAssetBudget,
 ) (*genai.Content, int64, error) {
 	if err := providertypes.ValidateParts(message.Parts); err != nil {
 		return nil, 0, fmt.Errorf("%sinvalid message parts: %w", errorPrefix, err)
@@ -100,7 +92,6 @@ func toGeminiContentWithBudget(
 	if remainingAssetBudget < 0 {
 		remainingAssetBudget = 0
 	}
-	normalizedAssetLimits := providertypes.NormalizeSessionAssetLimits(assetLimits)
 	var usedAssetBytes int64
 
 	switch strings.TrimSpace(message.Role) {
@@ -112,7 +103,8 @@ func toGeminiContentWithBudget(
 			message.Parts,
 			assetReader,
 			remainingAssetBudget,
-			normalizedAssetLimits,
+			maxSessionAssetBytes,
+			requestBudget,
 		)
 		if err != nil {
 			return nil, 0, err
@@ -125,7 +117,8 @@ func toGeminiContentWithBudget(
 			message,
 			assetReader,
 			remainingAssetBudget,
-			normalizedAssetLimits,
+			maxSessionAssetBytes,
+			requestBudget,
 		)
 		if err != nil {
 			return nil, 0, err
@@ -149,14 +142,16 @@ func toGeminiAssistantPartsWithBudget(
 	message providertypes.Message,
 	assetReader providertypes.SessionAssetReader,
 	remainingAssetBudget int64,
-	assetLimits providertypes.SessionAssetLimits,
+	maxSessionAssetBytes int64,
+	requestBudget provider.RequestAssetBudget,
 ) ([]*genai.Part, int64, error) {
 	result, consumedBytes, err := toGeminiPartsWithBudget(
 		ctx,
 		message.Parts,
 		assetReader,
 		remainingAssetBudget,
-		assetLimits,
+		maxSessionAssetBytes,
+		requestBudget,
 	)
 	if err != nil {
 		return nil, 0, err
@@ -187,9 +182,9 @@ func toGeminiPartsWithBudget(
 	parts []providertypes.ContentPart,
 	assetReader providertypes.SessionAssetReader,
 	remainingAssetBudget int64,
-	assetLimits providertypes.SessionAssetLimits,
+	maxSessionAssetBytes int64,
+	requestBudget provider.RequestAssetBudget,
 ) ([]*genai.Part, int64, error) {
-	normalizedAssetLimits := providertypes.NormalizeSessionAssetLimits(assetLimits)
 	if remainingAssetBudget < 0 {
 		remainingAssetBudget = 0
 	}
@@ -221,7 +216,8 @@ func toGeminiPartsWithBudget(
 					assetReader,
 					part.Image.Asset,
 					remainingAssetBudget-usedAssetBytes,
-					normalizedAssetLimits,
+					maxSessionAssetBytes,
+					requestBudget,
 				)
 				if err != nil {
 					return nil, 0, err
@@ -281,14 +277,16 @@ func resolveSessionAssetInlineData(
 	assetReader providertypes.SessionAssetReader,
 	asset *providertypes.AssetRef,
 	remainingBudget int64,
-	assetLimits providertypes.SessionAssetLimits,
+	maxSessionAssetBytes int64,
+	requestBudget provider.RequestAssetBudget,
 ) (*genai.Blob, int64, error) {
 	normalizedMime, data, readBytes, err := provider.ReadSessionAssetImage(
 		ctx,
 		assetReader,
 		asset,
 		remainingBudget,
-		assetLimits,
+		maxSessionAssetBytes,
+		requestBudget,
 	)
 	if err != nil {
 		return nil, 0, err
