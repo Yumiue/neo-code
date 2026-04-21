@@ -5006,7 +5006,7 @@ func TestParallelToolCallsPhaseMigration(t *testing.T) {
 
 	events := collectRuntimeEvents(service.Events())
 
-	// We expect EventPhaseChanged to emit plan -> execute -> verify
+	// 当前主循环不再在每轮中自动进入 dispatch。
 	var phaseChanges []PhaseChangedPayload
 	for _, e := range events {
 		if e.Type == EventPhaseChanged {

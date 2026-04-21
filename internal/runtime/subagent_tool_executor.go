@@ -3,10 +3,12 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/security"
 	"neo-code/internal/subagent"
 	"neo-code/internal/tools"
 )
@@ -79,6 +81,7 @@ func (e *subAgentRuntimeToolExecutor) ExecuteTool(
 		SessionID:   sessionID,
 		TaskID:      taskID,
 		AgentID:     agentID,
+		Capability:  e.resolveCapabilityToken(input),
 		Call:        input.Call,
 		Workdir:     workdir,
 		ToolTimeout: timeout,
@@ -126,6 +129,101 @@ func (e *subAgentRuntimeToolExecutor) ExecuteTool(
 	}
 	e.emit(ctx, runID, sessionID, eventType, eventPayload)
 	return output, execErr
+}
+
+type capabilitySignerProvider interface {
+	CapabilitySigner() *security.CapabilitySigner
+}
+
+// resolveCapabilityToken 仅在存在父 capability token 时签发子 token；无父 token 时返回 nil，
+// 让工具调用继续走既有权限策略与审批链路，避免 inline 自签名导致绕过。
+func (e *subAgentRuntimeToolExecutor) resolveCapabilityToken(input subagent.ToolExecutionInput) *security.CapabilityToken {
+	if input.CapabilityToken == nil {
+		return nil
+	}
+	parent := input.CapabilityToken.Normalize()
+	if e == nil || e.service == nil {
+		return &parent
+	}
+
+	childTools := tightenToolAllowlist(parent.AllowedTools, input.Capability.AllowedTools)
+	if len(childTools) == 0 {
+		return &parent
+	}
+	childPaths := tightenPathAllowlist(parent.AllowedPaths, input.Capability.AllowedPaths)
+	if len(parent.AllowedPaths) > 0 && len(childPaths) == 0 {
+		return &parent
+	}
+
+	child := parent
+	child.ID = fmt.Sprintf("subagent-%d-%s", time.Now().UTC().UnixNano(), strings.TrimSpace(input.TaskID))
+	if taskID := strings.TrimSpace(input.TaskID); taskID != "" {
+		child.TaskID = taskID
+	}
+	if agentID := strings.TrimSpace(input.AgentID); agentID != "" {
+		child.AgentID = agentID
+	}
+	child.AllowedTools = childTools
+	child.AllowedPaths = childPaths
+	child.NetworkPolicy = parent.NetworkPolicy
+	child.Signature = ""
+	if err := security.EnsureCapabilitySubset(parent, child); err != nil {
+		return &parent
+	}
+
+	signerProvider, ok := e.service.toolManager.(capabilitySignerProvider)
+	if !ok {
+		return &parent
+	}
+	signer := signerProvider.CapabilitySigner()
+	if signer == nil {
+		return &parent
+	}
+	signed, err := signer.Sign(child)
+	if err != nil {
+		return &parent
+	}
+	return &signed
+}
+
+// tightenToolAllowlist 以 parent 为上界收敛工具白名单；未请求时继承 parent。
+func tightenToolAllowlist(parent []string, requested []string) []string {
+	parent = normalizeAllowlistToList(parent)
+	requested = normalizeAllowlistToList(requested)
+	if len(parent) == 0 {
+		return requested
+	}
+	if len(requested) == 0 {
+		return append([]string(nil), parent...)
+	}
+	parentSet := normalizeAllowlist(parent)
+	out := make([]string, 0, len(requested))
+	for _, toolName := range requested {
+		if _, ok := parentSet[strings.ToLower(strings.TrimSpace(toolName))]; !ok {
+			continue
+		}
+		out = append(out, strings.ToLower(strings.TrimSpace(toolName)))
+	}
+	return normalizeAllowlistToList(out)
+}
+
+// tightenPathAllowlist 以 parent 为上界收敛路径白名单；未请求时继承 parent。
+func tightenPathAllowlist(parent []string, requested []string) []string {
+	parent = normalizePathAllowlist(parent)
+	requested = normalizePathAllowlist(requested)
+	if len(parent) == 0 {
+		return requested
+	}
+	if len(requested) == 0 {
+		return append([]string(nil), parent...)
+	}
+	out := make([]string, 0, len(requested))
+	for _, path := range requested {
+		if pathCoveredByAllowlist(path, parent) {
+			out = append(out, path)
+		}
+	}
+	return normalizePathAllowlist(out)
 }
 
 // resolveToolExecutionDecision 根据工具执行错误映射统一的权限决策结果。
@@ -191,6 +289,48 @@ func normalizeAllowlist(items []string) map[string]struct{} {
 		result[normalized] = struct{}{}
 	}
 	return result
+}
+
+// normalizeAllowlistToList 规整白名单并输出稳定顺序列表，便于写入 capability token。
+func normalizeAllowlistToList(items []string) []string {
+	seen := normalizeAllowlist(items)
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(seen))
+	for _, item := range items {
+		normalized := strings.ToLower(strings.TrimSpace(item))
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; !ok {
+			continue
+		}
+		out = append(out, normalized)
+		delete(seen, normalized)
+	}
+	return out
+}
+
+// normalizePathAllowlist 规整路径白名单并去重，避免 capability token 带入空路径。
+func normalizePathAllowlist(items []string) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(items))
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		path := strings.TrimSpace(item)
+		if path == "" {
+			continue
+		}
+		if _, exists := seen[path]; exists {
+			continue
+		}
+		seen[path] = struct{}{}
+		out = append(out, path)
+	}
+	return out
 }
 
 // cloneToolMetadata 深拷贝工具元数据，避免后续修改污染事件载荷。
