@@ -1357,6 +1357,12 @@ func TestPermissionMapperHelpers(t *testing.T) {
 			spawn: true,
 		},
 		{
+			name:  "extract string argument falls back for unescaped windows path",
+			key:   "path",
+			input: []byte(`{"path":"C:\workspace\safe\note.txt"}`),
+			want:  `C:\workspace\safe\note.txt`,
+		},
+		{
 			name:  "extract spawn target invalid json returns empty",
 			input: []byte(`{invalid`),
 			want:  "",

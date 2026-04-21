@@ -12,20 +12,55 @@ import (
 	"neo-code/internal/runtime/controlplane"
 )
 
-// transitionRunPhase 在阶段变化时发出 phase_changed 并更新 runState。
-func (s *Service) transitionRunPhase(ctx context.Context, state *runState, next controlplane.Phase) {
-	if state == nil || state.phase == next {
-		return
+// transitionRunState 在生命周期变化时校验迁移并发出 phase_changed 事件。
+func (s *Service) transitionRunState(ctx context.Context, state *runState, next controlplane.RunState) error {
+	if state == nil || state.lifecycle == next {
+		return nil
 	}
-	from := state.phase
-	state.phase = next
+
+	from := state.lifecycle
+	if err := controlplane.ValidateRunStateTransition(from, next); err != nil {
+		return err
+	}
+
+	state.lifecycle = next
 	_ = s.emitRunScoped(ctx, EventPhaseChanged, state, PhaseChangedPayload{
 		From: string(from),
 		To:   string(next),
 	})
+	return nil
 }
 
-// emitRunTermination 在 Run 退出时决议并发出唯一 stop_reason_decided 终止事实事件。
+// withTemporaryRunState 在短生命周期治理态内执行回调，随后恢复到进入前的运行态。
+func (s *Service) withTemporaryRunState(
+	ctx context.Context,
+	state *runState,
+	temporary controlplane.RunState,
+	fn func() error,
+) error {
+	if state == nil {
+		return fn()
+	}
+
+	previous := state.lifecycle
+	if err := s.transitionRunState(ctx, state, temporary); err != nil {
+		return err
+	}
+
+	runErr := fn()
+	restoreState := previous
+	if runErr != nil && restoreState == "" {
+		restoreState = temporary
+	}
+	if restoreState != "" && restoreState != state.lifecycle {
+		if err := s.transitionRunState(ctx, state, restoreState); err != nil && runErr == nil {
+			runErr = err
+		}
+	}
+	return runErr
+}
+
+// emitRunTermination 在 Run 退出时决议并发出唯一的 stop_reason_decided 事件。
 func (s *Service) emitRunTermination(ctx context.Context, input UserInput, state *runState, err error) {
 	runID := strings.TrimSpace(input.RunID)
 	sessionID := strings.TrimSpace(input.SessionID)
@@ -40,17 +75,21 @@ func (s *Service) emitRunTermination(ctx context.Context, input UserInput, state
 			return
 		}
 		state.stopEmitted = true
+		if state.lifecycle != "" && state.lifecycle != controlplane.RunStateStopped {
+			state.lifecycle = controlplane.RunStateStopped
+		}
 	}
 
-	in := controlplane.StopInput{Success: err == nil}
+	in := controlplane.StopInput{}
 	if err != nil {
-		in.Success = false
 		switch {
 		case errors.Is(err, context.Canceled):
-			in.ContextCanceled = true
+			in.UserInterrupted = true
 		default:
-			in.RunError = err
+			in.FatalError = err
 		}
+	} else {
+		in.Completed = true
 	}
 
 	reason, detail := controlplane.DecideStopReason(in)
@@ -58,10 +97,11 @@ func (s *Service) emitRunTermination(ctx context.Context, input UserInput, state
 	phase := ""
 	if state != nil {
 		turn = state.turn
-		if state.phase != "" {
-			phase = string(state.phase)
+		if state.lifecycle != "" {
+			phase = string(state.lifecycle)
 		}
 	}
+
 	emitCtx, cancel := stopReasonEmitContext(ctx)
 	defer cancel()
 	_ = s.emitWithEnvelope(emitCtx, RuntimeEvent{
@@ -76,7 +116,7 @@ func (s *Service) emitRunTermination(ctx context.Context, input UserInput, state
 	})
 }
 
-// stopReasonEmitContext 为终止事件提供可用发送窗口，避免继承已取消上下文导致事实事件丢失。
+// stopReasonEmitContext 为终止事件提供可用发送窗口，避免继承已取消上下文导致事件丢失。
 func stopReasonEmitContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	if ctx != nil && ctx.Err() == nil {
 		return context.WithTimeout(ctx, terminationEventEmitTimeout)
@@ -84,7 +124,7 @@ func stopReasonEmitContext(ctx context.Context) (context.Context, context.Cancel
 	return context.WithTimeout(context.Background(), terminationEventEmitTimeout)
 }
 
-// handleRunError 负责记录 provider 错误日志并原样返回错误；终止类事件由 Run 出口统一发出。
+// handleRunError 统一转换 runtime 终止错误，保证取消语义收敛到同一路径。
 func (s *Service) handleRunError(ctx context.Context, runID string, sessionID string, err error) error {
 	_ = ctx
 	_ = runID
@@ -92,7 +132,6 @@ func (s *Service) handleRunError(ctx context.Context, runID string, sessionID st
 	if errors.Is(err, context.Canceled) {
 		return context.Canceled
 	}
-
 	return err
 }
 
@@ -105,7 +144,7 @@ func isRetryableProviderError(err error) bool {
 	return providerErr.Retryable
 }
 
-// providerRetryBackoff 计算 runtime 级 provider 重试等待时间。
+// providerRetryBackoff 计算 runtime 级 provider 重试等待时长。
 func providerRetryBackoff(attempt int) time.Duration {
 	wait := providerRetryBaseWait << (attempt - 1)
 	jitter := float64(wait) * (0.5 + rand.Float64())

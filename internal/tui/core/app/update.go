@@ -24,6 +24,7 @@ import (
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
 	approvalflow "neo-code/internal/runtime/approval"
+	"neo-code/internal/runtime/controlplane"
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
 	tuistatus "neo-code/internal/tui/core/status"
@@ -1093,16 +1094,23 @@ func runtimeEventStopReasonDecidedHandler(a *App, event agentruntime.RuntimeEven
 	a.pendingPermission = nil
 	a.clearRunProgress()
 
-	reason := strings.ToLower(strings.TrimSpace(string(payload.Reason)))
+	reason := controlplane.StopReason(strings.ToUpper(strings.TrimSpace(string(payload.Reason))))
 	switch reason {
-	case "success":
-		if strings.TrimSpace(a.state.ExecutionError) == "" {
-			a.state.StatusText = statusReady
-		}
-	case "canceled":
+	case controlplane.StopReasonCompleted:
+		a.state.ExecutionError = ""
+		a.state.StatusText = statusReady
+	case controlplane.StopReasonUserInterrupt:
 		a.state.ExecutionError = ""
 		a.state.StatusText = statusCanceled
 		a.appendActivity("run", "Canceled current run", "", false)
+	case controlplane.StopReasonFatalError:
+		detail := strings.TrimSpace(payload.Detail)
+		if detail == "" {
+			detail = "runtime stopped"
+		}
+		a.state.ExecutionError = detail
+		a.state.StatusText = detail
+		a.appendActivity("run", "Runtime stopped", detail, true)
 	default:
 		detail := strings.TrimSpace(payload.Detail)
 		if detail == "" {

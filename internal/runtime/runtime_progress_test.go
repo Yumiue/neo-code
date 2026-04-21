@@ -13,6 +13,7 @@ import (
 	"neo-code/internal/runtime/controlplane"
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
+	todotool "neo-code/internal/tools/todo"
 )
 
 func TestProgressStreakNoLongerStopsRun(t *testing.T) {
@@ -83,7 +84,7 @@ func TestProgressStreakNoLongerStopsRun(t *testing.T) {
 	}
 
 	events := collectRuntimeEvents(service.Events())
-	assertStopReasonDecided(t, events, controlplane.StopReasonSuccess, "")
+	assertStopReasonDecided(t, events, controlplane.StopReasonCompleted, "")
 
 	if !promptInjected {
 		t.Error("expected self-healing prompt to be injected before repetitive no-progress turns")
@@ -165,7 +166,7 @@ func TestProgressEvidenceResetsNoProgressStreak(t *testing.T) {
 	}
 
 	events := collectRuntimeEvents(service.Events())
-	assertStopReasonDecided(t, events, controlplane.StopReasonSuccess, "")
+	assertStopReasonDecided(t, events, controlplane.StopReasonCompleted, "")
 }
 
 func TestRepeatCycleStreakNoLongerStopsRunAndInjectsReminder(t *testing.T) {
@@ -232,7 +233,7 @@ func TestRepeatCycleStreakNoLongerStopsRunAndInjectsReminder(t *testing.T) {
 	}
 
 	events := collectRuntimeEvents(service.Events())
-	assertStopReasonDecided(t, events, controlplane.StopReasonSuccess, "")
+	assertStopReasonDecided(t, events, controlplane.StopReasonCompleted, "")
 
 	if !promptInjected {
 		t.Fatal("expected repeat self-healing prompt to be injected before repeat limit is reached")
@@ -357,6 +358,8 @@ func TestPrepareTurnSnapshotInjectRepeatReminderWithEmptyPrompt(t *testing.T) {
 	}
 	state := newRunState("run-repeat-reminder-empty", newRuntimeSession("session-repeat-reminder-empty"))
 	state.progress.LastScore.RepeatCycleStreak = 2
+	state.progress.LastScore.StalledProgressState = controlplane.StalledProgressStalled
+	state.progress.LastScore.ReminderKind = controlplane.ReminderKindRepeatCycle
 
 	snapshot, rebuilt, err := service.prepareTurnSnapshot(context.Background(), &state)
 	if err != nil {
@@ -392,6 +395,8 @@ func TestPrepareTurnSnapshotRepeatReminderTakesPriority(t *testing.T) {
 	state := newRunState("run-reminder-priority", newRuntimeSession("session-reminder-priority"))
 	state.progress.LastScore.NoProgressStreak = 2
 	state.progress.LastScore.RepeatCycleStreak = 2
+	state.progress.LastScore.StalledProgressState = controlplane.StalledProgressStalled
+	state.progress.LastScore.ReminderKind = controlplane.ReminderKindRepeatCycle
 
 	snapshot, rebuilt, err := service.prepareTurnSnapshot(context.Background(), &state)
 	if err != nil {
@@ -469,6 +474,93 @@ func TestComputeTodoStateSignature(t *testing.T) {
 	if sig3 == sig1 {
 		t.Fatalf("expected changed signature when todo state changes")
 	}
+}
+
+func TestNoToolIncompleteTurnStillEvaluatesProgressAndInjectsReminder(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Runtime.MaxNoProgressStreak = 1
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store := newMemoryStore()
+	session := newRuntimeSession("session-no-tool-reminder")
+	session.Todos = []agentsession.TodoItem{
+		{
+			ID:       "todo-1",
+			Content:  "close me",
+			Status:   agentsession.TodoStatusPending,
+			Executor: agentsession.TodoExecutorAgent,
+			Revision: 1,
+		},
+	}
+	store.sessions[session.ID] = cloneSession(session)
+
+	registry := tools.NewRegistry()
+	registry.Register(todotool.New())
+
+	providerImpl := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")},
+				},
+				FinishReason: "stop",
+			},
+			{
+				Message: providertypes.Message{
+					Role: providertypes.RoleAssistant,
+					ToolCalls: []providertypes.ToolCall{
+						{
+							ID:        "todo-close",
+							Name:      tools.ToolNameTodoWrite,
+							Arguments: `{"action":"set_status","id":"todo-1","status":"canceled","expected_revision":1}`,
+						},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+			{
+				Message: providertypes.Message{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(
+		manager,
+		registry,
+		store,
+		&scriptedProviderFactory{provider: providerImpl},
+		&stubContextBuilder{},
+	)
+
+	if err := service.Run(context.Background(), UserInput{
+		RunID:     "run-no-tool-reminder",
+		SessionID: session.ID,
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("continue")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if len(providerImpl.requests) < 2 {
+		t.Fatalf("expected at least 2 provider requests, got %d", len(providerImpl.requests))
+	}
+	if !strings.Contains(providerImpl.requests[1].SystemPrompt, selfHealingReminder) {
+		t.Fatalf("expected stalled reminder in second provider request, got %q", providerImpl.requests[1].SystemPrompt)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventContains(t, events, EventProgressEvaluated)
+	assertStopReasonDecided(t, events, controlplane.StopReasonCompleted, "")
 }
 
 func assertStopReasonDecided(t *testing.T, events []RuntimeEvent, wantReason controlplane.StopReason, wantDetail string) {

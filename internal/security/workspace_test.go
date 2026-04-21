@@ -530,6 +530,29 @@ func TestCanonicalWorkspaceRoot(t *testing.T) {
 	}
 }
 
+func TestCanonicalWorkspaceRootPermissionErrorFallsBackToAbsoluteRoot(t *testing.T) {
+	originalEvalSymlinks := evalSymlinks
+	evalSymlinks = func(path string) (string, error) {
+		return "", os.ErrPermission
+	}
+	defer func() {
+		evalSymlinks = originalEvalSymlinks
+	}()
+
+	root := t.TempDir()
+	got, err := NewWorkspaceSandbox().canonicalWorkspaceRoot(root)
+	if err != nil {
+		t.Fatalf("expected permission fallback for workspace root, got %v", err)
+	}
+	want, err := filepath.Abs(root)
+	if err != nil {
+		t.Fatalf("filepath.Abs(root): %v", err)
+	}
+	if !samePathKey(got, want) {
+		t.Fatalf("canonicalWorkspaceRoot() = %q, want %q", got, want)
+	}
+}
+
 func TestAbsoluteWorkspaceTarget(t *testing.T) {
 	t.Parallel()
 
@@ -570,8 +593,9 @@ func TestAbsoluteWorkspaceTarget(t *testing.T) {
 			if err != nil {
 				t.Fatalf("filepath.Abs(%q): %v", tt.want, err)
 			}
-			if got != filepath.Clean(wantAbs) {
-				t.Fatalf("absoluteWorkspaceTarget() = %q, want %q", got, filepath.Clean(wantAbs))
+			wantCanonical := cleanedPathKey(wantAbs)
+			if got != wantCanonical {
+				t.Fatalf("absoluteWorkspaceTarget() = %q, want %q", got, wantCanonical)
 			}
 		})
 	}
@@ -699,6 +723,48 @@ func TestEnsureNoSymlinkEscape(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+func TestEnsureResolvedPathWithinWorkspacePermissionErrorFallsBackForPlainPath(t *testing.T) {
+	root := t.TempDir()
+	candidate := filepath.Join(root, "notes.txt")
+	mustWriteWorkspaceFile(t, candidate, "hello")
+
+	originalEvalSymlinks := evalSymlinks
+	evalSymlinks = func(path string) (string, error) {
+		return "", os.ErrPermission
+	}
+	defer func() {
+		evalSymlinks = originalEvalSymlinks
+	}()
+
+	err := ensureResolvedPathWithinWorkspace(root, candidate, "notes.txt")
+	if err != nil {
+		t.Fatalf("expected plain path permission fallback, got %v", err)
+	}
+}
+
+func TestEnsureResolvedPathWithinWorkspacePermissionErrorRejectsSymlinkedPath(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	target := filepath.Join(outside, "secret.txt")
+	mustWriteWorkspaceFile(t, target, "secret")
+
+	link := filepath.Join(root, "linked.txt")
+	mustSymlinkOrSkip(t, target, link)
+
+	originalEvalSymlinks := evalSymlinks
+	evalSymlinks = func(path string) (string, error) {
+		return "", os.ErrPermission
+	}
+	defer func() {
+		evalSymlinks = originalEvalSymlinks
+	}()
+
+	err := ensureResolvedPathWithinWorkspace(root, link, "linked.txt")
+	if err == nil || !strings.Contains(err.Error(), "resolve symlink") {
+		t.Fatalf("expected symlink permission error, got %v", err)
 	}
 }
 

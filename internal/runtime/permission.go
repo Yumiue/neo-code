@@ -11,6 +11,7 @@ import (
 
 	providertypes "neo-code/internal/provider/types"
 	approvalflow "neo-code/internal/runtime/approval"
+	"neo-code/internal/runtime/controlplane"
 	"neo-code/internal/security"
 	"neo-code/internal/tools"
 )
@@ -128,8 +129,17 @@ func (s *Service) executeToolCallWithPermission(ctx context.Context, input permi
 
 	// 审批等待属于用户交互阶段，不应受工具执行超时约束；
 	// 否则用户未及时响应会被误判为工具失败并进入调度重试/失败链路。
-	decision, requestID, err := s.awaitPermissionDecision(ctx, input, permissionErr)
-	if err != nil {
+	var decision approvalflow.Decision
+	var requestID string
+	if err := s.withTemporaryRunState(ctx, input.State, controlplane.RunStateWaitingPermission, func() error {
+		resolvedDecision, resolvedRequestID, waitErr := s.awaitPermissionDecision(ctx, input, permissionErr)
+		if waitErr != nil {
+			return waitErr
+		}
+		decision = resolvedDecision
+		requestID = resolvedRequestID
+		return nil
+	}); err != nil {
 		return result, err
 	}
 

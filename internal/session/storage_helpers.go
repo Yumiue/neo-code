@@ -40,15 +40,21 @@ func resolvePathForContainment(path string) (string, error) {
 	if err == nil {
 		return resolved, nil
 	}
+	if errors.Is(err, os.ErrPermission) {
+		return absPath, nil
+	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("eval symlinks: %w", err)
 	}
 	parent := filepath.Dir(absPath)
 	resolvedParent, parentErr := filepath.EvalSymlinks(parent)
-	if parentErr != nil {
-		return "", fmt.Errorf("eval parent symlinks: %w", parentErr)
+	if parentErr == nil {
+		return filepath.Join(resolvedParent, filepath.Base(absPath)), nil
 	}
-	return filepath.Join(resolvedParent, filepath.Base(absPath)), nil
+	if errors.Is(parentErr, os.ErrPermission) {
+		return filepath.Join(parent, filepath.Base(absPath)), nil
+	}
+	return "", fmt.Errorf("eval parent symlinks: %w", parentErr)
 }
 
 // createTempFile 在目标目录中创建唯一临时文件。
