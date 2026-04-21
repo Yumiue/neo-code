@@ -173,3 +173,73 @@ func TestSubAgentToolExecutorUtilityFunctions(t *testing.T) {
 		t.Fatalf("future start elapsed = %d, want 0", got)
 	}
 }
+
+func TestSubAgentToolResultToMessageAppliesSubAgentLimit(t *testing.T) {
+	t.Parallel()
+
+	longContent := strings.Repeat("x", subAgentToolResultMaxRunes+128)
+	message := subAgentToolResultToMessage(
+		providertypes.ToolCall{ID: "call-1", Name: "filesystem_read_file"},
+		subagent.ToolExecutionResult{
+			Name:     "filesystem_read_file",
+			Content:  longContent,
+			Decision: permissionDecisionAllow,
+			Metadata: map[string]any{"source": "tool"},
+		},
+	)
+	content := message.Parts[0].Text
+	if !strings.Contains(content, "[truncated]") {
+		t.Fatalf("expected truncated marker in tool content, got %q", content)
+	}
+	if len([]rune(content)) > subAgentToolResultMaxRunes+len([]rune(subAgentTextTruncatedSuffix)) {
+		t.Fatalf("unexpected content length after truncate, got=%d", len([]rune(content)))
+	}
+	if message.ToolMetadata["truncated"] != "true" {
+		t.Fatalf("expected truncated metadata=true, got %+v", message.ToolMetadata)
+	}
+}
+
+func TestTrimSubAgentMessageWindowKeepsPinnedAndRecent(t *testing.T) {
+	t.Parallel()
+
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("task context")}},
+	}
+	for idx := 0; idx < 24; idx++ {
+		messages = append(messages, providertypes.Message{
+			Role:  providertypes.RoleAssistant,
+			Parts: []providertypes.ContentPart{providertypes.NewTextPart(fmt.Sprintf("step-%02d-%s", idx, strings.Repeat("x", 1024)))},
+		})
+	}
+
+	trimmed := trimSubAgentMessageWindow(messages)
+	if len(trimmed) > subAgentMessageWindowMaxMessages {
+		t.Fatalf("trimmed messages len = %d, want <= %d", len(trimmed), subAgentMessageWindowMaxMessages)
+	}
+	if trimmed[0].Parts[0].Text != "task context" {
+		t.Fatalf("expected pinned message kept, got %q", trimmed[0].Parts[0].Text)
+	}
+	if !strings.Contains(trimmed[1].Parts[0].Text, "[subagent_history_trimmed]") {
+		t.Fatalf("expected history summary marker, got %q", trimmed[1].Parts[0].Text)
+	}
+	last := trimmed[len(trimmed)-1].Parts[0].Text
+	if !strings.Contains(last, "step-23-") {
+		t.Fatalf("expected latest message retained, got %q", last)
+	}
+}
+
+func TestTrimSubAgentMessageWindowClampsPinnedMessage(t *testing.T) {
+	t.Parallel()
+
+	pinned := strings.Repeat("p", subAgentMessageWindowMaxRunes+64)
+	trimmed := trimSubAgentMessageWindow([]providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart(pinned)}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("tail")}},
+	})
+	if len(trimmed) < 1 {
+		t.Fatalf("expected non-empty trimmed messages")
+	}
+	if got := trimmed[0].Parts[0].Text; !strings.Contains(got, "[truncated]") {
+		t.Fatalf("expected pinned message to be truncated, got %q", got)
+	}
+}

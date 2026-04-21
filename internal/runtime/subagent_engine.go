@@ -20,6 +20,18 @@ import (
 const (
 	subAgentMaxStepTurnsDefault = 6
 	subAgentMaxStepTurnsLimit   = 12
+	// subAgentToolResultMaxRunes 定义子代理工具回灌给模型的更小文本上限，避免沿用全局 64KB。
+	subAgentToolResultMaxRunes = 4 * 1024
+	// subAgentMessageWindowMaxMessages 定义子代理单步内携带的最大消息条数窗口。
+	subAgentMessageWindowMaxMessages = 18
+	// subAgentMessageWindowMaxRunes 定义子代理单步内可携带的历史消息文本总量上限。
+	subAgentMessageWindowMaxRunes = 12 * 1024
+	// subAgentPinnedMessageMaxRunes 定义首条任务消息允许保留的最大文本长度。
+	subAgentPinnedMessageMaxRunes = 3 * 1024
+	// subAgentHistorySummaryReserveRunes 预留滚动摘要消息的预算，避免挤占最近窗口。
+	subAgentHistorySummaryReserveRunes = 256
+	// subAgentTextTruncatedSuffix 为子代理文本截断后附加标识。
+	subAgentTextTruncatedSuffix = "\n...[truncated]"
 )
 
 var errSubAgentRuntimeUnavailable = errors.New("runtime: subagent runtime dependencies unavailable")
@@ -100,6 +112,7 @@ func (e runtimeSubAgentEngine) RunStep(ctx context.Context, input subagent.StepI
 	maxTurns := resolveSubAgentMaxTurns(input.Policy.DefaultBudget.MaxSteps)
 
 	for turn := 1; turn <= maxTurns; turn++ {
+		messages = trimSubAgentMessageWindow(messages)
 		outcome, err := e.generateStepMessage(ctx, modelProvider, model, systemPrompt, messages, toolSpecs)
 		if err != nil {
 			return subagent.StepOutput{}, err
@@ -302,9 +315,10 @@ func buildSubAgentInitialMessages(input subagent.StepInput) []providertypes.Mess
 			lines = append(lines, "- "+trimmed)
 		}
 	}
+	content, _ := truncateSubAgentText(strings.Join(lines, "\n"), subAgentPinnedMessageMaxRunes)
 	return []providertypes.Message{{
 		Role:  providertypes.RoleUser,
-		Parts: []providertypes.ContentPart{providertypes.NewTextPart(strings.Join(lines, "\n"))},
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart(content)},
 	}}
 }
 
@@ -545,6 +559,7 @@ func subAgentToolResultToMessage(call providertypes.ToolCall, result subagent.To
 	if name == "" {
 		name = strings.TrimSpace(call.Name)
 	}
+	content, contentTruncated := truncateSubAgentText(strings.TrimSpace(result.Content), subAgentToolResultMaxRunes)
 	metadata := map[string]any{
 		"tool_name": name,
 		"decision":  strings.TrimSpace(result.Decision),
@@ -552,13 +567,172 @@ func subAgentToolResultToMessage(call providertypes.ToolCall, result subagent.To
 	for key, value := range result.Metadata {
 		metadata[key] = value
 	}
+	if contentTruncated {
+		metadata["truncated"] = true
+	}
 	return providertypes.Message{
 		Role:         providertypes.RoleTool,
 		ToolCallID:   call.ID,
-		Parts:        []providertypes.ContentPart{providertypes.NewTextPart(strings.TrimSpace(result.Content))},
+		Parts:        []providertypes.ContentPart{providertypes.NewTextPart(content)},
 		IsError:      result.IsError,
 		ToolMetadata: tools.SanitizeToolMetadata(name, metadata),
 	}
+}
+
+// trimSubAgentMessageWindow 对子代理对话历史执行滚动裁剪，保留首条任务上下文与最近窗口，避免消息无限累加。
+func trimSubAgentMessageWindow(messages []providertypes.Message) []providertypes.Message {
+	if len(messages) == 0 {
+		return nil
+	}
+	if len(messages) <= subAgentMessageWindowMaxMessages && estimateSubAgentMessagesRunes(messages) <= subAgentMessageWindowMaxRunes {
+		return messages
+	}
+
+	pinned := clampSubAgentPinnedMessage(messages[0], subAgentPinnedMessageMaxRunes)
+	history := messages[1:]
+	if len(history) == 0 {
+		return []providertypes.Message{pinned}
+	}
+
+	availableRunes := subAgentMessageWindowMaxRunes - estimateSubAgentMessageRunes(pinned) - subAgentHistorySummaryReserveRunes
+	if availableRunes < 0 {
+		availableRunes = 0
+	}
+	maxRecentMessages := subAgentMessageWindowMaxMessages - 2
+	if maxRecentMessages < 1 {
+		maxRecentMessages = 1
+	}
+
+	selectedReversed := make([]providertypes.Message, 0, minInt(len(history), maxRecentMessages))
+	selectedRunes := 0
+	droppedCount := len(history)
+	droppedRunes := estimateSubAgentMessagesRunes(history)
+
+	for idx := len(history) - 1; idx >= 0; idx-- {
+		msg := history[idx]
+		msgRunes := estimateSubAgentMessageRunes(msg)
+		if len(selectedReversed) >= maxRecentMessages || selectedRunes+msgRunes > availableRunes {
+			break
+		}
+		selectedReversed = append(selectedReversed, msg)
+		selectedRunes += msgRunes
+		droppedCount = idx
+		droppedRunes -= msgRunes
+	}
+
+	if len(selectedReversed) == 0 {
+		latest := history[len(history)-1]
+		selectedReversed = append(selectedReversed, latest)
+		droppedCount = len(history) - 1
+		droppedRunes = estimateSubAgentMessagesRunes(history[:len(history)-1])
+	}
+
+	selected := reverseMessages(selectedReversed)
+	result := make([]providertypes.Message, 0, 1+len(selected)+1)
+	result = append(result, pinned)
+	if droppedCount > 0 {
+		result = append(result, buildSubAgentHistorySummaryMessage(droppedCount, droppedRunes))
+	}
+	result = append(result, selected...)
+	return result
+}
+
+// clampSubAgentPinnedMessage 对首条任务消息进行文本收敛，防止初始上下文过大导致请求被上游拒绝。
+func clampSubAgentPinnedMessage(message providertypes.Message, maxRunes int) providertypes.Message {
+	if maxRunes <= 0 {
+		return message
+	}
+	text := strings.TrimSpace(partsrender.RenderDisplayParts(message.Parts))
+	if text == "" {
+		return message
+	}
+	clampedText, truncated := truncateSubAgentText(text, maxRunes)
+	if !truncated {
+		return message
+	}
+	clamped := message
+	clamped.Parts = []providertypes.ContentPart{providertypes.NewTextPart(clampedText)}
+	return clamped
+}
+
+// buildSubAgentHistorySummaryMessage 生成历史裁剪摘要，提示模型当前窗口已滚动。
+func buildSubAgentHistorySummaryMessage(droppedMessages int, droppedRunes int) providertypes.Message {
+	text := fmt.Sprintf(
+		"[subagent_history_trimmed] dropped_messages=%d dropped_chars~=%d; keep only recent window.",
+		droppedMessages,
+		maxInt(0, droppedRunes),
+	)
+	return providertypes.Message{
+		Role:  providertypes.RoleUser,
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart(text)},
+	}
+}
+
+// estimateSubAgentMessagesRunes 统计消息切片的近似字符规模，用于窗口预算控制。
+func estimateSubAgentMessagesRunes(messages []providertypes.Message) int {
+	total := 0
+	for _, message := range messages {
+		total += estimateSubAgentMessageRunes(message)
+	}
+	return total
+}
+
+// estimateSubAgentMessageRunes 估算单条消息在提示词中的字符规模。
+func estimateSubAgentMessageRunes(message providertypes.Message) int {
+	total := len([]rune(partsrender.RenderDisplayParts(message.Parts)))
+	total += len([]rune(strings.TrimSpace(message.ToolCallID)))
+	for _, call := range message.ToolCalls {
+		total += len([]rune(strings.TrimSpace(call.ID)))
+		total += len([]rune(strings.TrimSpace(call.Name)))
+		total += len([]rune(strings.TrimSpace(call.Arguments)))
+	}
+	for key, value := range message.ToolMetadata {
+		total += len([]rune(strings.TrimSpace(key))) + len([]rune(strings.TrimSpace(value)))
+	}
+	return total
+}
+
+// truncateSubAgentText 按字符数截断文本，超限时追加统一后缀。
+func truncateSubAgentText(text string, maxRunes int) (string, bool) {
+	trimmed := strings.TrimSpace(text)
+	if maxRunes <= 0 || trimmed == "" {
+		return "", trimmed != ""
+	}
+	runes := []rune(trimmed)
+	if len(runes) <= maxRunes {
+		return trimmed, false
+	}
+	suffix := []rune(subAgentTextTruncatedSuffix)
+	keep := maxRunes - len(suffix)
+	if keep < 0 {
+		keep = 0
+	}
+	return string(runes[:keep]) + subAgentTextTruncatedSuffix, true
+}
+
+// reverseMessages 反转消息切片顺序，用于把“倒序选择”的消息恢复为时间正序。
+func reverseMessages(messages []providertypes.Message) []providertypes.Message {
+	reversed := make([]providertypes.Message, len(messages))
+	for idx := range messages {
+		reversed[len(messages)-1-idx] = messages[idx]
+	}
+	return reversed
+}
+
+// minInt 返回两个整数中的较小值。
+func minInt(left int, right int) int {
+	if left < right {
+		return left
+	}
+	return right
+}
+
+// maxInt 返回两个整数中的较大值。
+func maxInt(left int, right int) int {
+	if left > right {
+		return left
+	}
+	return right
 }
 
 // streamingHooksForSubAgent 返回子代理生成阶段使用的默认流式钩子。

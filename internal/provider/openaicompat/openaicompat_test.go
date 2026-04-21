@@ -1367,6 +1367,29 @@ func TestParseError_InvalidJSONBody(t *testing.T) {
 	}
 }
 
+func TestParseError_NormalizesHTMLBody(t *testing.T) {
+	t.Parallel()
+
+	resp := &http.Response{
+		Status:     "400 Bad Request",
+		StatusCode: http.StatusBadRequest,
+		Header:     http.Header{"Content-Type": []string{"text/html; charset=utf-8"}},
+		Body: ioNopCloser(
+			`<!doctype html><html><head><title>Bad Request</title></head><body><h1>400</h1><p>APISIX rejected request</p></body></html>`,
+		),
+	}
+	err := chatcompletions.ParseError(resp)
+	if err == nil {
+		t.Fatal("expected normalized html error")
+	}
+	if !strings.Contains(err.Error(), "upstream returned html error payload") ||
+		!strings.Contains(err.Error(), "status: 400 Bad Request") ||
+		!strings.Contains(err.Error(), "content_type: text/html") ||
+		!strings.Contains(err.Error(), "snippet:") {
+		t.Fatalf("unexpected html parse error: %v", err)
+	}
+}
+
 func TestParseError_ClassifiesContextTooLong(t *testing.T) {
 	t.Parallel()
 
@@ -1596,21 +1619,38 @@ func TestParseErrorAndEmitTextDelta(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		status    string
-		body      string
-		expectErr string
+		name        string
+		status      string
+		statusCode  int
+		contentType string
+		body        string
+		expectErr   string
 	}{
-		{"json error payload", "400 Bad Request", `{"error":{"message":"invalid request"}}`, "invalid request"},
-		{"plain text fallback", "502 Bad Gateway", `gateway timeout`, "gateway timeout"},
+		{"json error payload", "400 Bad Request", 400, "", `{"error":{"message":"invalid request"}}`, "invalid request"},
+		{"plain text fallback", "502 Bad Gateway", 502, "", `gateway timeout`, "gateway timeout"},
+		{
+			name:        "html body normalized",
+			status:      "400 Bad Request",
+			statusCode:  400,
+			contentType: "text/html; charset=utf-8",
+			body:        `<!doctype html><html><body><h1>Bad Request</h1><p>gateway html page</p></body></html>`,
+			expectErr:   "upstream returned html error payload",
+		},
 	}
 
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			resp := &http.Response{Status: tt.status, Body: ioNopCloser(tt.body)}
-			err := ParseError(resp)
+			resp := &http.Response{
+				Status:     tt.status,
+				StatusCode: tt.statusCode,
+				Body:       ioNopCloser(tt.body),
+			}
+			if strings.TrimSpace(tt.contentType) != "" {
+				resp.Header = http.Header{"Content-Type": []string{tt.contentType}}
+			}
+			err := chatcompletions.ParseError(resp)
 			if err == nil || !strings.Contains(err.Error(), tt.expectErr) {
 				t.Fatalf("expected error containing %q, got %v", tt.expectErr, err)
 			}
