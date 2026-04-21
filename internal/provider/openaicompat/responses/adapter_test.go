@@ -121,6 +121,34 @@ func TestEmitFromStreamReturnsAfterCompletedEventWithoutDoneMarker(t *testing.T)
 	_ = writer.Close()
 }
 
+func TestEmitFromStreamReturnsAfterCompletedEventFollowedByKeepaliveLine(t *testing.T) {
+	t.Parallel()
+
+	reader, writer := io.Pipe()
+	events := make(chan providertypes.StreamEvent, 4)
+	result := make(chan error, 1)
+
+	go func() {
+		result <- EmitFromStream(context.Background(), reader, events)
+	}()
+
+	_, writeErr := io.WriteString(writer, "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n: keep-alive\n")
+	if writeErr != nil {
+		t.Fatalf("write stream payload failed: %v", writeErr)
+	}
+
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("EmitFromStream() error = %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("EmitFromStream should return after response.completed")
+	}
+
+	_ = writer.Close()
+}
+
 func drainResponseEvents(events <-chan providertypes.StreamEvent) []providertypes.StreamEvent {
 	out := make([]providertypes.StreamEvent, 0, len(events))
 	for {

@@ -1,7 +1,9 @@
 package openaicompat
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -131,6 +133,12 @@ func TestShouldFallbackToCompatibleChatStream(t *testing.T) {
 	}
 	if !shouldFallbackToCompatibleChatStream(errors.New("SDK stream error: invalid character '[' after top-level value")) {
 		t.Fatal("expected fallback for weak SSE decode error")
+	}
+	if !shouldFallbackToCompatibleChatStream(fmt.Errorf("SDK stream error: %w", &json.SyntaxError{Offset: 1})) {
+		t.Fatal("expected fallback for json syntax error")
+	}
+	if !shouldFallbackToCompatibleChatStream(fmt.Errorf("SDK stream error: %w", io.ErrUnexpectedEOF)) {
+		t.Fatal("expected fallback for unexpected EOF")
 	}
 	if shouldFallbackToCompatibleChatStream(errors.New("context deadline exceeded")) {
 		t.Fatal("did not expect fallback for non-decode error")

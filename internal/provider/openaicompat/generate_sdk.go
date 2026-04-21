@@ -2,8 +2,10 @@ package openaicompat
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -179,9 +181,27 @@ func shouldFallbackToCompatibleChatStream(err error) bool {
 	if err == nil {
 		return false
 	}
+
+	var syntaxErr *json.SyntaxError
+	if errors.As(err, &syntaxErr) {
+		return true
+	}
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) {
+		return true
+	}
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+
 	message := strings.ToLower(strings.TrimSpace(safeErrorMessage(err)))
+	if !strings.Contains(message, "sdk stream error") {
+		return false
+	}
 	return strings.Contains(message, "after top-level value") ||
-		strings.Contains(message, "invalid character") && strings.Contains(message, "[done]")
+		strings.Contains(message, "invalid character") ||
+		strings.Contains(message, "cannot unmarshal") ||
+		strings.Contains(message, "unexpected end of json input")
 }
 
 // mapOpenAIError 将 SDK 错误映射为统一的 ProviderError，便于 runtime 做分级处理。

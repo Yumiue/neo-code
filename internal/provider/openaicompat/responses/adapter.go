@@ -128,6 +128,16 @@ func EmitFromStream(
 			if done {
 				return emitDone()
 			}
+		default:
+			if len(dataLines) == 0 {
+				break
+			}
+			if flushErr := flushDataLines(); flushErr != nil {
+				return flushErr
+			}
+			if done {
+				return emitDone()
+			}
 		}
 
 		if errors.Is(err, io.EOF) {

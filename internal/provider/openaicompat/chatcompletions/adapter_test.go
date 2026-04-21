@@ -3,8 +3,10 @@ package chatcompletions
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
+	"time"
 
 	openai "github.com/openai/openai-go/v3"
 
@@ -83,6 +85,38 @@ func TestConsumeStreamEOFWithoutDoneAndWithoutFinishReason(t *testing.T) {
 	if !errors.Is(err, provider.ErrStreamInterrupted) {
 		t.Fatalf("expected ErrStreamInterrupted, got %v", err)
 	}
+}
+
+func TestConsumeStreamReturnsImmediatelyAfterDoneWithoutEventSeparator(t *testing.T) {
+	t.Parallel()
+
+	reader, writer := io.Pipe()
+	events := make(chan providertypes.StreamEvent, 4)
+	result := make(chan error, 1)
+
+	go func() {
+		result <- ConsumeStream(context.Background(), reader, events)
+	}()
+
+	_, writeErr := io.WriteString(
+		writer,
+		"data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n"+
+			"data: [DONE]\n",
+	)
+	if writeErr != nil {
+		t.Fatalf("write stream payload failed: %v", writeErr)
+	}
+
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("ConsumeStream() error = %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("ConsumeStream should return immediately after [DONE]")
+	}
+
+	_ = writer.Close()
 }
 
 func drainEvents(events <-chan providertypes.StreamEvent) []providertypes.StreamEvent {
