@@ -144,6 +144,8 @@ func (s *Service) ListAvailableSkills(ctx context.Context, sessionID string) ([]
 		} else {
 			workspace = strings.TrimSpace(session.Workdir)
 		}
+	} else if s.configManager != nil {
+		workspace = strings.TrimSpace(s.configManager.Get().Workdir)
 	}
 
 	descriptors, err := s.skillsRegistry.List(ctx, skills.ListInput{Workspace: workspace})
@@ -236,7 +238,8 @@ func prioritizeToolSpecsBySkillHints(
 		case rightHit:
 			return false
 		default:
-			return strings.ToLower(prioritized[i].Name) < strings.ToLower(prioritized[j].Name)
+			// 未命中的工具保持原有相对顺序，避免 hint 影响无关工具排序。
+			return false
 		}
 	})
 	return prioritized

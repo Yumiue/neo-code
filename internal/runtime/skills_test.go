@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"neo-code/internal/config"
@@ -18,16 +19,22 @@ import (
 )
 
 type stubSkillsRegistry struct {
-	skills map[string]skills.Skill
-	getErr error
+	skills         map[string]skills.Skill
+	getErr         error
+	lastListInput  skills.ListInput
+	listFilterByWS bool
 }
 
 func (r *stubSkillsRegistry) List(ctx context.Context, input skills.ListInput) ([]skills.Descriptor, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	r.lastListInput = input
 	result := make([]skills.Descriptor, 0, len(r.skills))
 	for _, skill := range r.skills {
+		if r.listFilterByWS && skill.Descriptor.Scope == skills.ScopeWorkspace && strings.TrimSpace(input.Workspace) == "" {
+			continue
+		}
 		result = append(result, skill.Descriptor)
 	}
 	return result, nil
@@ -422,6 +429,39 @@ func TestListAvailableSkillsReportsActiveStateAndSorts(t *testing.T) {
 	}
 }
 
+func TestListAvailableSkillsUsesConfigWorkdirWhenSessionIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	service := NewWithFactory(manager, &stubToolManager{}, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, &stubContextBuilder{})
+	registry := &stubSkillsRegistry{
+		listFilterByWS: true,
+		skills: map[string]skills.Skill{
+			"workspace-only": {
+				Descriptor: skills.Descriptor{
+					ID:    "workspace-only",
+					Name:  "Workspace Only",
+					Scope: skills.ScopeWorkspace,
+				},
+				Content: skills.Content{Instruction: "workspace"},
+			},
+		},
+	}
+	service.SetSkillsRegistry(registry)
+
+	states, err := service.ListAvailableSkills(context.Background(), "")
+	if err != nil {
+		t.Fatalf("ListAvailableSkills() error = %v", err)
+	}
+	if len(states) != 1 || states[0].Descriptor.ID != "workspace-only" {
+		t.Fatalf("expected workspace skill visible with config workdir fallback, got %+v", states)
+	}
+	if strings.TrimSpace(registry.lastListInput.Workspace) == "" {
+		t.Fatalf("expected non-empty workspace fallback, got %+v", registry.lastListInput)
+	}
+}
+
 func TestListAvailableSkillsHandlesValidationAndRegistryErrors(t *testing.T) {
 	t.Parallel()
 
@@ -467,6 +507,33 @@ func TestPrioritizeToolSpecsBySkillHintsOnlyReordersVisibleTools(t *testing.T) {
 	prioritized := prioritizeToolSpecsBySkillHints(specs, activeSkills)
 	got := []string{prioritized[0].Name, prioritized[1].Name, prioritized[2].Name}
 	want := []string{"webfetch", "bash", "filesystem_read_file"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("prioritized tool order = %v, want %v", got, want)
+	}
+}
+
+func TestPrioritizeToolSpecsBySkillHintsKeepsNonHintedRelativeOrder(t *testing.T) {
+	t.Parallel()
+
+	specs := []providertypes.ToolSpec{
+		{Name: "filesystem_read_file"},
+		{Name: "webfetch"},
+		{Name: "bash"},
+		{Name: "mcp_tool"},
+	}
+	activeSkills := []skills.Skill{
+		{
+			Descriptor: skills.Descriptor{ID: "go-review", Name: "Go Review"},
+			Content: skills.Content{
+				Instruction: "review",
+				ToolHints:   []string{"bash"},
+			},
+		},
+	}
+
+	prioritized := prioritizeToolSpecsBySkillHints(specs, activeSkills)
+	got := []string{prioritized[0].Name, prioritized[1].Name, prioritized[2].Name, prioritized[3].Name}
+	want := []string{"bash", "filesystem_read_file", "webfetch", "mcp_tool"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("prioritized tool order = %v, want %v", got, want)
 	}
