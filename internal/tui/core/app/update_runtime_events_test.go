@@ -324,4 +324,52 @@ func TestRuntimeSkillEventHandlers(t *testing.T) {
 	if !last.IsError || last.Title != "Skill missing in registry" {
 		t.Fatalf("expected skill missing error activity, got %+v", last)
 	}
+
+	runtimeEventSkillActivatedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: &agentruntime.SessionSkillEventPayload{SkillID: " "},
+	})
+	last = app.activities[len(app.activities)-1]
+	if !strings.Contains(last.Detail, "(unknown)") {
+		t.Fatalf("expected unknown fallback for blank skill id, got %+v", last)
+	}
+
+	if handled := runtimeEventSkillDeactivatedHandler(&app, agentruntime.RuntimeEvent{Payload: map[string]any{}}); handled {
+		t.Fatalf("expected empty map payload to be rejected")
+	}
+	if handled := runtimeEventSkillMissingHandler(&app, agentruntime.RuntimeEvent{Payload: (*agentruntime.SessionSkillEventPayload)(nil)}); handled {
+		t.Fatalf("expected nil pointer payload to be rejected")
+	}
+
+	runtimeEventSkillDeactivatedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.SessionSkillEventPayload{SkillID: " "},
+	})
+	last = app.activities[len(app.activities)-1]
+	if !strings.Contains(last.Detail, "(unknown)") {
+		t.Fatalf("expected unknown fallback for deactivated event, got %+v", last)
+	}
+
+	runtimeEventSkillMissingHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.SessionSkillEventPayload{SkillID: ""},
+	})
+	last = app.activities[len(app.activities)-1]
+	if !last.IsError || !strings.Contains(last.Detail, "(unknown)") {
+		t.Fatalf("expected unknown fallback for missing event, got %+v", last)
+	}
+}
+
+func TestParseSessionSkillEventPayloadBranches(t *testing.T) {
+	t.Parallel()
+
+	if payload, ok := parseSessionSkillEventPayload(map[string]any{"skill_id": 42}); !ok || payload.SkillID != "42" {
+		t.Fatalf("expected snake-case skill_id to be parsed, got payload=%+v ok=%v", payload, ok)
+	}
+	if payload, ok := parseSessionSkillEventPayload(map[string]any{"SkillID": " go-review "}); !ok || payload.SkillID != "go-review" {
+		t.Fatalf("expected camel-case SkillID to be parsed, got payload=%+v ok=%v", payload, ok)
+	}
+	if _, ok := parseSessionSkillEventPayload(map[string]any{"unexpected": "value"}); ok {
+		t.Fatalf("expected unknown map keys to be rejected")
+	}
+	if _, ok := parseSessionSkillEventPayload(nil); ok {
+		t.Fatalf("expected nil payload to be rejected")
+	}
 }

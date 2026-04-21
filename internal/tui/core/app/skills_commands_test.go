@@ -70,4 +70,138 @@ func TestSkillCommandErrorAndPlaceholderHelpers(t *testing.T) {
 	if normalizeSkillCommandError(plain) != plain {
 		t.Fatalf("expected non-gateway error passthrough")
 	}
+	if normalizeSkillCommandError(nil) != nil {
+		t.Fatalf("expected nil error passthrough")
+	}
+}
+
+func TestHandleSkillCommandUsageBranches(t *testing.T) {
+	t.Parallel()
+
+	app, _ := newTestApp(t)
+
+	if cmd := app.handleSkillCommand("active unexpected"); cmd != nil {
+		t.Fatalf("expected nil cmd for invalid active usage")
+	}
+	if !strings.Contains(app.state.StatusText, slashUsageSkillActive) {
+		t.Fatalf("expected /skill active usage text, got %q", app.state.StatusText)
+	}
+
+	if cmd := app.handleSkillCommand("unknown go-review"); cmd != nil {
+		t.Fatalf("expected nil cmd for unknown action")
+	}
+	if !strings.Contains(app.state.StatusText, "usage: /skill use <id> | /skill off <id> | /skill active") {
+		t.Fatalf("expected generic skill usage text, got %q", app.state.StatusText)
+	}
+}
+
+func TestHandleSkillUseAndOffValidationBranches(t *testing.T) {
+	t.Parallel()
+
+	app, _ := newTestApp(t)
+	app.state.ActiveSessionID = "session-skills"
+
+	if cmd := app.handleSkillUseCommand("<id>"); cmd != nil {
+		t.Fatalf("expected nil cmd for placeholder id")
+	}
+	if !strings.Contains(app.state.StatusText, slashUsageSkillUse) {
+		t.Fatalf("expected /skill use usage text, got %q", app.state.StatusText)
+	}
+
+	if cmd := app.handleSkillOffCommand(" "); cmd != nil {
+		t.Fatalf("expected nil cmd for blank id")
+	}
+	if !strings.Contains(app.state.StatusText, slashUsageSkillOff) {
+		t.Fatalf("expected /skill off usage text, got %q", app.state.StatusText)
+	}
+
+	app.state.ActiveSessionID = ""
+	if cmd := app.handleSkillOffCommand("go-review"); cmd != nil {
+		t.Fatalf("expected nil cmd when /skill off has no active session")
+	}
+	if !strings.Contains(app.state.StatusText, "requires an active session") {
+		t.Fatalf("expected active session requirement hint, got %q", app.state.StatusText)
+	}
+}
+
+func TestHandleSkillsAndActiveCommandErrorBranches(t *testing.T) {
+	t.Parallel()
+
+	app, runtime := newTestApp(t)
+	runtime.availableSkillsErr = errors.New(unsupportedSkillActionReason)
+	runtime.sessionSkillsErr = errors.New("list failed")
+
+	skillsCmd := app.handleSkillsCommand()
+	if skillsCmd == nil {
+		t.Fatalf("expected /skills cmd")
+	}
+	model, _ := app.Update(skillsCmd())
+	app = model.(App)
+	if !strings.Contains(strings.ToLower(app.state.StatusText), "gateway") {
+		t.Fatalf("expected gateway hint for /skills error, got %q", app.state.StatusText)
+	}
+
+	app.state.ActiveSessionID = ""
+	if cmd := app.handleSkillActiveCommand(); cmd != nil {
+		t.Fatalf("expected nil cmd when /skill active has no active session")
+	}
+	if !strings.Contains(app.state.StatusText, "requires an active session") {
+		t.Fatalf("expected active session requirement hint, got %q", app.state.StatusText)
+	}
+
+	app.state.ActiveSessionID = "session-skills"
+	activeCmd := app.handleSkillActiveCommand()
+	if activeCmd == nil {
+		t.Fatalf("expected /skill active cmd")
+	}
+	model, _ = app.Update(activeCmd())
+	app = model.(App)
+	if !strings.Contains(app.state.StatusText, "list failed") {
+		t.Fatalf("expected runtime error passthrough for /skill active, got %q", app.state.StatusText)
+	}
+
+	runtime.deactivateSkillErr = errors.New("deactivate failed")
+	offCmd := app.handleSkillOffCommand("go-review")
+	if offCmd == nil {
+		t.Fatalf("expected /skill off cmd")
+	}
+	model, _ = app.Update(offCmd())
+	app = model.(App)
+	if !strings.Contains(app.state.StatusText, "deactivate failed") {
+		t.Fatalf("expected /skill off error passthrough, got %q", app.state.StatusText)
+	}
+}
+
+func TestFormatHelpersCoverFallbackBranches(t *testing.T) {
+	t.Parallel()
+
+	text := formatAvailableSkills([]agentruntime.AvailableSkillState{
+		{
+			Descriptor: skills.Descriptor{
+				ID:          "plain",
+				Description: "",
+				Scope:       "",
+				Version:     " ",
+				Source:      skills.Source{Kind: ""},
+			},
+			Active: false,
+		},
+	}, "")
+	if !strings.Contains(text, "scope=explicit") {
+		t.Fatalf("expected explicit scope fallback, got %q", text)
+	}
+	if !strings.Contains(text, "| -") {
+		t.Fatalf("expected empty description fallback, got %q", text)
+	}
+
+	sessionText := formatSessionSkills([]agentruntime.SessionSkillState{
+		{SkillID: "zeta", Descriptor: nil},
+		{SkillID: "Alpha", Descriptor: &skills.Descriptor{ID: "Alpha", Description: ""}},
+	})
+	if !strings.Contains(sessionText, "- zeta [active]") {
+		t.Fatalf("expected descriptor-nil fallback line, got %q", sessionText)
+	}
+	if !strings.Contains(sessionText, "- Alpha [active] -") {
+		t.Fatalf("expected empty-description fallback, got %q", sessionText)
+	}
 }
