@@ -338,11 +338,10 @@ func (m *DefaultManager) Execute(ctx context.Context, input ToolCallInput) (Tool
 				result := blockedToolResult(input, decision)
 				return result, permissionErrorFromDecision(decision)
 			}
-		} else {
-			result := NewErrorResult(input.Name, "workspace sandbox rejected action", sandboxErrorDetails(action, err), actionMetadata(action))
-			result.ToolCallID = input.ID
-			return result, err
 		}
+		result := NewErrorResult(input.Name, "workspace sandbox rejected action", sandboxErrorDetails(action, err), actionMetadata(action))
+		result.ToolCallID = input.ID
+		return result, err
 	}
 	m.auditCapabilityDecision(action, string(security.DecisionAllow), "")
 
@@ -399,6 +398,9 @@ func resolveSandboxOutsideWriteDecision(
 
 // isSandboxOutsideWriteApprovalCandidate 判断当前沙箱错误是否可升级为“工作区外低风险写入审批”。
 func isSandboxOutsideWriteApprovalCandidate(action security.Action, sandboxErr error) bool {
+	if isWorkspaceSymlinkViolationError(sandboxErr) {
+		return false
+	}
 	if !isWorkspaceBoundaryViolationError(sandboxErr) {
 		return false
 	}
@@ -428,6 +430,15 @@ func isWorkspaceBoundaryViolationError(err error) bool {
 		strings.Contains(message, "different volume than workspace root")
 }
 
+// isWorkspaceSymlinkViolationError 判断沙箱拒绝是否来自符号链接越界逃逸。
+func isWorkspaceSymlinkViolationError(err error) bool {
+	message := strings.ToLower(strings.TrimSpace(errorMessage(err)))
+	if message == "" {
+		return false
+	}
+	return strings.Contains(message, "escapes workspace root via symlink")
+}
+
 // resolveActionSandboxTargetPath 将 action 的 sandbox target 解析为可判定风险的绝对路径。
 func resolveActionSandboxTargetPath(action security.Action) string {
 	target := strings.TrimSpace(action.Payload.SandboxTarget)
@@ -455,10 +466,53 @@ func isLowRiskExternalWritePath(targetPath string) bool {
 	if isSystemProtectedPath(cleaned) {
 		return false
 	}
+	if isUserStartupProfilePath(cleaned) {
+		return false
+	}
 	if isHighRiskExecutableExtension(filepath.Ext(cleaned)) {
 		return false
 	}
 	return true
+}
+
+// isUserStartupProfilePath 判断路径是否命中用户级 shell/profile 启动文件，命中后必须保持硬拒绝。
+func isUserStartupProfilePath(path string) bool {
+	cleaned := strings.ToLower(strings.TrimSpace(filepath.Clean(path)))
+	if cleaned == "" || cleaned == "." {
+		return false
+	}
+
+	base := filepath.Base(cleaned)
+	switch base {
+	case ".bashrc", ".bash_profile", ".bash_login", ".profile",
+		".zshrc", ".zprofile", ".zlogin", ".zshenv",
+		".cshrc", ".tcshrc", "config.fish",
+		"profile.ps1", "microsoft.powershell_profile.ps1",
+		"microsoft.vscode_profile.ps1", "profile":
+		return true
+	}
+
+	segments := splitPathSegments(cleaned)
+	if len(segments) == 0 {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		for i := 0; i+2 < len(segments); i++ {
+			if segments[i] == "documents" && segments[i+1] == "windowspowershell" && strings.HasSuffix(base, ".ps1") {
+				return true
+			}
+			if segments[i] == "documents" && segments[i+1] == "powershell" && strings.HasSuffix(base, ".ps1") {
+				return true
+			}
+		}
+		return false
+	}
+	for i := 0; i+2 < len(segments); i++ {
+		if segments[i] == ".config" && segments[i+1] == "fish" && base == "config.fish" {
+			return true
+		}
+	}
+	return false
 }
 
 // isSystemProtectedPath 判定路径是否命中系统受保护目录，命中后必须保持硬拒绝。

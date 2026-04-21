@@ -451,11 +451,12 @@ func TestDefaultManagerSandboxOutsideWriteSessionMemory(t *testing.T) {
 		t.Fatalf("remember outside write allow: %v", rememberErr)
 	}
 
-	if _, err := manager.Execute(context.Background(), input); err != nil {
-		t.Fatalf("expected remembered allow to bypass sandbox block, got %v", err)
+	_, err = manager.Execute(context.Background(), input)
+	if err == nil || !strings.Contains(err.Error(), "escapes workspace root") {
+		t.Fatalf("expected sandbox rejection after remembered allow, got %v", err)
 	}
-	if writeTool.callCount != 1 {
-		t.Fatalf("expected write tool to execute once after remember, got %d", writeTool.callCount)
+	if writeTool.callCount != 0 {
+		t.Fatalf("expected write tool not to execute after remembered allow, got %d", writeTool.callCount)
 	}
 }
 
@@ -466,11 +467,13 @@ func TestSandboxOutsideWriteApprovalCandidate(t *testing.T) {
 	lowRiskPath := filepath.Join(string(filepath.Separator), "tmp", "sample.py")
 	protectedPath := filepath.Join(string(filepath.Separator), "etc", "hosts")
 	highRiskExecutable := filepath.Join(string(filepath.Separator), "tmp", "sample.exe")
+	startupProfilePath := filepath.Join(string(filepath.Separator), "home", "tester", ".bashrc")
 	if isWindowsRuntime() {
 		workspaceRoot = `C:\workspace\project`
 		lowRiskPath = `C:\Users\tester\Desktop\sample.py`
 		protectedPath = `C:\Windows\System32\drivers\etc\hosts`
 		highRiskExecutable = `C:\Users\tester\Desktop\sample.exe`
+		startupProfilePath = `C:\Users\tester\Documents\PowerShell\Microsoft.PowerShell_profile.ps1`
 	}
 
 	buildAction := func(target string, toolName string) security.Action {
@@ -522,6 +525,18 @@ func TestSandboxOutsideWriteApprovalCandidate(t *testing.T) {
 			name:       "write tool not in allowlist keeps hard reject",
 			action:     buildAction(lowRiskPath, "filesystem_edit"),
 			sandboxErr: fmt.Errorf("security: path %q escapes workspace root", lowRiskPath),
+			want:       false,
+		},
+		{
+			name:       "symlink workspace escape keeps hard reject",
+			action:     buildAction(lowRiskPath, "filesystem_write_file"),
+			sandboxErr: fmt.Errorf("security: path %q escapes workspace root via symlink", filepath.Join("link", "sample.py")),
+			want:       false,
+		},
+		{
+			name:       "startup profile path keeps hard reject",
+			action:     buildAction(startupProfilePath, "filesystem_write_file"),
+			sandboxErr: fmt.Errorf("security: path %q escapes workspace root", startupProfilePath),
 			want:       false,
 		},
 	}
