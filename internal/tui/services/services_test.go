@@ -12,6 +12,7 @@ import (
 
 	configstate "neo-code/internal/config/state"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/tools"
 )
 
 type stubRunner struct {
@@ -55,6 +56,17 @@ func (s *stubPermissionResolver) ResolvePermission(ctx context.Context, input Pe
 	s.lastInput = input
 	s.deadline, s.hasDeadline = ctx.Deadline()
 	return s.err
+}
+
+type stubSystemToolRunner struct {
+	lastInput SystemToolInput
+	result    tools.ToolResult
+	err       error
+}
+
+func (s *stubSystemToolRunner) ExecuteSystemTool(ctx context.Context, input SystemToolInput) (tools.ToolResult, error) {
+	s.lastInput = input
+	return s.result, s.err
 }
 
 type stubProvider struct {
@@ -178,6 +190,37 @@ func TestRunResolvePermissionCmd(t *testing.T) {
 	}
 	if !resolver.hasDeadline {
 		t.Fatalf("expected permission resolver context to carry a deadline")
+	}
+}
+
+func TestRunSystemToolCmd(t *testing.T) {
+	runner := &stubSystemToolRunner{
+		result: tools.ToolResult{Name: "memo_read", Content: "ok"},
+		err:    errors.New("tool failed"),
+	}
+	input := SystemToolInput{SessionID: "s1", ToolName: "memo_read"}
+	msg := RunSystemToolCmd(
+		runner,
+		input,
+		func(result tools.ToolResult, err error) tea.Msg {
+			return struct {
+				Result tools.ToolResult
+				Err    error
+			}{Result: result, Err: err}
+		},
+	)()
+	got, ok := msg.(struct {
+		Result tools.ToolResult
+		Err    error
+	})
+	if !ok {
+		t.Fatalf("expected wrapped tool result msg, got %T %#v", msg, msg)
+	}
+	if runner.lastInput.SessionID != "s1" || runner.lastInput.ToolName != "memo_read" {
+		t.Fatalf("unexpected tool input: %#v", runner.lastInput)
+	}
+	if got.Result.Name != "memo_read" || got.Err == nil || got.Err.Error() != "tool failed" {
+		t.Fatalf("unexpected tool msg payload: %#v", got)
 	}
 }
 

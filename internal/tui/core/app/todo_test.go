@@ -563,6 +563,11 @@ func TestParseTodoEventPayload(t *testing.T) {
 	if !ok || got.Action != "x" || got.Reason != "y" {
 		t.Fatalf("unexpected pointer parse result: %#v ok=%v", got, ok)
 	}
+	var nilPayload *agentruntime.TodoEventPayload
+	got, ok = parseTodoEventPayload(nilPayload)
+	if ok || got != (agentruntime.TodoEventPayload{}) {
+		t.Fatalf("expected nil pointer payload to fail parse, got %#v ok=%v", got, ok)
+	}
 
 	got, ok = parseTodoEventPayload(map[string]any{"action": "plan", "reason": "conflict"})
 	if !ok || got.Action != "plan" || got.Reason != "conflict" {

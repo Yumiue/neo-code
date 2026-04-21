@@ -93,6 +93,28 @@ func TestNewProgramNormalizesInvalidCurrentModelOnStartup(t *testing.T) {
 	}
 }
 
+func TestNewProgramInvalidRuntimeModeTriggersCleanupPath(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	program, cleanup, err := NewProgram(context.Background(), BootstrapOptions{RuntimeMode: "invalid-mode"})
+	if err == nil {
+		if cleanup != nil {
+			_ = cleanup()
+		}
+		if program != nil {
+			t.Fatalf("expected nil program when runtime mode is invalid")
+		}
+		t.Fatalf("expected invalid runtime mode error")
+	}
+	if cleanup != nil {
+		t.Fatalf("expected cleanup to be nil on NewProgram failure")
+	}
+}
+
 func TestBuildRuntimeRejectsUnsupportedSelectedProviderDriverOnStartup(t *testing.T) {
 	disableBuiltinProviderAPIKeys(t)
 

@@ -192,6 +192,33 @@ func TestRemoteRuntimeAdapterCompactResolvePermissionAndListSessions(t *testing.
 	}
 }
 
+func TestRemoteRuntimeAdapterCompactPayloadDecodeError(t *testing.T) {
+	t.Parallel()
+
+	rpcClient := &stubRemoteRPCClient{
+		frames: map[string]gateway.MessageFrame{
+			protocol.MethodGatewayBindStream: {Type: gateway.FrameTypeAck, Action: gateway.FrameActionBindStream},
+			protocol.MethodGatewayCompact: {
+				Type:    gateway.FrameTypeAck,
+				Action:  gateway.FrameActionCompact,
+				Payload: "invalid-payload",
+			},
+		},
+		notifications: make(chan gatewayRPCNotification),
+	}
+	adapter := newRemoteRuntimeAdapterWithClients(
+		rpcClient,
+		&stubRemoteStreamClient{events: make(chan RuntimeEvent)},
+		time.Second,
+		1,
+	)
+	t.Cleanup(func() { _ = adapter.Close() })
+
+	if _, err := adapter.Compact(context.Background(), CompactInput{SessionID: "s1", RunID: "r1"}); err == nil {
+		t.Fatalf("expected compact payload decode error")
+	}
+}
+
 func TestRemoteRuntimeAdapterUnsupportedSkillMethods(t *testing.T) {
 	t.Parallel()
 

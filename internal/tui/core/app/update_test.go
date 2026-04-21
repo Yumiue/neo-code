@@ -2375,6 +2375,18 @@ func TestListenForRuntimeEvent(t *testing.T) {
 	}
 }
 
+func TestUpdateRuntimeMsgWithInvalidEventTypeSchedulesNextListen(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	updated, cmd := app.Update(RuntimeMsg{Event: "not-runtime-event"})
+	if updated == nil {
+		t.Fatalf("expected updated model")
+	}
+	if cmd == nil {
+		t.Fatalf("expected follow-up listen command")
+	}
+}
+
 func TestBuildProviderAddRequest(t *testing.T) {
 	t.Run("validates required fields", func(t *testing.T) {
 		if _, err := buildProviderAddRequest(providerAddFormState{}); !strings.Contains(err, "Name is required") {

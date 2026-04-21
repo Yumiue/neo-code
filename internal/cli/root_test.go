@@ -90,6 +90,26 @@ func TestNewRootCommandPassesRuntimeModeFlagToLauncher(t *testing.T) {
 	}
 }
 
+func TestNewRootCommandPassesLocalRuntimeModeToLauncher(t *testing.T) {
+	originalLauncher := launchRootProgram
+	t.Cleanup(func() { launchRootProgram = originalLauncher })
+
+	var captured app.BootstrapOptions
+	launchRootProgram = func(ctx context.Context, opts app.BootstrapOptions) error {
+		captured = opts
+		return nil
+	}
+
+	cmd := NewRootCommand()
+	cmd.SetArgs([]string{"--runtime-mode", app.RuntimeModeLocal})
+	if err := cmd.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
+	}
+	if captured.RuntimeMode != app.RuntimeModeLocal {
+		t.Fatalf("expected runtime mode %q, got %q", app.RuntimeModeLocal, captured.RuntimeMode)
+	}
+}
+
 func TestNewRootCommandRejectsInvalidRuntimeMode(t *testing.T) {
 	originalPreload := runGlobalPreload
 	t.Cleanup(func() { runGlobalPreload = originalPreload })
