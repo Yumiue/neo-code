@@ -82,6 +82,30 @@ func TestAnalyzeBashCommandClassifiesGitCommand(t *testing.T) {
 			wantUnknown: true,
 		},
 		{
+			name:        "single ampersand is composite",
+			command:     "git status & git log -1",
+			wantIsGit:   false,
+			wantClass:   BashIntentClassificationUnknown,
+			wantPrefix:  "bash.command.composite",
+			wantUnknown: true,
+		},
+		{
+			name:        "command substitution is composite",
+			command:     "git status $(whoami)",
+			wantIsGit:   false,
+			wantClass:   BashIntentClassificationUnknown,
+			wantPrefix:  "bash.command.composite",
+			wantUnknown: true,
+		},
+		{
+			name:        "backtick substitution is composite",
+			command:     "git status `whoami`",
+			wantIsGit:   false,
+			wantClass:   BashIntentClassificationUnknown,
+			wantPrefix:  "bash.command.composite",
+			wantUnknown: true,
+		},
+		{
 			name:        "parse error command is unknown",
 			command:     "git status \"unterminated",
 			wantIsGit:   false,
@@ -142,5 +166,11 @@ func TestAnalyzeBashCommandFingerprintDoesNotLeakRawArguments(t *testing.T) {
 	}
 	if strings.Contains(intent.PermissionFingerprint, "token-123456") {
 		t.Fatalf("expected fingerprint to avoid leaking raw arguments, got %q", intent.PermissionFingerprint)
+	}
+	if strings.Contains(intent.NormalizedIntent, "token-123456") {
+		t.Fatalf("expected normalized intent to avoid leaking raw arguments, got %q", intent.NormalizedIntent)
+	}
+	if !strings.Contains(intent.NormalizedIntent, "args_count:1") {
+		t.Fatalf("expected normalized intent to contain redacted args count, got %q", intent.NormalizedIntent)
 	}
 }

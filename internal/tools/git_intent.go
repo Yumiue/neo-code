@@ -157,9 +157,18 @@ func AnalyzeBashCommand(command string) BashSemanticIntent {
 func containsShellControlOperators(command string) bool {
 	inSingle := false
 	inDouble := false
+	escaped := false
 	runes := []rune(command)
 	for idx := 0; idx < len(runes); idx++ {
 		ch := runes[idx]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '\\' && !inSingle {
+			escaped = true
+			continue
+		}
 		switch ch {
 		case '\'':
 			if !inDouble {
@@ -170,16 +179,23 @@ func containsShellControlOperators(command string) bool {
 				inDouble = !inDouble
 			}
 		}
-		if inSingle || inDouble {
+		if inSingle {
+			continue
+		}
+		if ch == '`' {
+			return true
+		}
+		if ch == '$' && idx+1 < len(runes) && runes[idx+1] == '(' {
+			return true
+		}
+		if inDouble {
 			continue
 		}
 		switch ch {
 		case ';', '\n', '\r', '|', '>', '<':
 			return true
 		case '&':
-			if idx+1 < len(runes) && runes[idx+1] == '&' {
-				return true
-			}
+			return true
 		}
 	}
 	return false
@@ -390,21 +406,33 @@ func hasGitArgument(args []string, candidate string) bool {
 	return false
 }
 
-// buildNormalizedGitIntent 构造用于展示的稳定 git 语义文本。
+// buildNormalizedGitIntent 构造用于展示的稳定 git 语义文本，避免暴露原始参数。
 func buildNormalizedGitIntent(subcommand string, flags []string, args []string) string {
 	parts := []string{"git", subcommand}
 	if len(flags) > 0 {
-		parts = append(parts, "flags:"+strings.Join(flags, ","))
+		keys := make([]string, 0, len(flags))
+		for _, flag := range flags {
+			key := strings.TrimSpace(flag)
+			if idx := strings.Index(key, "="); idx > 0 {
+				key = key[:idx]
+			}
+			if key == "" {
+				continue
+			}
+			keys = append(keys, strings.ToLower(key))
+		}
+		sort.Strings(keys)
+		parts = append(parts, "flags:"+strings.Join(keys, ","))
 	}
 	if len(args) > 0 {
-		parts = append(parts, "args:"+strings.Join(args, ","))
+		parts = append(parts, "args_count:"+strconv.Itoa(len(args)))
 	}
 	return strings.Join(parts, " ")
 }
 
 // buildGitPermissionFingerprint 构造用于权限记忆的稳定指纹。
 func buildGitPermissionFingerprint(classification string, subcommand string, flags []string, args []string) string {
-	normalizedIntent := buildNormalizedGitIntent(subcommand, flags, args)
+	normalizedIntent := buildGitFingerprintMaterial(subcommand, flags, args)
 	return buildSemanticFingerprint(
 		strings.Join([]string{
 			"bash.git",
@@ -413,6 +441,18 @@ func buildGitPermissionFingerprint(classification string, subcommand string, fla
 		}, "|"),
 		normalizedIntent,
 	)
+}
+
+// buildGitFingerprintMaterial 构造用于哈希指纹的稳定原始语义材料，允许包含参数明文。
+func buildGitFingerprintMaterial(subcommand string, flags []string, args []string) string {
+	parts := []string{"git", subcommand}
+	if len(flags) > 0 {
+		parts = append(parts, "flags:"+strings.Join(flags, ","))
+	}
+	if len(args) > 0 {
+		parts = append(parts, "args:"+strings.Join(args, ","))
+	}
+	return strings.Join(parts, " ")
 }
 
 // normalizeCommandTokens 将普通命令 token 归一为稳定文本。
