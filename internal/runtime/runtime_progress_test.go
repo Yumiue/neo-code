@@ -422,6 +422,13 @@ func TestResolveStreakLimitDefaults(t *testing.T) {
 	if got := resolveRepeatCycleStreakLimit(config.RuntimeConfig{MaxRepeatCycleStreak: 6}); got != 6 {
 		t.Fatalf("expected explicit repeat limit 6, got %d", got)
 	}
+
+	if got := resolveRuntimeMaxTurns(config.RuntimeConfig{MaxTurns: 0}); got != config.DefaultMaxTurns {
+		t.Fatalf("expected default max turns %d, got %d", config.DefaultMaxTurns, got)
+	}
+	if got := resolveRuntimeMaxTurns(config.RuntimeConfig{MaxTurns: 30}); got != 30 {
+		t.Fatalf("expected explicit max turns 30, got %d", got)
+	}
 }
 
 func TestComputeTodoStateSignature(t *testing.T) {

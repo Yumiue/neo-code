@@ -38,8 +38,9 @@ current_model: gpt-5.4
 shell: bash
 tool_timeout_sec: 20
 runtime:
-  max_no_progress_streak: 3
+  max_no_progress_streak: 5
   max_repeat_cycle_streak: 3
+  max_turns: 20
   assets:
     max_session_asset_bytes: 20971520
     max_session_assets_total_bytes: 20971520
@@ -97,8 +98,9 @@ context:
 
 | 字段 | 说明 |
 |------|------|
-| `runtime.max_no_progress_streak` | 连续”无进展”轮次熔断阈值，默认 `3`；streak 达到 `limit-1`（默认第 2 轮）时向模型注入一次系统级纠偏提示，达到 `limit`（默认第 3 轮）时终止运行 |
+| `runtime.max_no_progress_streak` | 连续”无进展”轮次熔断阈值，默认 `5`；streak 达到 `limit-1`（默认第 4 轮）时向模型注入一次系统级纠偏提示，达到 `limit`（默认第 5 轮）时终止运行 |
 | `runtime.max_repeat_cycle_streak` | 连续“重复调用同一工具参数”轮次熔断阈值，默认 `3`；达到阈值后终止运行 |
+| `runtime.max_turns` | 单次 Run 的最大推理轮数上限，默认 `20`；达到上限后直接终止并返回明确 stop reason |
 | `runtime.assets.max_session_asset_bytes` | 单个 `session_asset` 最大原始字节数，默认 `20971520`（20 MiB）；`0` 或未配置时回退默认值 |
 | `runtime.assets.max_session_assets_total_bytes` | 单次请求可携带的 `session_asset` 原始总字节上限，默认 `20971520`（20 MiB）；`0` 或未配置时回退默认值 |
 
@@ -121,6 +123,7 @@ context:
 - `base_url`
 - `api_key_env`
 - `models`
+- `memo.max_index_lines`（已移除，请改用 `memo.max_entries`）
 
 如果这些字段出现在 `config.yaml` 中，加载会直接失败，而不是被“自动迁移”或“悄悄清理”。
 

@@ -62,7 +62,6 @@ type persistedMemoConfig struct {
 	MaxIndexBytes         *int  `yaml:"max_index_bytes,omitempty"`
 	ExtractTimeoutSec     *int  `yaml:"extract_timeout_sec,omitempty"`
 	ExtractRecentMessages *int  `yaml:"extract_recent_messages,omitempty"`
-	MaxIndexLines         *int  `yaml:"max_index_lines,omitempty"`
 }
 
 func NewLoader(baseDir string, defaults *Config) *Loader {
@@ -205,6 +204,9 @@ func parseCurrentConfig(data []byte, contextDefaults ContextConfig, memoDefaults
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&file); err != nil {
+		if strings.Contains(err.Error(), "max_index_lines") {
+			return nil, fmt.Errorf("config: memo.max_index_lines has been removed, migrate to memo.max_entries: %w", err)
+		}
 		return nil, err
 	}
 	cfg := &Config{
@@ -362,8 +364,6 @@ func fromPersistedMemoConfig(file persistedMemoConfig, defaults MemoConfig) Memo
 	}
 	if file.MaxEntries != nil {
 		out.MaxEntries = *file.MaxEntries
-	} else if file.MaxIndexLines != nil {
-		out.MaxEntries = *file.MaxIndexLines
 	}
 	if file.MaxIndexBytes != nil {
 		out.MaxIndexBytes = *file.MaxIndexBytes

@@ -1677,7 +1677,7 @@ shell: powershell
 	}
 }
 
-func TestLoaderSupportsLegacyMemoMaxIndexLinesField(t *testing.T) {
+func TestLoaderRejectsLegacyMemoMaxIndexLinesField(t *testing.T) {
 	t.Parallel()
 
 	loader := NewLoader(t.TempDir(), testDefaultConfig())
@@ -1691,11 +1691,11 @@ memo:
 	writeLoaderConfig(t, loader, raw)
 
 	cfg, err := loader.Load(context.Background())
-	if err != nil {
-		t.Fatalf("expected legacy memo field to be accepted, got %v", err)
+	if err == nil {
+		t.Fatalf("expected legacy memo field to be rejected, cfg=%+v", cfg)
 	}
-	if cfg.Memo.MaxEntries != 123 {
-		t.Fatalf("expected legacy max_index_lines mapped to memo.max_entries=123, got %d", cfg.Memo.MaxEntries)
+	if !strings.Contains(err.Error(), "memo.max_index_lines has been removed") {
+		t.Fatalf("expected migration hint for max_index_lines, got %v", err)
 	}
 }
 
