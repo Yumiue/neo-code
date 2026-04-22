@@ -32,9 +32,9 @@ features:
 
 <section class="home-section">
   <p class="eyebrow">Core Loop</p>
-  <h2>主链路先行，不把关键状态散落到 UI</h2>
+  <h2>围绕可验证执行闭环构建</h2>
   <p>
-    NeoCode 的 MVP 不是堆功能，而是始终围绕一条可验证的执行闭环构建：
+    NeoCode 将用户输入、Agent 推理、工具调用、结果回灌与界面展示串成一条连续工作流：
     <code>用户输入 -> Agent 推理 -> 调用工具 -> 获取结果 -> 继续推理 -> UI 展示</code>。
   </p>
   <div class="loop-flow" role="list" aria-label="NeoCode 主链路">
@@ -63,7 +63,7 @@ features:
 
 <section class="home-section">
   <p class="eyebrow">Docs</p>
-  <h2>先给入口，不急着迁移现有实现文档</h2>
+  <h2>文档入口与快速导航</h2>
   <div class="doc-grid">
     <a class="doc-card" href="/neo-code/docs/">
       <strong>文档入口页</strong>
@@ -71,7 +71,7 @@ features:
     </a>
     <a class="doc-card" href="https://github.com/1024XEngineer/neo-code/blob/main/README.md">
       <strong>README</strong>
-      <span>快速开始、命令示例、配置入口和项目结构总览。</span>
+      <span>快速开始、命令示例、配置入口与项目结构总览。</span>
     </a>
     <a class="doc-card" href="https://github.com/1024XEngineer/neo-code/issues">
       <strong>Issues / PRs</strong>

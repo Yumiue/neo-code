@@ -32,9 +32,9 @@ features:
 
 <section class="home-section">
   <p class="eyebrow">Core Loop</p>
-  <h2>Built around a verifiable execution path</h2>
+  <h2>Built around a verifiable execution loop</h2>
   <p>
-    NeoCode's MVP keeps one path working end-to-end instead of scattering behavior across the UI:
+    NeoCode turns user input, agent reasoning, tool execution, result feedback, and UI output into one continuous workflow:
     <code>User Input -> Agent Reasoning -> Tool Call -> Result -> Continue Reasoning -> UI Output</code>.
   </p>
   <div class="loop-flow" role="list" aria-label="NeoCode core loop">
@@ -63,7 +63,7 @@ features:
 
 <section class="home-section">
   <p class="eyebrow">Docs</p>
-  <h2>Use the site as an entry point, not a duplicate docs tree</h2>
+  <h2>Documentation entry points and quick navigation</h2>
   <div class="doc-grid">
     <a class="doc-card" href="/neo-code/en/docs/">
       <strong>Docs Index</strong>
