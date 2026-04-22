@@ -117,6 +117,79 @@ shell: powershell
 	}
 }
 
+func TestLoaderUpgradesContextBudgetBeforeStrictParse(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	raw := `
+selected_provider: openai
+current_model: gpt-4.1
+shell: powershell
+context:
+  auto_compact:
+    input_token_threshold: 120000
+    reserve_tokens: 13000
+    fallback_input_token_threshold: 100000
+`
+	writeLoaderConfig(t, loader, raw)
+
+	cfg, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Context.Budget.PromptBudget != 120000 {
+		t.Fatalf("expected prompt_budget migrated, got %d", cfg.Context.Budget.PromptBudget)
+	}
+	if cfg.Context.Budget.ReserveTokens != 13000 {
+		t.Fatalf("expected reserve_tokens migrated, got %d", cfg.Context.Budget.ReserveTokens)
+	}
+	if cfg.Context.Budget.FallbackPromptBudget != 100000 {
+		t.Fatalf("expected fallback_prompt_budget migrated, got %d", cfg.Context.Budget.FallbackPromptBudget)
+	}
+
+	data, err := os.ReadFile(loader.ConfigPath())
+	if err != nil {
+		t.Fatalf("read migrated config: %v", err)
+	}
+	text := string(data)
+	if strings.Contains(text, "auto_compact:") {
+		t.Fatalf("expected loader migration to remove auto_compact, got:\n%s", text)
+	}
+	if !strings.Contains(text, "budget:") {
+		t.Fatalf("expected loader migration to persist budget block, got:\n%s", text)
+	}
+
+	backup, err := os.ReadFile(loader.ConfigPath() + ".bak")
+	if err != nil {
+		t.Fatalf("read migration backup: %v", err)
+	}
+	if !strings.Contains(string(backup), "auto_compact:") {
+		t.Fatalf("expected backup to preserve original config, got:\n%s", backup)
+	}
+}
+
+func TestLoaderRejectsAmbiguousContextBudgetMigration(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	raw := `
+selected_provider: openai
+current_model: gpt-4.1
+shell: powershell
+context:
+  budget:
+    prompt_budget: 110000
+  auto_compact:
+    input_token_threshold: 120000
+`
+	writeLoaderConfig(t, loader, raw)
+
+	_, err := loader.Load(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "context.auto_compact and context.budget cannot both exist") {
+		t.Fatalf("expected ambiguous migration error, got %v", err)
+	}
+}
+
 func TestLoaderLoadInvalidBaseDir(t *testing.T) {
 	t.Parallel()
 
@@ -755,7 +828,7 @@ models:
 	}
 }
 
-func TestLoaderParsesAutoCompactDerivedFields(t *testing.T) {
+func TestLoaderParsesBudgetFields(t *testing.T) {
 	t.Parallel()
 
 	loader := NewLoader(t.TempDir(), testDefaultConfig())
@@ -764,38 +837,41 @@ selected_provider: openai
 current_model: gpt-5.4
 shell: powershell
 context:
-  auto_compact:
-    enabled: true
-    input_token_threshold: 0
-    reserve_tokens: 9000
-    fallback_input_token_threshold: 88000
-`
+    budget:
+      prompt_budget: 0
+      reserve_tokens: 9000
+      fallback_prompt_budget: 88000
+      max_reactive_compacts: 4
+  `
 	writeLoaderConfig(t, loader, raw)
 
 	cfg, err := loader.Load(context.Background())
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.Context.AutoCompact.InputTokenThreshold != 0 {
-		t.Fatalf("expected implicit threshold 0, got %d", cfg.Context.AutoCompact.InputTokenThreshold)
+	if cfg.Context.Budget.PromptBudget != 0 {
+		t.Fatalf("expected implicit prompt budget 0, got %d", cfg.Context.Budget.PromptBudget)
 	}
-	if cfg.Context.AutoCompact.ReserveTokens != 9000 {
-		t.Fatalf("expected reserve_tokens=9000, got %d", cfg.Context.AutoCompact.ReserveTokens)
+	if cfg.Context.Budget.ReserveTokens != 9000 {
+		t.Fatalf("expected reserve_tokens=9000, got %d", cfg.Context.Budget.ReserveTokens)
 	}
-	if cfg.Context.AutoCompact.FallbackInputTokenThreshold != 88000 {
-		t.Fatalf("expected fallback_input_token_threshold=88000, got %d", cfg.Context.AutoCompact.FallbackInputTokenThreshold)
+	if cfg.Context.Budget.FallbackPromptBudget != 88000 {
+		t.Fatalf("expected fallback_prompt_budget=88000, got %d", cfg.Context.Budget.FallbackPromptBudget)
+	}
+	if cfg.Context.Budget.MaxReactiveCompacts != 4 {
+		t.Fatalf("expected max_reactive_compacts=4, got %d", cfg.Context.Budget.MaxReactiveCompacts)
 	}
 }
 
-func TestLoaderSavePersistsAutoCompactDerivedFields(t *testing.T) {
+func TestLoaderSavePersistsBudgetFields(t *testing.T) {
 	t.Parallel()
 
 	loader := NewLoader(t.TempDir(), testDefaultConfig())
 	cfg := testDefaultConfig().Clone()
-	cfg.Context.AutoCompact.Enabled = true
-	cfg.Context.AutoCompact.InputTokenThreshold = 0
-	cfg.Context.AutoCompact.ReserveTokens = 9000
-	cfg.Context.AutoCompact.FallbackInputTokenThreshold = 88000
+	cfg.Context.Budget.PromptBudget = 0
+	cfg.Context.Budget.ReserveTokens = 9000
+	cfg.Context.Budget.FallbackPromptBudget = 88000
+	cfg.Context.Budget.MaxReactiveCompacts = 4
 
 	if err := loader.Save(context.Background(), &cfg); err != nil {
 		t.Fatalf("Save() error = %v", err)
@@ -806,14 +882,17 @@ func TestLoaderSavePersistsAutoCompactDerivedFields(t *testing.T) {
 		t.Fatalf("read config: %v", err)
 	}
 	text := string(data)
-	if strings.Contains(text, "input_token_threshold: 100000") {
-		t.Fatalf("expected implicit threshold to avoid legacy default, got:\n%s", text)
+	if strings.Contains(text, "prompt_budget: 100000") {
+		t.Fatalf("expected implicit prompt budget to avoid default serialization, got:\n%s", text)
 	}
 	if !strings.Contains(text, "reserve_tokens: 9000") {
 		t.Fatalf("expected reserve_tokens to persist, got:\n%s", text)
 	}
-	if !strings.Contains(text, "fallback_input_token_threshold: 88000") {
-		t.Fatalf("expected fallback_input_token_threshold to persist, got:\n%s", text)
+	if !strings.Contains(text, "fallback_prompt_budget: 88000") {
+		t.Fatalf("expected fallback_prompt_budget to persist, got:\n%s", text)
+	}
+	if !strings.Contains(text, "max_reactive_compacts: 4") {
+		t.Fatalf("expected max_reactive_compacts to persist, got:\n%s", text)
 	}
 }
 
@@ -1677,28 +1756,6 @@ shell: powershell
 	}
 }
 
-func TestLoaderSupportsLegacyMemoMaxIndexLinesField(t *testing.T) {
-	t.Parallel()
-
-	loader := NewLoader(t.TempDir(), testDefaultConfig())
-	raw := `
-selected_provider: openai
-current_model: gpt-4.1
-shell: powershell
-memo:
-  max_index_lines: 123
-`
-	writeLoaderConfig(t, loader, raw)
-
-	cfg, err := loader.Load(context.Background())
-	if err != nil {
-		t.Fatalf("expected legacy memo field to be accepted, got %v", err)
-	}
-	if cfg.Memo.MaxEntries != 123 {
-		t.Fatalf("expected legacy max_index_lines mapped to memo.max_entries=123, got %d", cfg.Memo.MaxEntries)
-	}
-}
-
 func TestLoaderRejectsExplicitInvalidMemoNumbers(t *testing.T) {
 	t.Parallel()
 
@@ -1749,6 +1806,25 @@ memo:
 				t.Fatalf("expected %q, got %v", tt.errContain, err)
 			}
 		})
+	}
+}
+
+func TestLoaderRejectsLegacyMemoMaxIndexLinesField(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	raw := `
+selected_provider: openai
+current_model: gpt-4.1
+shell: powershell
+memo:
+  max_index_lines: 123
+`
+	writeLoaderConfig(t, loader, raw)
+
+	_, err := loader.Load(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "field max_index_lines not found") {
+		t.Fatalf("expected legacy memo field rejection, got %v", err)
 	}
 }
 

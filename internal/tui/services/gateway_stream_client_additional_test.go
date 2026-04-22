@@ -123,14 +123,14 @@ func TestRestoreRuntimePayloadCoversSpecializedTypes(t *testing.T) {
 		{
 			name:      "stop reason",
 			eventType: EventStopReasonDecided,
-			payload:   map[string]any{"reason": "  max_rounds  "},
+			payload:   map[string]any{"reason": "  STOP_COMPLETED  "},
 			assertFn: func(t *testing.T, got any) {
 				t.Helper()
 				value, ok := got.(StopReasonDecidedPayload)
 				if !ok {
 					t.Fatalf("payload type = %T", got)
 				}
-				if value.Reason != StopReason("max_rounds") {
+				if value.Reason != StopReasonCompleted {
 					t.Fatalf("reason = %q", value.Reason)
 				}
 			},
@@ -143,6 +143,28 @@ func TestRestoreRuntimePayloadCoversSpecializedTypes(t *testing.T) {
 				t.Helper()
 				if _, ok := got.(RuntimeUsagePayload); !ok {
 					t.Fatalf("payload type = %T", got)
+				}
+			},
+		},
+		{
+			name:      "token usage payload",
+			eventType: EventTokenUsage,
+			payload: map[string]any{
+				"input_tokens":          3,
+				"output_tokens":         5,
+				"session_input_tokens":  13,
+				"session_output_tokens": 21,
+				"has_unknown_usage":     true,
+			},
+			assertFn: func(t *testing.T, got any) {
+				t.Helper()
+				value, ok := got.(TokenUsagePayload)
+				if !ok {
+					t.Fatalf("payload type = %T", got)
+				}
+				if value.InputTokens != 3 || value.OutputTokens != 5 ||
+					value.SessionInputTokens != 13 || value.SessionOutputTokens != 21 || !value.HasUnknownUsage {
+					t.Fatalf("payload = %#v", value)
 				}
 			},
 		},

@@ -38,10 +38,11 @@ func TestProviderGenerate(t *testing.T) {
 	defer server.Close()
 
 	p, err := New(provider.RuntimeConfig{
-		Driver:       provider.DriverAnthropic,
-		BaseURL:      server.URL,
-		DefaultModel: "claude-3-7-sonnet",
-		APIKey:       "test-key",
+		Driver:         provider.DriverAnthropic,
+		BaseURL:        server.URL,
+		DefaultModel:   "claude-3-7-sonnet",
+		APIKeyEnv:      "ANTHROPIC_TEST_KEY",
+		APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -105,7 +106,8 @@ func TestNewAcceptsCustomChatEndpointPath(t *testing.T) {
 		Driver:           provider.DriverAnthropic,
 		BaseURL:          "https://api.anthropic.com/v1",
 		DefaultModel:     "claude-3-7-sonnet",
-		APIKey:           "test-key",
+		APIKeyEnv:        "ANTHROPIC_TEST_KEY",
+		APIKeyResolver:   provider.StaticAPIKeyResolver("test-key"),
 		ChatEndpointPath: "/custom/messages",
 	})
 	if err != nil {

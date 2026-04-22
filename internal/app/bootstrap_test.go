@@ -134,7 +134,7 @@ func TestBuildRuntimeRejectsUnsupportedSelectedProviderDriverOnStartup(t *testin
 		t.Fatalf("write provider config: %v", err)
 	}
 
-	_, err := BuildRuntime(context.Background(), BootstrapOptions{})
+	_, err := BuildGatewayServerDeps(context.Background(), BootstrapOptions{})
 	if !errors.Is(err, configstate.ErrDriverUnsupported) {
 		t.Fatalf("expected ErrDriverUnsupported, got %v", err)
 	}
@@ -762,9 +762,9 @@ func TestBuildRuntimeUsesWorkdirOverride(t *testing.T) {
 		t.Fatalf("mkdir override workdir: %v", err)
 	}
 
-	bundle, err := BuildRuntime(context.Background(), BootstrapOptions{Workdir: override})
+	bundle, err := BuildGatewayServerDeps(context.Background(), BootstrapOptions{Workdir: override})
 	if err != nil {
-		t.Fatalf("BuildRuntime() error = %v", err)
+		t.Fatalf("BuildGatewayServerDeps() error = %v", err)
 	}
 	if bundle.Config.Workdir != filepath.Clean(override) {
 		t.Fatalf("expected workdir %q, got %q", filepath.Clean(override), bundle.Config.Workdir)
@@ -786,9 +786,9 @@ func TestBuildRuntimeSucceedsWhenSkillsRootMissing(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 
-	bundle, err := BuildRuntime(context.Background(), BootstrapOptions{})
+	bundle, err := BuildGatewayServerDeps(context.Background(), BootstrapOptions{})
 	if err != nil {
-		t.Fatalf("BuildRuntime() error = %v", err)
+		t.Fatalf("BuildGatewayServerDeps() error = %v", err)
 	}
 	if bundle.Close != nil {
 		t.Cleanup(func() {
@@ -808,7 +808,7 @@ func TestBuildRuntimeSucceedsWhenSkillsRootMissing(t *testing.T) {
 		t.Fatalf("expected runtime to expose ActivateSessionSkill")
 	}
 
-	store := agentsession.NewStore(bundle.ConfigManager.BaseDir(), bundle.Config.Workdir)
+	store := agentsession.NewSQLiteStore(bundle.ConfigManager.BaseDir(), bundle.Config.Workdir)
 	t.Cleanup(func() {
 		if err := store.Close(); err != nil {
 			t.Fatalf("store.Close() error = %v", err)
@@ -820,7 +820,7 @@ func TestBuildRuntimeSucceedsWhenSkillsRootMissing(t *testing.T) {
 		Title:     session.Title,
 		CreatedAt: session.CreatedAt,
 		UpdatedAt: session.UpdatedAt,
-		Workdir:   session.Workdir,
+		Head:      session.HeadSnapshot(),
 	})
 	if err != nil {
 		t.Fatalf("save session: %v", err)
@@ -856,9 +856,9 @@ func TestBuildRuntimeInjectsSkillsRegistryWhenRootExists(t *testing.T) {
 		t.Fatalf("write SKILL.md: %v", err)
 	}
 
-	bundle, err := BuildRuntime(context.Background(), BootstrapOptions{})
+	bundle, err := BuildGatewayServerDeps(context.Background(), BootstrapOptions{})
 	if err != nil {
-		t.Fatalf("BuildRuntime() error = %v", err)
+		t.Fatalf("BuildGatewayServerDeps() error = %v", err)
 	}
 	if bundle.Close != nil {
 		t.Cleanup(func() {
@@ -868,7 +868,7 @@ func TestBuildRuntimeInjectsSkillsRegistryWhenRootExists(t *testing.T) {
 		})
 	}
 
-	store := agentsession.NewStore(bundle.ConfigManager.BaseDir(), bundle.Config.Workdir)
+	store := agentsession.NewSQLiteStore(bundle.ConfigManager.BaseDir(), bundle.Config.Workdir)
 	t.Cleanup(func() {
 		if err := store.Close(); err != nil {
 			t.Fatalf("store.Close() error = %v", err)
@@ -880,7 +880,7 @@ func TestBuildRuntimeInjectsSkillsRegistryWhenRootExists(t *testing.T) {
 		Title:     session.Title,
 		CreatedAt: session.CreatedAt,
 		UpdatedAt: session.UpdatedAt,
-		Workdir:   session.Workdir,
+		Head:      session.HeadSnapshot(),
 	})
 	if err != nil {
 		t.Fatalf("save session: %v", err)
@@ -930,7 +930,7 @@ func TestBuildRuntimeRejectsInvalidWorkdirOverride(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 
 	invalid := filepath.Join(t.TempDir(), "missing", "中文")
-	_, err := BuildRuntime(context.Background(), BootstrapOptions{Workdir: invalid})
+	_, err := BuildGatewayServerDeps(context.Background(), BootstrapOptions{Workdir: invalid})
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "resolve workdir") {
 		t.Fatalf("expected resolve workdir error, got %v", err)
 	}
@@ -952,7 +952,7 @@ func TestBuildRuntimeRejectsInvalidConfigFile(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	_, err := BuildRuntime(context.Background(), BootstrapOptions{})
+	_, err := BuildGatewayServerDeps(context.Background(), BootstrapOptions{})
 	if err == nil || !strings.Contains(err.Error(), "workdir not found") {
 		t.Fatalf("expected legacy config error, got %v", err)
 	}
@@ -985,7 +985,7 @@ func TestBuildRuntimeRejectsUnsupportedMCPSource(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	_, err := BuildRuntime(context.Background(), BootstrapOptions{})
+	_, err := BuildGatewayServerDeps(context.Background(), BootstrapOptions{})
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "not supported") {
 		t.Fatalf("expected unsupported mcp source validation error, got %v", err)
 	}
@@ -1034,7 +1034,7 @@ func TestBuildRuntimeCleansResourcesWhenToolManagerBuildFails(t *testing.T) {
 		return nil, errors.New("build tool manager failed")
 	}
 
-	_, err := BuildRuntime(context.Background(), BootstrapOptions{})
+	_, err := BuildGatewayServerDeps(context.Background(), BootstrapOptions{})
 	if err == nil || !strings.Contains(err.Error(), "build tool manager failed") {
 		t.Fatalf("expected tool manager build error, got %v", err)
 	}
@@ -1065,9 +1065,9 @@ func TestBuildRuntimeLogsSessionCleanupWarningAndContinues(t *testing.T) {
 	log.SetOutput(&logBuffer)
 	t.Cleanup(func() { log.SetOutput(originalLogWriter) })
 
-	bundle, err := BuildRuntime(context.Background(), BootstrapOptions{})
+	bundle, err := BuildGatewayServerDeps(context.Background(), BootstrapOptions{})
 	if err != nil {
-		t.Fatalf("BuildRuntime() error = %v", err)
+		t.Fatalf("BuildGatewayServerDeps() error = %v", err)
 	}
 	if bundle.Close != nil {
 		defer bundle.Close()
@@ -1531,6 +1531,9 @@ func TestBuildTUIClientDepsSkipsLocalRuntimeStack(t *testing.T) {
 
 func TestNewProgramUsesRemoteRuntimeAdapter(t *testing.T) {
 	disableBuiltinProviderAPIKeys(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	originalFactory := newRemoteRuntimeAdapter
 	t.Cleanup(func() { newRemoteRuntimeAdapter = originalFactory })
@@ -1562,6 +1565,9 @@ func TestNewProgramUsesRemoteRuntimeAdapter(t *testing.T) {
 
 func TestNewProgramFailsFastWhenRemoteAdapterInitFails(t *testing.T) {
 	disableBuiltinProviderAPIKeys(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	originalFactory := newRemoteRuntimeAdapter
 	t.Cleanup(func() { newRemoteRuntimeAdapter = originalFactory })
@@ -1821,6 +1827,18 @@ func (s *stubMemoProviderFactory) Build(ctx context.Context, cfg provider.Runtim
 
 type stubMemoProvider struct {
 	generate func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error
+}
+
+func (s *stubMemoProvider) EstimateInputTokens(
+	ctx context.Context,
+	req providertypes.GenerateRequest,
+) (providertypes.BudgetEstimate, error) {
+	_ = ctx
+	return providertypes.BudgetEstimate{
+		EstimatedInputTokens: provider.EstimateTextTokens(req.SystemPrompt),
+		EstimateSource:       provider.EstimateSourceLocal,
+		Accurate:             false,
+	}, nil
 }
 
 func (s *stubMemoProvider) Generate(

@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"neo-code/internal/gateway"
-	gatewayauth "neo-code/internal/gateway/auth"
 	"neo-code/internal/gateway/protocol"
 )
 
@@ -913,7 +912,7 @@ func TestGatewayAutoSpawnOutputFallbackAndPath(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveGatewayAutoSpawnLogPath() error = %v", err)
 		}
-		if !strings.HasSuffix(path, defaultGatewayAutoSpawnLogRelativePath) {
+		if !strings.HasSuffix(filepath.Clean(path), filepath.Clean(filepath.FromSlash(defaultGatewayAutoSpawnLogRelativePath))) {
 			t.Fatalf("log path = %q", path)
 		}
 	})
@@ -1083,13 +1082,7 @@ func TestGatewayRPCClientAuthenticateLoadsTokenAfterGatewayAutoSpawn(t *testing.
 		ListenAddress: "test://gateway",
 		TokenFile:     tokenFile,
 		AutoSpawnGateway: func(_ context.Context, _ string, _ func(address string) (net.Conn, error)) (*exec.Cmd, error) {
-			manager, createErr := gatewayauth.NewManager(tokenFile)
-			if createErr != nil {
-				return nil, createErr
-			}
-			if strings.TrimSpace(manager.Token()) == "" {
-				return nil, errors.New("created token is empty")
-			}
+			writeTestAuthTokenFile(t, tokenFile, "auto-spawn-token")
 			return nil, nil
 		},
 		Dial: func(_ string) (net.Conn, error) {
@@ -1203,6 +1196,9 @@ func TestGatewayAutoSpawnLogErrorBranches(t *testing.T) {
 	})
 
 	t.Run("open log file returns open error", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("directory permission assertions are not reliable on Windows")
+		}
 		base := t.TempDir()
 		readonlyDir := filepath.Join(base, "ro")
 		if err := os.MkdirAll(readonlyDir, 0o700); err != nil {
@@ -1220,6 +1216,9 @@ func TestGatewayAutoSpawnLogErrorBranches(t *testing.T) {
 	})
 
 	t.Run("rotate stat error", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("directory permission assertions are not reliable on Windows")
+		}
 		base := t.TempDir()
 		locked := filepath.Join(base, "locked")
 		if err := os.MkdirAll(locked, 0o700); err != nil {

@@ -6,3 +6,10 @@ type Usage struct {
 	OutputTokens int `json:"output_tokens"`
 	TotalTokens  int `json:"total_tokens"`
 }
+
+// BudgetEstimate 描述 provider 对冻结请求输入 token 的估算结果。
+type BudgetEstimate struct {
+	EstimatedInputTokens int    `json:"estimated_input_tokens"`
+	EstimateSource       string `json:"estimate_source"`
+	Accurate             bool   `json:"accurate"`
+}

@@ -140,6 +140,8 @@ func TestRunStateMutationsAndSync(t *testing.T) {
 	state := newRunState("run-1", session)
 
 	state.recordUsage(10, 20)
+	state.session.HasUnknownUsage = true
+	state.hasUnknownUsage = true
 	if state.session.TokenInputTotal != 11 || state.session.TokenOutputTotal != 22 {
 		t.Fatalf("unexpected token totals: in=%d out=%d", state.session.TokenInputTotal, state.session.TokenOutputTotal)
 	}
@@ -147,6 +149,9 @@ func TestRunStateMutationsAndSync(t *testing.T) {
 	state.resetTokenTotals()
 	if state.session.TokenInputTotal != 0 || state.session.TokenOutputTotal != 0 {
 		t.Fatalf("expected reset totals to be zero, got in=%d out=%d", state.session.TokenInputTotal, state.session.TokenOutputTotal)
+	}
+	if state.session.HasUnknownUsage || state.hasUnknownUsage {
+		t.Fatalf("expected resetTokenTotals to clear unknown usage flags")
 	}
 
 	before := state.session.UpdatedAt
@@ -191,9 +196,9 @@ func TestAppendAssistantMessageAndSaveMetadataBranches(t *testing.T) {
 
 	service := &Service{sessionStore: store}
 	state := newRunState("run-append-assistant", session)
-	snapshot := turnSnapshot{
-		providerConfig: providerRuntimeConfigForTest("openai"),
-		model:          "gpt-4.1",
+	snapshot := TurnBudgetSnapshot{
+		ProviderConfig: providerRuntimeConfigForTest("openai"),
+		Model:          "gpt-4.1",
 	}
 
 	if err := service.appendAssistantMessageAndSave(
@@ -211,8 +216,8 @@ func TestAppendAssistantMessageAndSaveMetadataBranches(t *testing.T) {
 	}
 
 	store.saves = 0
-	state.session.Provider = snapshot.providerConfig.Name
-	state.session.Model = snapshot.model
+	state.session.Provider = snapshot.ProviderConfig.Name
+	state.session.Model = snapshot.Model
 	if err := service.appendAssistantMessageAndSave(
 		context.Background(),
 		&state,
@@ -601,14 +606,19 @@ func TestEmitTokenUsageSkipsZeroUsage(t *testing.T) {
 	service := &Service{events: make(chan RuntimeEvent, 8)}
 	state := &runState{runID: "run-token", session: newRuntimeSession("session-token")}
 
-	service.emitTokenUsage(context.Background(), state, providerTurnResult{})
+	service.emitTokenUsage(context.Background(), state, ledgerReconcileResult{})
 	events := collectRuntimeEvents(service.Events())
 	if len(events) != 0 {
 		t.Fatalf("expected no token event for zero usage, got %+v", events)
 	}
 
 	state.recordUsage(5, 7)
-	service.emitTokenUsage(context.Background(), state, providerTurnResult{inputTokens: 5, outputTokens: 7})
+	service.emitTokenUsage(context.Background(), state, ledgerReconcileResult{
+		inputTokens:  5,
+		inputSource:  usageSourceObserved,
+		outputTokens: 7,
+		outputSource: usageSourceObserved,
+	})
 	events = collectRuntimeEvents(service.Events())
 	if len(events) != 1 || events[0].Type != EventTokenUsage {
 		t.Fatalf("expected one token usage event, got %+v", events)
@@ -637,7 +647,7 @@ func TestExecuteAssistantToolCallsFillsErrorContent(t *testing.T) {
 			{ID: "call-err", Name: "filesystem_read_file", Arguments: `{"path":"a.txt"}`},
 		},
 	}
-	snapshot := turnSnapshot{workdir: t.TempDir(), toolTimeout: time.Second}
+	snapshot := TurnBudgetSnapshot{Workdir: t.TempDir(), ToolTimeout: time.Second}
 
 	if _, err := service.executeAssistantToolCalls(context.Background(), &state, snapshot, assistant); err != nil {
 		t.Fatalf("executeAssistantToolCalls() error = %v", err)
@@ -677,7 +687,7 @@ func TestExecuteAssistantToolCallsCanceledSaveStillEmitsResultWhenExecErr(t *tes
 			{ID: "call-1", Name: "filesystem_read_file", Arguments: `{"path":"a.txt"}`},
 		},
 	}
-	snapshot := turnSnapshot{workdir: t.TempDir(), toolTimeout: time.Second}
+	snapshot := TurnBudgetSnapshot{Workdir: t.TempDir(), ToolTimeout: time.Second}
 
 	_, err := service.executeAssistantToolCalls(context.Background(), &state, snapshot, assistant)
 	if !errors.Is(err, context.Canceled) {

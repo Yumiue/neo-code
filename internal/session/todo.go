@@ -207,11 +207,6 @@ func (s *Session) AddTodo(item TodoItem) error {
 	return nil
 }
 
-// UpdateTodoStatus 按 ID 更新 Todo 状态（兼容旧调用，无 revision 约束）。
-func (s *Session) UpdateTodoStatus(id string, status TodoStatus) error {
-	return s.SetTodoStatus(id, status, 0)
-}
-
 // SetTodoStatus 按 ID 更新 Todo 状态并执行 revision 检查。
 func (s *Session) SetTodoStatus(id string, status TodoStatus, expectedRevision int64) error {
 	patch := TodoPatch{
@@ -412,9 +407,6 @@ func normalizeTodoItem(item TodoItem) (TodoItem, error) {
 	item.Content = strings.TrimSpace(item.Content)
 	item.Dependencies = normalizeTodoDependencies(item.Dependencies)
 	item.Executor = normalizeTodoExecutor(item.Executor)
-	if item.Executor == "" {
-		item.Executor = inferLegacyTodoExecutor(item)
-	}
 	item.OwnerType = normalizeTodoOwnerType(item.OwnerType)
 	item.OwnerID = strings.TrimSpace(item.OwnerID)
 	item.Acceptance = normalizeTodoTextList(item.Acceptance)
@@ -456,22 +448,6 @@ func normalizeTodoItem(item TodoItem) (TodoItem, error) {
 		item.NextRetryAt = time.Time{}
 	}
 	return item, nil
-}
-
-// inferLegacyTodoExecutor 基于旧字段推断缺失 executor 的历史任务执行归属，避免升级后改变既有调度行为。
-func inferLegacyTodoExecutor(item TodoItem) string {
-	if normalizeTodoOwnerType(item.OwnerType) == TodoOwnerTypeSubAgent {
-		return TodoExecutorSubAgent
-	}
-	if item.RetryCount > 0 || item.RetryLimit > 0 {
-		return TodoExecutorSubAgent
-	}
-	if item.Status == TodoStatusBlocked || item.Status == TodoStatusInProgress || item.Status == TodoStatusFailed {
-		if strings.TrimSpace(item.FailureReason) != "" || !item.NextRetryAt.IsZero() {
-			return TodoExecutorSubAgent
-		}
-	}
-	return TodoExecutorAgent
 }
 
 // normalizeTodoDependencies 对依赖列表做去空白、去重并保持顺序。
@@ -617,7 +593,11 @@ func normalizeTodoOwnerType(ownerType string) string {
 
 // normalizeTodoExecutor 规范化 executor 字段。
 func normalizeTodoExecutor(executor string) string {
-	return strings.ToLower(strings.TrimSpace(executor))
+	normalized := strings.ToLower(strings.TrimSpace(executor))
+	if normalized == "" {
+		return TodoExecutorAgent
+	}
+	return normalized
 }
 
 // isValidTodoExecutor 判断 executor 是否受支持。

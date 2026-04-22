@@ -24,22 +24,35 @@ type toolCallState struct {
 
 // Provider 封装 Anthropic messages 协议的请求发送与流式解析。
 type Provider struct {
-	cfg    provider.RuntimeConfig
-	client anthropic.Client
+	cfg provider.RuntimeConfig
+}
+
+// EstimateInputTokens 基于 Anthropic 最终请求结构做本地输入 token 估算。
+func (p *Provider) EstimateInputTokens(
+	ctx context.Context,
+	req providertypes.GenerateRequest,
+) (providertypes.BudgetEstimate, error) {
+	params, err := BuildRequest(ctx, p.cfg, req)
+	if err != nil {
+		return providertypes.BudgetEstimate{}, err
+	}
+	tokens, err := provider.EstimateSerializedPayloadTokens(params)
+	if err != nil {
+		return providertypes.BudgetEstimate{}, err
+	}
+	return providertypes.BudgetEstimate{
+		EstimatedInputTokens: tokens,
+		EstimateSource:       provider.EstimateSourceLocal,
+		Accurate:             false,
+	}, nil
 }
 
 // New 创建 Anthropic provider 实例，并初始化官方 SDK 客户端。
 func New(cfg provider.RuntimeConfig) (*Provider, error) {
-	if strings.TrimSpace(cfg.APIKey) == "" {
-		return nil, errors.New(errorPrefix + "api key is empty")
+	if strings.TrimSpace(cfg.APIKeyEnv) == "" {
+		return nil, errors.New(errorPrefix + "api_key_env is empty")
 	}
-
-	client := newSDKClient(cfg)
-
-	return &Provider{
-		cfg:    cfg,
-		client: client,
-	}, nil
+	return &Provider{cfg: cfg}, nil
 }
 
 // Generate 发起 Anthropic 流式请求，并将 typed stream 转为统一事件。
@@ -49,7 +62,11 @@ func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateReque
 		return err
 	}
 
-	streamReader := p.client.Messages.NewStreaming(ctx, params)
+	client, err := newSDKClient(p.cfg)
+	if err != nil {
+		return err
+	}
+	streamReader := client.Messages.NewStreaming(ctx, params)
 	defer func() { _ = streamReader.Close() }()
 
 	var (

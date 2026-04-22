@@ -18,24 +18,44 @@ const errorPrefix = "gemini provider: "
 
 // Provider 封装 Gemini native 协议的请求发送与流式响应解析。
 type Provider struct {
-	cfg    provider.RuntimeConfig
-	client *genai.Client
+	cfg provider.RuntimeConfig
+}
+
+// EstimateInputTokens 基于 Gemini 最终请求结构做本地输入 token 估算。
+func (p *Provider) EstimateInputTokens(
+	ctx context.Context,
+	req providertypes.GenerateRequest,
+) (providertypes.BudgetEstimate, error) {
+	model, contents, genConfig, err := BuildRequest(ctx, p.cfg, req)
+	if err != nil {
+		return providertypes.BudgetEstimate{}, err
+	}
+	payload := struct {
+		Model    string                       `json:"model"`
+		Contents []*genai.Content             `json:"contents"`
+		Config   *genai.GenerateContentConfig `json:"config,omitempty"`
+	}{
+		Model:    model,
+		Contents: contents,
+		Config:   genConfig,
+	}
+	tokens, err := provider.EstimateSerializedPayloadTokens(payload)
+	if err != nil {
+		return providertypes.BudgetEstimate{}, err
+	}
+	return providertypes.BudgetEstimate{
+		EstimatedInputTokens: tokens,
+		EstimateSource:       provider.EstimateSourceLocal,
+		Accurate:             false,
+	}, nil
 }
 
 // New 创建 Gemini native provider 实例，并初始化官方 SDK 客户端。
 func New(cfg provider.RuntimeConfig) (*Provider, error) {
-	if strings.TrimSpace(cfg.APIKey) == "" {
-		return nil, errors.New(errorPrefix + "api key is empty")
+	if strings.TrimSpace(cfg.APIKeyEnv) == "" {
+		return nil, errors.New(errorPrefix + "api_key_env is empty")
 	}
-	client, err := newSDKClient(context.Background(), cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	return &Provider{
-		cfg:    cfg,
-		client: client,
-	}, nil
+	return &Provider{cfg: cfg}, nil
 }
 
 // Generate 发起 Gemini 流式请求，并将 SDK chunk 转为统一流式事件。
@@ -48,6 +68,10 @@ func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateReque
 	if normalizedModel == "" {
 		return errors.New(errorPrefix + "model is empty")
 	}
+	client, err := newSDKClient(ctx, p.cfg)
+	if err != nil {
+		return err
+	}
 
 	var (
 		finishReason string
@@ -55,7 +79,7 @@ func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateReque
 		hasPayload   bool
 		callSeq      int
 	)
-	for chunk, streamErr := range p.client.Models.GenerateContentStream(ctx, normalizedModel, contents, config) {
+	for chunk, streamErr := range client.Models.GenerateContentStream(ctx, normalizedModel, contents, config) {
 		if streamErr != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr

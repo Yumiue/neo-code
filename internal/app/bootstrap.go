@@ -29,7 +29,7 @@ import (
 	"neo-code/internal/tools/spawnsubagent"
 	"neo-code/internal/tools/todo"
 	"neo-code/internal/tools/webfetch"
-	"neo-code/internal/tui"
+	tuiapp "neo-code/internal/tui/core/app"
 	"neo-code/internal/tui/services"
 )
 
@@ -40,7 +40,7 @@ var (
 	setConsoleInputCodePage  = platformSetConsoleInputCodePage
 	buildToolManagerFunc     = buildToolManager
 	newRemoteRuntimeAdapter  = defaultNewRemoteRuntimeAdapter
-	newTUIWithMemo           = tui.NewWithMemo
+	newTUIWithMemo           = tuiapp.NewWithMemo
 	cleanupExpiredSessions   = func(
 		ctx context.Context,
 		store agentsession.Store,
@@ -159,7 +159,7 @@ func BuildGatewayServerDeps(ctx context.Context, opts BootstrapOptions) (Runtime
 
 	// Session Store 绑定到启动时的 workdir 哈希分桶，整个应用生命周期内不可变。
 	// 这意味着所有会话都归属到启动时指定的项目目录下，运行时不会因配置变更而迁移存储位置。
-	sessionStore = agentsession.NewStore(sharedDeps.ConfigManager.BaseDir(), cfg.Workdir)
+	sessionStore = agentsession.NewSQLiteStore(sharedDeps.ConfigManager.BaseDir(), cfg.Workdir)
 
 	// 启动时自动清理过期会话，避免数据库无限膨胀。
 	if _, err := cleanupExpiredSessions(ctx, sessionStore, agentsession.DefaultSessionMaxAge); err != nil {
@@ -196,13 +196,13 @@ func BuildGatewayServerDeps(ctx context.Context, opts BootstrapOptions) (Runtime
 	runtimeSvc.SetSessionAssetStore(sessionStore)
 	runtimeSvc.SetUserInputPreparer(agentruntime.NewSessionInputPreparer(sessionStore, sessionStore))
 	runtimeSvc.SetSkillsRegistry(buildSkillsRegistry(ctx, sharedDeps.ConfigManager.BaseDir()))
-	runtimeSvc.SetAutoCompactThresholdResolver(runtimeAutoCompactThresholdResolverFunc(
-		func(ctx context.Context, cfg config.Config) (int, error) {
-			resolution, err := configstate.ResolveAutoCompactThreshold(ctx, cfg, modelCatalogs)
+	runtimeSvc.SetBudgetResolver(runtimeBudgetResolverFunc(
+		func(ctx context.Context, cfg config.Config) (int, string, error) {
+			resolution, err := configstate.ResolvePromptBudget(ctx, cfg, modelCatalogs)
 			if err != nil {
-				return 0, err
+				return 0, "", err
 			}
-			return resolution.Threshold, nil
+			return resolution.PromptBudget, string(resolution.Source), nil
 		},
 	))
 
@@ -230,11 +230,6 @@ func BuildGatewayServerDeps(ctx context.Context, opts BootstrapOptions) (Runtime
 		MemoService:       memoSvc,
 		Close:             closeBundle,
 	}, nil
-}
-
-// BuildRuntime 兼容旧入口，内部转发到 BuildGatewayServerDeps。
-func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, error) {
-	return BuildGatewayServerDeps(ctx, opts)
 }
 
 // NewProgram 基于共享运行时依赖构建并返回 TUI 程序，同时返回退出时应调用的资源清理函数。
@@ -423,9 +418,9 @@ func (f textGenAdapter) Generate(ctx context.Context, prompt string, msgs []prov
 	return f(ctx, prompt, msgs)
 }
 
-type runtimeAutoCompactThresholdResolverFunc func(ctx context.Context, cfg config.Config) (int, error)
+type runtimeBudgetResolverFunc func(ctx context.Context, cfg config.Config) (int, string, error)
 
-func (f runtimeAutoCompactThresholdResolverFunc) ResolveAutoCompactThreshold(ctx context.Context, cfg config.Config) (int, error) {
+func (f runtimeBudgetResolverFunc) ResolvePromptBudget(ctx context.Context, cfg config.Config) (int, string, error) {
 	return f(ctx, cfg)
 }
 

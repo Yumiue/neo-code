@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"neo-code/internal/provider"
+	"neo-code/internal/provider/openaicompat/chatcompletions"
+	"neo-code/internal/provider/openaicompat/responses"
 	providertypes "neo-code/internal/provider/types"
 )
 
@@ -26,8 +28,8 @@ func validateRuntimeConfig(cfg provider.RuntimeConfig) error {
 	if strings.TrimSpace(cfg.BaseURL) == "" {
 		return errors.New(errorPrefix + "base url is empty")
 	}
-	if strings.TrimSpace(cfg.APIKey) == "" {
-		return errors.New(errorPrefix + "api key is empty")
+	if strings.TrimSpace(cfg.APIKeyEnv) == "" {
+		return errors.New(errorPrefix + "api_key_env is empty")
 	}
 	return nil
 }
@@ -36,6 +38,45 @@ func validateRuntimeConfig(cfg provider.RuntimeConfig) error {
 type Provider struct {
 	cfg    provider.RuntimeConfig
 	client *http.Client
+}
+
+// EstimateInputTokens 基于 OpenAI-compatible 最终请求结构做本地输入 token 估算。
+func (p *Provider) EstimateInputTokens(
+	ctx context.Context,
+	req providertypes.GenerateRequest,
+) (providertypes.BudgetEstimate, error) {
+	mode, err := resolveExecutionMode(p.cfg)
+	if err != nil {
+		return providertypes.BudgetEstimate{}, err
+	}
+
+	var tokens int
+	switch mode {
+	case executionModeCompletions:
+		payload, buildErr := chatcompletions.BuildRequest(ctx, p.cfg, req)
+		if buildErr != nil {
+			return providertypes.BudgetEstimate{}, buildErr
+		}
+		tokens, err = provider.EstimateSerializedPayloadTokens(payload)
+	case executionModeResponses:
+		payload, buildErr := responses.BuildRequest(ctx, p.cfg, req)
+		if buildErr != nil {
+			return providertypes.BudgetEstimate{}, buildErr
+		}
+		tokens, err = provider.EstimateSerializedPayloadTokens(payload)
+	default:
+		return providertypes.BudgetEstimate{}, provider.NewDiscoveryConfigError(
+			fmt.Sprintf("openaicompat provider: driver %q resolved unsupported execution mode %q", p.cfg.Driver, mode),
+		)
+	}
+	if err != nil {
+		return providertypes.BudgetEstimate{}, err
+	}
+	return providertypes.BudgetEstimate{
+		EstimatedInputTokens: tokens,
+		EstimateSource:       provider.EstimateSourceLocal,
+		Accurate:             false,
+	}, nil
 }
 
 // buildOptions 控制 provider 构建时的可选注入项。

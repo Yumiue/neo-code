@@ -14,6 +14,7 @@ type streamGenerateResult struct {
 	message      providertypes.Message
 	inputTokens  int
 	outputTokens int
+	usagePresent bool
 	err          error
 }
 
@@ -40,6 +41,7 @@ func generateStreamingMessage(
 			if payload.Usage != nil {
 				outcome.inputTokens = payload.Usage.InputTokens
 				outcome.outputTokens = payload.Usage.OutputTokens
+				outcome.usagePresent = true
 			}
 			if userOnMessageDone != nil {
 				userOnMessageDone(payload)

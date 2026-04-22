@@ -29,7 +29,10 @@ func (p *Provider) generateSDKChatCompletions(
 		return err
 	}
 
-	client := p.newSDKClient()
+	client, err := p.newSDKClient()
+	if err != nil {
+		return err
+	}
 	params := convertToChatCompletionParams(payload)
 
 	stream := client.Chat.Completions.NewStreaming(ctx, params)
@@ -249,7 +252,10 @@ func (p *Provider) generateChatCompletionsWithCompatibleStream(
 		return fmt.Errorf("%sinvalid chat endpoint configuration: %w", errorPrefix, err)
 	}
 
-	client := p.newSDKClient()
+	client, err := p.newSDKClient()
+	if err != nil {
+		return err
+	}
 	var resp *http.Response
 	err = client.Post(
 		ctx,
@@ -286,7 +292,10 @@ func (p *Provider) generateSDKResponses(
 		return err
 	}
 
-	client := p.newSDKClient()
+	client, err := p.newSDKClient()
+	if err != nil {
+		return err
+	}
 	var resp *http.Response
 	err = client.Post(
 		ctx,
@@ -316,12 +325,16 @@ func wrapSDKRequestError(err error, action string) error {
 	return fmt.Errorf("%s%s: %w", errorPrefix, strings.TrimSpace(action), err)
 }
 
-func (p *Provider) newSDKClient() openai.Client {
+func (p *Provider) newSDKClient() (openai.Client, error) {
+	apiKey, err := p.cfg.ResolveAPIKeyValue()
+	if err != nil {
+		return openai.Client{}, err
+	}
 	return openai.NewClient(
 		option.WithHTTPClient(p.client),
-		option.WithAPIKey(strings.TrimSpace(p.cfg.APIKey)),
+		option.WithAPIKey(apiKey),
 		option.WithBaseURL(strings.TrimRight(strings.TrimSpace(p.cfg.BaseURL), "/")),
-	)
+	), nil
 }
 
 func resolveChatEndpoint(cfg provider.RuntimeConfig) (string, error) {

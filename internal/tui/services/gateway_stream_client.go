@@ -189,6 +189,8 @@ func restoreRuntimePayload(eventType EventType, payload any) (any, error) {
 		return decodeRuntimePayload[CompactResult](payload)
 	case EventCompactError:
 		return decodeRuntimePayload[CompactErrorPayload](payload)
+	case EventTokenUsage:
+		return decodeRuntimePayload[TokenUsagePayload](payload)
 	case EventPhaseChanged:
 		return decodeRuntimePayload[PhaseChangedPayload](payload)
 	case EventStopReasonDecided:

@@ -213,7 +213,9 @@ func TestNormalizeCreateSessionInputDefaultsGeneratedID(t *testing.T) {
 
 	session, err := normalizeCreateSessionInput(CreateSessionInput{
 		Title: "  test  ",
-		Todos: []TodoItem{{ID: "todo-1", Content: "a"}},
+		Head: SessionHead{
+			Todos: []TodoItem{{ID: "todo-1", Content: "a"}},
+		},
 	})
 	if err != nil {
 		t.Fatalf("normalizeCreateSessionInput() error = %v", err)
@@ -473,7 +475,7 @@ func TestSQLiteStoreInitializeTightensExistingDirectoryPermissions(t *testing.T)
 
 	baseDir := t.TempDir()
 	workspaceRoot := t.TempDir()
-	store := NewStore(baseDir, workspaceRoot)
+	store := NewSQLiteStore(baseDir, workspaceRoot)
 	t.Cleanup(func() { _ = store.Close() })
 
 	for _, dir := range []string{store.projectDir, store.assetsDir} {
@@ -739,7 +741,7 @@ func TestCleanupExpiredSessionAssetsStopsOnCanceledContext(t *testing.T) {
 	}
 }
 
-func TestBuildSessionFromRowInfersLegacySubAgentExecutor(t *testing.T) {
+func TestBuildSessionFromRowDefaultsTodoMissingExecutorToAgent(t *testing.T) {
 	t.Parallel()
 
 	nowMS := toUnixMillis(time.Now().UTC())
@@ -755,20 +757,14 @@ func TestBuildSessionFromRowInfersLegacySubAgentExecutor(t *testing.T) {
 
 	session, err := buildSessionFromRow(row, nil)
 	if err != nil {
-		t.Fatalf("buildSessionFromRow() error = %v", err)
+		t.Fatalf("expected missing executor to default, got session=%+v err=%v", session, err)
 	}
-	if len(session.Todos) != 1 {
-		t.Fatalf("todos len = %d, want 1", len(session.Todos))
-	}
-	if session.Todos[0].Executor != TodoExecutorSubAgent {
-		t.Fatalf("legacy todo executor = %q, want %q", session.Todos[0].Executor, TodoExecutorSubAgent)
-	}
-	if session.TodoVersion != CurrentTodoVersion {
-		t.Fatalf("todo_version = %d, want %d", session.TodoVersion, CurrentTodoVersion)
+	if len(session.Todos) != 1 || session.Todos[0].Executor != TodoExecutorAgent {
+		t.Fatalf("expected default executor %q, got %+v", TodoExecutorAgent, session.Todos)
 	}
 }
 
-func TestBuildSessionFromRowInfersLegacySubAgentExecutorByRetrySignals(t *testing.T) {
+func TestBuildSessionFromRowDefaultsRetryTodoMissingExecutorToAgent(t *testing.T) {
 	t.Parallel()
 
 	now := time.Now().UTC()
@@ -788,12 +784,9 @@ func TestBuildSessionFromRowInfersLegacySubAgentExecutorByRetrySignals(t *testin
 
 	session, err := buildSessionFromRow(row, nil)
 	if err != nil {
-		t.Fatalf("buildSessionFromRow() error = %v", err)
+		t.Fatalf("expected retry todo missing executor to default, got session=%+v err=%v", session, err)
 	}
-	if len(session.Todos) != 1 {
-		t.Fatalf("todos len = %d, want 1", len(session.Todos))
-	}
-	if session.Todos[0].Executor != TodoExecutorSubAgent {
-		t.Fatalf("legacy retry todo executor = %q, want %q", session.Todos[0].Executor, TodoExecutorSubAgent)
+	if len(session.Todos) != 1 || session.Todos[0].Executor != TodoExecutorAgent {
+		t.Fatalf("expected default executor %q, got %+v", TodoExecutorAgent, session.Todos)
 	}
 }

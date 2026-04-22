@@ -53,12 +53,13 @@ func TestNewValidationErrors(t *testing.T) {
 	t.Run("empty api key returns error", func(t *testing.T) {
 		t.Parallel()
 		cfg := resolvedConfig("", "")
-		cfg.APIKey = ""
+		cfg.APIKeyEnv = ""
+		cfg.APIKeyResolver = nil
 		_, err := New(cfg)
 		if err == nil {
 			t.Fatal("expected error for empty api key")
 		}
-		if !strings.Contains(err.Error(), "api key is empty") {
+		if !strings.Contains(err.Error(), "api_key_env is empty") {
 			t.Fatalf("expected api key error, got: %v", err)
 		}
 	})
@@ -66,7 +67,8 @@ func TestNewValidationErrors(t *testing.T) {
 	t.Run("whitespace-only api key returns error", func(t *testing.T) {
 		t.Parallel()
 		cfg := resolvedConfig("", "")
-		cfg.APIKey = "   "
+		cfg.APIKeyEnv = "   "
+		cfg.APIKeyResolver = nil
 		_, err := New(cfg)
 		if err == nil {
 			t.Fatal("expected error for whitespace-only api key")
@@ -76,11 +78,12 @@ func TestNewValidationErrors(t *testing.T) {
 	t.Run("invalid config validate fails", func(t *testing.T) {
 		t.Parallel()
 		cfg := provider.RuntimeConfig{
-			Name:         DriverName,
-			Driver:       DriverName,
-			BaseURL:      "",
-			DefaultModel: config.OpenAIDefaultModel,
-			APIKey:       "test-key",
+			Name:           DriverName,
+			Driver:         DriverName,
+			BaseURL:        "",
+			DefaultModel:   config.OpenAIDefaultModel,
+			APIKeyEnv:      "OPENAI_TEST_KEY",
+			APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
 		}
 		_, err := New(cfg)
 		if err == nil {
@@ -391,11 +394,12 @@ func TestBuildRequest_EmptyModelReturnsError(t *testing.T) {
 	// to test BuildRequest's own empty-model check.
 	p := &Provider{
 		cfg: provider.RuntimeConfig{
-			Name:         DriverName,
-			Driver:       DriverName,
-			BaseURL:      config.OpenAIDefaultBaseURL,
-			DefaultModel: "",
-			APIKey:       "test-key",
+			Name:           DriverName,
+			Driver:         DriverName,
+			BaseURL:        config.OpenAIDefaultBaseURL,
+			DefaultModel:   "",
+			APIKeyEnv:      "OPENAI_TEST_KEY",
+			APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
 		},
 		client: &http.Client{},
 	}
@@ -619,11 +623,12 @@ func resolvedConfig(baseURL, model string) provider.RuntimeConfig {
 		model = config.OpenAIDefaultModel
 	}
 	return provider.RuntimeConfig{
-		Name:         DriverName,
-		Driver:       DriverName,
-		BaseURL:      baseURL,
-		DefaultModel: model,
-		APIKey:       "test-key",
+		Name:           DriverName,
+		Driver:         DriverName,
+		BaseURL:        baseURL,
+		DefaultModel:   model,
+		APIKeyEnv:      "OPENAI_TEST_KEY",
+		APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
 	}
 }
 

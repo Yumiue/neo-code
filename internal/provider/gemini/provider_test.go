@@ -29,10 +29,11 @@ func TestProviderGenerate(t *testing.T) {
 	defer server.Close()
 
 	p, err := New(provider.RuntimeConfig{
-		Driver:       provider.DriverGemini,
-		BaseURL:      server.URL,
-		DefaultModel: "gemini-2.5-flash",
-		APIKey:       "test-key",
+		Driver:         provider.DriverGemini,
+		BaseURL:        server.URL,
+		DefaultModel:   "gemini-2.5-flash",
+		APIKeyEnv:      "GEMINI_TEST_KEY",
+		APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -96,7 +97,8 @@ func TestNewAcceptsCustomChatEndpointPath(t *testing.T) {
 		Driver:           provider.DriverGemini,
 		BaseURL:          "https://generativelanguage.googleapis.com/v1beta",
 		DefaultModel:     "gemini-2.5-flash",
-		APIKey:           "test-key",
+		APIKeyEnv:        "GEMINI_TEST_KEY",
+		APIKeyResolver:   provider.StaticAPIKeyResolver("test-key"),
 		ChatEndpointPath: "/custom/models",
 	})
 	if err != nil {
@@ -111,10 +113,11 @@ func TestBuildRequestSupportsImageParts(t *testing.T) {
 	t.Parallel()
 
 	cfg := provider.RuntimeConfig{
-		Driver:       provider.DriverGemini,
-		BaseURL:      "https://generativelanguage.googleapis.com/v1beta",
-		DefaultModel: "gemini-2.5-flash",
-		APIKey:       "test-key",
+		Driver:         provider.DriverGemini,
+		BaseURL:        "https://generativelanguage.googleapis.com/v1beta",
+		DefaultModel:   "gemini-2.5-flash",
+		APIKeyEnv:      "GEMINI_TEST_KEY",
+		APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
 	}
 	model, contents, requestConfig, err := BuildRequest(context.Background(), cfg, providertypes.GenerateRequest{
 		Messages: []providertypes.Message{
@@ -164,10 +167,11 @@ func TestBuildRequestRejectsSessionAssetWithoutReader(t *testing.T) {
 	t.Parallel()
 
 	cfg := provider.RuntimeConfig{
-		Driver:       provider.DriverGemini,
-		BaseURL:      "https://generativelanguage.googleapis.com/v1beta",
-		DefaultModel: "gemini-2.5-flash",
-		APIKey:       "test-key",
+		Driver:         provider.DriverGemini,
+		BaseURL:        "https://generativelanguage.googleapis.com/v1beta",
+		DefaultModel:   "gemini-2.5-flash",
+		APIKeyEnv:      "GEMINI_TEST_KEY",
+		APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
 	}
 	_, _, _, err := BuildRequest(context.Background(), cfg, providertypes.GenerateRequest{
 		Messages: []providertypes.Message{
