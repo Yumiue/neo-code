@@ -452,7 +452,14 @@ func TestServiceRunMCPPermissionAllowFlow(t *testing.T) {
 		tools: []mcp.ToolDescriptor{
 			{Name: "create_issue", Description: "create issue", InputSchema: map[string]any{"type": "object"}},
 		},
-		callResult: mcp.CallResult{Content: "mcp create ok"},
+		callResult: mcp.CallResult{
+			Content: "mcp create ok",
+			Metadata: map[string]any{
+				"verification_performed": true,
+				"verification_passed":    true,
+				"verification_scope":     "workspace",
+			},
+		},
 	}
 	if err := mcpRegistry.RegisterServer("github", "stdio", "v1", mcpClient); err != nil {
 		t.Fatalf("register mcp server: %v", err)

@@ -95,6 +95,15 @@ type ToolResult struct {
 	Content    string
 	IsError    bool
 	Metadata   map[string]any
+	Facts      ToolExecutionFacts
+}
+
+// ToolExecutionFacts 描述工具执行产出的结构化运行事实，供 runtime 做写入/验证控制。
+type ToolExecutionFacts struct {
+	WorkspaceWrite        bool
+	VerificationPerformed bool
+	VerificationPassed    bool
+	VerificationScope     string
 }
 
 // ToolSpec 对齐 provider 层 tool schema 结构。

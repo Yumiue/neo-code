@@ -37,6 +37,14 @@ func TestRuntimeEventPhaseChangedHandlerBranches(t *testing.T) {
 			t.Fatalf("unexpected progress for %q: known=%v value=%v label=%q", tc.to, app.runProgressKnown, app.runProgressValue, app.runProgressLabel)
 		}
 	}
+
+	app.clearRunProgress()
+	runtimeEventPhaseChangedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.PhaseChangedPayload{To: "compacting"},
+	})
+	if app.runProgressKnown {
+		t.Fatalf("expected non-plan/execute/verify phase to keep progress unchanged")
+	}
 }
 
 func TestRuntimeEventStopReasonDecidedHandlerBranches(t *testing.T) {

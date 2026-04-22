@@ -469,7 +469,7 @@ func TestExecuteAssistantToolCallsFillsErrorContent(t *testing.T) {
 	}
 	snapshot := turnSnapshot{workdir: t.TempDir(), toolTimeout: time.Second}
 
-	if err := service.executeAssistantToolCalls(context.Background(), &state, snapshot, assistant); err != nil {
+	if _, err := service.executeAssistantToolCalls(context.Background(), &state, snapshot, assistant); err != nil {
 		t.Fatalf("executeAssistantToolCalls() error = %v", err)
 	}
 	if len(state.session.Messages) != 1 {
@@ -509,7 +509,7 @@ func TestExecuteAssistantToolCallsCanceledSaveStillEmitsResultWhenExecErr(t *tes
 	}
 	snapshot := turnSnapshot{workdir: t.TempDir(), toolTimeout: time.Second}
 
-	err := service.executeAssistantToolCalls(context.Background(), &state, snapshot, assistant)
+	_, err := service.executeAssistantToolCalls(context.Background(), &state, snapshot, assistant)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled from save failure, got %v", err)
 	}

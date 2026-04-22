@@ -47,6 +47,55 @@ type microCompactSummarizerExecutor interface {
 	MicroCompactSummarizer(name string) ContentSummarizer
 }
 
+// factsEnrichingExecutor 包装底层执行器，在不信任外部 metadata 的前提下补齐受信结构化事实。
+type factsEnrichingExecutor struct {
+	inner Executor
+}
+
+// newFactsEnrichingExecutor 创建带结构化事实补齐能力的执行器包装层。
+func newFactsEnrichingExecutor(inner Executor) Executor {
+	if inner == nil {
+		return nil
+	}
+	return &factsEnrichingExecutor{inner: inner}
+}
+
+// ListAvailableSpecs 透传工具规格查询能力，不改变可见工具集。
+func (e *factsEnrichingExecutor) ListAvailableSpecs(ctx context.Context, input SpecListInput) ([]providertypes.ToolSpec, error) {
+	return e.inner.ListAvailableSpecs(ctx, input)
+}
+
+// Supports 透传工具支持性判断，保证原有执行路由不受包装层影响。
+func (e *factsEnrichingExecutor) Supports(name string) bool {
+	return e.inner.Supports(name)
+}
+
+// MicroCompactPolicy 透传被包装执行器的压缩策略，确保 UI/Runtime 行为与原实现一致。
+func (e *factsEnrichingExecutor) MicroCompactPolicy(name string) MicroCompactPolicy {
+	if source, ok := e.inner.(microCompactPolicyExecutor); ok {
+		return source.MicroCompactPolicy(name)
+	}
+	return MicroCompactPolicyCompact
+}
+
+// MicroCompactSummarizer 透传被包装执行器的摘要器实现，避免包装层吞掉摘要能力。
+func (e *factsEnrichingExecutor) MicroCompactSummarizer(name string) ContentSummarizer {
+	if source, ok := e.inner.(microCompactSummarizerExecutor); ok {
+		return source.MicroCompactSummarizer(name)
+	}
+	return nil
+}
+
+// Execute 在执行后按本地权限动作补齐可信 facts，避免运行时依赖远端 metadata。
+func (e *factsEnrichingExecutor) Execute(ctx context.Context, input ToolCallInput) (ToolResult, error) {
+	result, err := e.inner.Execute(ctx, input)
+	action, actionErr := buildPermissionAction(input)
+	if actionErr == nil {
+		result = EnrichToolResultFacts(action, result)
+	}
+	return result, err
+}
+
 // WorkspaceSandbox enforces workspace-oriented constraints before execution.
 type WorkspaceSandbox interface {
 	Check(ctx context.Context, action security.Action) (*security.WorkspaceExecutionPlan, error)
@@ -199,7 +248,7 @@ func NewManager(executor Executor, engine security.PermissionEngine, sandbox Wor
 	}
 
 	return &DefaultManager{
-		executor:         executor,
+		executor:         newFactsEnrichingExecutor(executor),
 		engine:           engine,
 		sandbox:          sandbox,
 		sessionDecisions: newSessionPermissionMemory(),

@@ -136,7 +136,7 @@ func extractStringArgument(raw []byte, key string) string {
 
 	var payload map[string]any
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return ""
+		return extractStringArgumentFallback(string(raw), key)
 	}
 
 	value, ok := payload[key].(string)
@@ -144,6 +144,30 @@ func extractStringArgument(raw []byte, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(value)
+}
+
+// extractStringArgumentFallback 在参数不是严格合法 JSON 时做最小字符串提取，兼容未转义的 Windows 路径。
+func extractStringArgumentFallback(raw string, key string) string {
+	quotedKey := `"` + strings.TrimSpace(key) + `"`
+	start := strings.Index(raw, quotedKey)
+	if start < 0 {
+		return ""
+	}
+	rest := raw[start+len(quotedKey):]
+	colon := strings.Index(rest, ":")
+	if colon < 0 {
+		return ""
+	}
+	rest = strings.TrimSpace(rest[colon+1:])
+	if !strings.HasPrefix(rest, `"`) {
+		return ""
+	}
+	rest = rest[1:]
+	end := strings.Index(rest, `"`)
+	if end < 0 {
+		return ""
+	}
+	return strings.TrimSpace(rest[:end])
 }
 
 // extractSpawnSubAgentTarget 提取 spawn_subagent 的稳定权限目标，优先 items[].id，再回退 id/prompt。

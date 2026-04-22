@@ -66,10 +66,21 @@ func (e *subAgentRuntimeToolExecutor) ExecuteTool(
 	agentID := strings.TrimSpace(input.AgentID)
 	workdir := strings.TrimSpace(input.Workdir)
 	callName := strings.TrimSpace(input.Call.Name)
+	capabilityToken := e.bindCapabilityTokenToExecution(e.resolveCapabilityToken(input), taskID, agentID)
+	effectiveTaskID := taskID
+	effectiveAgentID := agentID
+	if capabilityToken != nil {
+		if trimmedTaskID := strings.TrimSpace(capabilityToken.TaskID); trimmedTaskID != "" {
+			effectiveTaskID = trimmedTaskID
+		}
+		if trimmedAgentID := strings.TrimSpace(capabilityToken.AgentID); trimmedAgentID != "" {
+			effectiveAgentID = trimmedAgentID
+		}
+	}
 
 	payload := SubAgentToolCallEventPayload{
 		Role:      input.Role,
-		TaskID:    taskID,
+		TaskID:    effectiveTaskID,
 		ToolName:  callName,
 		Decision:  subAgentToolDecisionPending,
 		ElapsedMS: 0,
@@ -79,9 +90,9 @@ func (e *subAgentRuntimeToolExecutor) ExecuteTool(
 	result, execErr := e.service.executeToolCallWithPermission(ctx, permissionExecutionInput{
 		RunID:       runID,
 		SessionID:   sessionID,
-		TaskID:      taskID,
-		AgentID:     agentID,
-		Capability:  e.resolveCapabilityToken(input),
+		TaskID:      effectiveTaskID,
+		AgentID:     effectiveAgentID,
+		Capability:  capabilityToken,
 		Call:        input.Call,
 		Workdir:     workdir,
 		ToolTimeout: timeout,
@@ -113,7 +124,7 @@ func (e *subAgentRuntimeToolExecutor) ExecuteTool(
 
 	eventPayload := SubAgentToolCallEventPayload{
 		Role:      input.Role,
-		TaskID:    taskID,
+		TaskID:    effectiveTaskID,
 		ToolName:  output.Name,
 		Decision:  decision,
 		ElapsedMS: elapsedMilliseconds(startedAt),
@@ -182,6 +193,51 @@ func (e *subAgentRuntimeToolExecutor) resolveCapabilityToken(input subagent.Tool
 	signed, err := signer.Sign(child)
 	if err != nil {
 		return &parent
+	}
+	return &signed
+}
+
+// bindCapabilityTokenToExecution 在真正执行前把 capability token 重新绑定到当前 task/agent，避免回退 parent token 时破坏权限校验。
+func (e *subAgentRuntimeToolExecutor) bindCapabilityTokenToExecution(
+	token *security.CapabilityToken,
+	taskID string,
+	agentID string,
+) *security.CapabilityToken {
+	if token == nil {
+		return nil
+	}
+	normalized := token.Normalize()
+	boundTaskID := strings.TrimSpace(taskID)
+	boundAgentID := strings.TrimSpace(agentID)
+	if (boundTaskID == "" || normalized.TaskID == boundTaskID) &&
+		(boundAgentID == "" || normalized.AgentID == boundAgentID) {
+		return &normalized
+	}
+	if e == nil || e.service == nil {
+		return &normalized
+	}
+
+	signerProvider, ok := e.service.toolManager.(capabilitySignerProvider)
+	if !ok {
+		return &normalized
+	}
+	signer := signerProvider.CapabilitySigner()
+	if signer == nil {
+		return &normalized
+	}
+
+	rebound := normalized
+	rebound.ID = fmt.Sprintf("subagent-bind-%d-%s", time.Now().UTC().UnixNano(), boundTaskID)
+	if boundTaskID != "" {
+		rebound.TaskID = boundTaskID
+	}
+	if boundAgentID != "" {
+		rebound.AgentID = boundAgentID
+	}
+	rebound.Signature = ""
+	signed, err := signer.Sign(rebound)
+	if err != nil {
+		return &normalized
 	}
 	return &signed
 }
