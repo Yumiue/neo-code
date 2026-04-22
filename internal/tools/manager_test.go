@@ -452,11 +452,11 @@ func TestDefaultManagerSandboxOutsideWriteSessionMemory(t *testing.T) {
 	}
 
 	_, err = manager.Execute(context.Background(), input)
-	if err == nil || !strings.Contains(err.Error(), "escapes workspace root") {
-		t.Fatalf("expected sandbox rejection after remembered allow, got %v", err)
+	if err != nil {
+		t.Fatalf("expected remembered allow retry to pass, got %v", err)
 	}
-	if writeTool.callCount != 0 {
-		t.Fatalf("expected write tool not to execute after remembered allow, got %d", writeTool.callCount)
+	if writeTool.callCount != 1 {
+		t.Fatalf("expected write tool to execute after remembered allow, got %d", writeTool.callCount)
 	}
 }
 
