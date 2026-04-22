@@ -2344,6 +2344,15 @@ func (a *App) rebuildTranscript() {
 
 func (a *App) setTranscriptContent(content string) {
 	normalized := normalizeTranscriptForDisplay(content)
+	contentChanged := a.transcriptContent != normalized
+	if contentChanged && a.textSelection.active && !a.textSelection.dragging {
+		a.textSelection.active = false
+		a.textSelection.dragging = false
+		a.textSelection.startLine = 0
+		a.textSelection.startCol = 0
+		a.textSelection.endLine = 0
+		a.textSelection.endCol = 0
+	}
 	a.transcriptContent = normalized
 	if a.hasTextSelection() {
 		a.transcript.SetContent(a.highlightTranscriptContent(normalized))
@@ -2364,8 +2373,7 @@ func (a *App) highlightTranscriptContent(content string) string {
 		Foreground(lipgloss.Color(selectionFg))
 
 	for i := startLine; i <= endLine && i < len(lines); i++ {
-		plain := copyCodeANSIPattern.ReplaceAllString(lines[i], "")
-		lineWidth := lipgloss.Width(plain)
+		lineWidth := ansi.StringWidth(lines[i])
 		selStart := 0
 		selEnd := lineWidth
 		if i == startLine {
@@ -2379,9 +2387,9 @@ func (a *App) highlightTranscriptContent(content string) string {
 		if selEnd <= selStart {
 			continue
 		}
-		prefix := ansi.Cut(plain, 0, selStart)
-		selected := ansi.Cut(plain, selStart, selEnd)
-		suffix := ansi.Cut(plain, selEnd, lineWidth)
+		prefix := ansi.Cut(lines[i], 0, selStart)
+		selected := ansi.Cut(lines[i], selStart, selEnd)
+		suffix := ansi.Cut(lines[i], selEnd, lineWidth)
 		lines[i] = prefix + highlightStyle.Render(selected) + suffix
 	}
 	return strings.Join(lines, "\n")

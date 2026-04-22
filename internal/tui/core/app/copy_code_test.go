@@ -213,6 +213,89 @@ func TestSelectionPositionAndDragGuardBranches(t *testing.T) {
 	}
 }
 
+func TestSelectionPositionAtMouseRejectsBlankViewportRows(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 100
+	app.height = 24
+	app.applyComponentLayout(true)
+	app.setTranscriptContent("only-one-line")
+
+	x, y, _, h := app.transcriptBounds()
+	if h < 2 {
+		t.Fatalf("expected transcript viewport with spare rows, got height=%d", h)
+	}
+
+	if _, _, ok := app.selectionPositionAtMouse(tea.MouseMsg{X: x + 1, Y: y + h - 1}); ok {
+		t.Fatalf("expected blank viewport row to be ignored")
+	}
+}
+
+func TestSetTranscriptContentClearsSelectionAfterContentChange(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 100
+	app.height = 24
+	app.applyComponentLayout(true)
+	app.setTranscriptContent("line-one")
+	app.textSelection.active = true
+	app.textSelection.startLine = 0
+	app.textSelection.startCol = 0
+	app.textSelection.endLine = 0
+	app.textSelection.endCol = 4
+	app.refreshTranscriptHighlight()
+
+	app.setTranscriptContent("line-two")
+	if app.textSelection.active || app.textSelection.dragging {
+		t.Fatalf("expected selection to be cleared after transcript content changes")
+	}
+	if app.hasTextSelection() {
+		t.Fatalf("expected no valid selection range after transcript content changes")
+	}
+}
+
+func TestUpdateTextSelectionSkipsUnchangedPosition(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 100
+	app.height = 24
+	app.applyComponentLayout(true)
+	app.setTranscriptContent("alpha\nbeta")
+
+	x, y, _, _ := app.transcriptBounds()
+	if !app.beginTextSelection(tea.MouseMsg{X: x + 1, Y: y + 1}) {
+		t.Fatalf("expected beginTextSelection to succeed")
+	}
+	if !app.updateTextSelection(tea.MouseMsg{X: x + 2, Y: y + 1}) {
+		t.Fatalf("expected first updateTextSelection to succeed")
+	}
+
+	app.transcript.SetContent("sentinel-marker")
+	if !app.updateTextSelection(tea.MouseMsg{X: x + 2, Y: y + 1}) {
+		t.Fatalf("expected unchanged motion to be handled")
+	}
+	if !strings.Contains(app.transcript.View(), "sentinel-marker") {
+		t.Fatalf("expected unchanged motion to skip redraw")
+	}
+}
+
+func TestHighlightTranscriptContentPreservesANSIOutsideSelection(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 100
+	app.height = 24
+	app.applyComponentLayout(true)
+	app.textSelection.active = true
+	app.textSelection.startLine = 0
+	app.textSelection.startCol = 6
+	app.textSelection.endLine = 0
+	app.textSelection.endCol = 11
+
+	highlighted := app.highlightTranscriptContent("\x1b[31mhello world\x1b[0m")
+	if !strings.Contains(highlighted, "\x1b[31m") {
+		t.Fatalf("expected highlighted content to preserve existing ANSI style runs")
+	}
+	if plain := copyCodeANSIPattern.ReplaceAllString(highlighted, ""); plain != "hello world" {
+		t.Fatalf("expected highlighted content to preserve visible text, got %q", plain)
+	}
+}
+
 func TestCopySelectionToClipboardNoSelectionNoop(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.setTranscriptContent("hello")

@@ -262,6 +262,9 @@ func (a App) selectionPositionAtMouse(msg tea.MouseMsg) (line int, col int, ok b
 	currentLine := a.transcript.YOffset + (msg.Y - y)
 	currentCol := msg.X - x
 	lines := a.selectionLines()
+	if len(lines) == 0 || currentLine < 0 || currentLine >= len(lines) {
+		return 0, 0, false
+	}
 	return a.normalizeSelectionPosition(lines, currentLine, currentCol)
 }
 
@@ -308,6 +311,9 @@ func (a *App) updateTextSelection(msg tea.MouseMsg) bool {
 	line, col, ok := a.selectionPositionAtMouse(msg)
 	if !ok {
 		return false
+	}
+	if a.textSelection.endLine == line && a.textSelection.endCol == col {
+		return true
 	}
 	a.textSelection.endLine = line
 	a.textSelection.endCol = col
