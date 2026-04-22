@@ -331,25 +331,24 @@ func (m *DefaultManager) Execute(ctx context.Context, input ToolCallInput) (Tool
 		return result, permissionErrorFromDecision(decision)
 	}
 
-	plan, err := m.sandbox.Check(ctx, action)
-	if err != nil {
-		if decision, decisionMatched := resolveSandboxOutsideWriteDecision(input, action, err, m.sessionDecisions); decisionMatched {
-			if decision.Decision != security.DecisionAllow {
-				result := blockedToolResult(input, decision)
-				return result, permissionErrorFromDecision(decision)
+		plan, err := m.sandbox.Check(ctx, action)
+		if err != nil {
+			if decision, decisionMatched := resolveSandboxOutsideWriteDecision(input, action, err, m.sessionDecisions); decisionMatched {
+				if decision.Decision != security.DecisionAllow {
+					result := blockedToolResult(input, decision)
+					return result, permissionErrorFromDecision(decision)
+				}
+				m.auditCapabilityDecision(action, string(security.DecisionAllow), decision.Reason)
+				return m.executor.Execute(ctx, input)
+			} else {
+				result := NewErrorResult(input.Name, "workspace sandbox rejected action", sandboxErrorDetails(action, err), actionMetadata(action))
+				result.ToolCallID = input.ID
+				return result, err
 			}
-			m.auditCapabilityDecision(action, string(security.DecisionAllow), decision.Reason)
-			return m.executor.Execute(ctx, input)
+		} else if plan != nil {
+			input.WorkspacePlan = plan
 		}
-		result := NewErrorResult(input.Name, "workspace sandbox rejected action", sandboxErrorDetails(action, err), actionMetadata(action))
-		result.ToolCallID = input.ID
-		return result, err
-	}
 	m.auditCapabilityDecision(action, string(security.DecisionAllow), "")
-
-	if plan != nil {
-		input.WorkspacePlan = plan
-	}
 
 	return m.executor.Execute(ctx, input)
 }
