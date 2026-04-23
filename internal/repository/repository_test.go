@@ -13,12 +13,9 @@ import (
 func TestSummaryReturnsStableEmptyForNonGitDirectory(t *testing.T) {
 	t.Parallel()
 
-	service := &Service{
-		gitRunner: func(ctx context.Context, workdir string, args ...string) (string, error) {
-			return "fatal: not a git repository", errors.New("exit status 128")
-		},
-		readFile: readFile,
-	}
+	service := newTestService(func(ctx context.Context, workdir string, args ...string) (string, error) {
+		return "fatal: not a git repository", errors.New("exit status 128")
+	})
 
 	summary, err := service.Summary(context.Background(), t.TempDir())
 	if err != nil {
@@ -32,17 +29,14 @@ func TestSummaryReturnsStableEmptyForNonGitDirectory(t *testing.T) {
 func TestSummaryParsesBranchDirtyAheadBehindAndRepresentativeFiles(t *testing.T) {
 	t.Parallel()
 
-	service := &Service{
-		gitRunner: func(ctx context.Context, workdir string, args ...string) (string, error) {
-			return strings.Join([]string{
-				"## feature/repository...origin/feature/repository [ahead 2, behind 1]",
-				" M internal/context/source_system.go",
-				"R  old/name.go -> new/name.go",
-				"?? internal/repository/service.go",
-			}, "\n"), nil
-		},
-		readFile: readFile,
-	}
+	service := newTestService(func(ctx context.Context, workdir string, args ...string) (string, error) {
+		return strings.Join([]string{
+			"## feature/repository...origin/feature/repository [ahead 2, behind 1]",
+			" M internal/context/source_system.go",
+			"R  old/name.go -> new/name.go",
+			"?? internal/repository/service.go",
+		}, "\n"), nil
+	})
 
 	summary, err := service.Summary(context.Background(), t.TempDir())
 	if err != nil {
@@ -86,32 +80,28 @@ func TestChangedFilesRespectsStatusNormalizationAndSnippetRules(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	service := &Service{
-		gitRunner: func(ctx context.Context, dir string, args ...string) (string, error) {
-			command := strings.Join(args, " ")
-			switch command {
-			case "status --porcelain=v1 --branch --untracked-files=normal":
-				return strings.Join([]string{
-					"## main...origin/main [ahead 1]",
-					" M pkg/changed.go",
-					"A  pkg/new.go",
-					"?? pkg/untracked.go",
-					"D  pkg/deleted.go",
-					"R  pkg/old.go -> pkg/renamed.go",
-					"UU pkg/conflicted.go",
-				}, "\n"), nil
-			case "diff --unified=3 HEAD -- pkg/changed.go":
-				return "@@ -1,1 +1,1 @@\n-func Old() {}\n+func Changed() {}\n", nil
-			case "diff --unified=3 HEAD -- pkg/new.go":
-				return "@@ -0,0 +1,3 @@\n+package pkg\n+\n+func Added() {}\n", nil
-			case "diff --unified=3 HEAD -- pkg/renamed.go":
-				return "", nil
-			default:
-				return "", nil
-			}
-		},
-		readFile: readFile,
-	}
+	service := newTestService(func(ctx context.Context, dir string, args ...string) (string, error) {
+		switch strings.Join(args, " ") {
+		case "status --porcelain=v1 --branch --untracked-files=normal":
+			return strings.Join([]string{
+				"## main...origin/main [ahead 1]",
+				" M pkg/changed.go",
+				"A  pkg/new.go",
+				"?? pkg/untracked.go",
+				"D  pkg/deleted.go",
+				"R  pkg/old.go -> pkg/renamed.go",
+				"UU pkg/conflicted.go",
+			}, "\n"), nil
+		case "diff --unified=3 HEAD -- pkg/changed.go":
+			return "@@ -1,1 +1,1 @@\n-func Old() {}\n+func Changed() {}\n", nil
+		case "diff --unified=3 HEAD -- pkg/new.go":
+			return "@@ -0,0 +1,3 @@\n+package pkg\n+\n+func Added() {}\n", nil
+		case "diff --unified=3 HEAD -- pkg/renamed.go":
+			return "", nil
+		default:
+			return "", nil
+		}
+	})
 
 	ctx, err := service.ChangedFiles(context.Background(), workdir, ChangedFilesOptions{
 		IncludeSnippets: true,
@@ -133,16 +123,13 @@ func TestChangedFilesRespectsStatusNormalizationAndSnippetRules(t *testing.T) {
 func TestChangedFilesAppliesLimitAndTruncation(t *testing.T) {
 	t.Parallel()
 
-	service := &Service{
-		gitRunner: func(ctx context.Context, workdir string, args ...string) (string, error) {
-			lines := []string{"## main"}
-			for i := 0; i < 60; i++ {
-				lines = append(lines, " M file"+strconv.Itoa(i)+".go")
-			}
-			return strings.Join(lines, "\n"), nil
-		},
-		readFile: readFile,
-	}
+	service := newTestService(func(ctx context.Context, workdir string, args ...string) (string, error) {
+		lines := []string{"## main"}
+		for i := 0; i < 60; i++ {
+			lines = append(lines, " M file"+strconv.Itoa(i)+".go")
+		}
+		return strings.Join(lines, "\n"), nil
+	})
 
 	result, err := service.ChangedFiles(context.Background(), t.TempDir(), ChangedFilesOptions{})
 	if err != nil {
@@ -159,24 +146,20 @@ func TestChangedFilesAppliesLimitAndTruncation(t *testing.T) {
 func TestChangedFilesMarksTruncatedWhenSingleSnippetExceedsLineLimit(t *testing.T) {
 	t.Parallel()
 
-	service := &Service{
-		gitRunner: func(ctx context.Context, workdir string, args ...string) (string, error) {
-			command := strings.Join(args, " ")
-			switch command {
-			case "status --porcelain=v1 --branch --untracked-files=normal":
-				return "## main\n M pkg/long.go\n", nil
-			case "diff --unified=3 HEAD -- pkg/long.go":
-				lines := []string{"@@ -1,1 +1,25 @@"}
-				for i := 0; i < 25; i++ {
-					lines = append(lines, "+line "+strconv.Itoa(i))
-				}
-				return strings.Join(lines, "\n"), nil
-			default:
-				return "", nil
+	service := newTestService(func(ctx context.Context, workdir string, args ...string) (string, error) {
+		switch strings.Join(args, " ") {
+		case "status --porcelain=v1 --branch --untracked-files=normal":
+			return "## main\n M pkg/long.go\n", nil
+		case "diff --unified=3 HEAD -- pkg/long.go":
+			lines := []string{"@@ -1,1 +1,25 @@"}
+			for i := 0; i < 25; i++ {
+				lines = append(lines, "+line "+strconv.Itoa(i))
 			}
-		},
-		readFile: readFile,
-	}
+			return strings.Join(lines, "\n"), nil
+		default:
+			return "", nil
+		}
+	})
 
 	result, err := service.ChangedFiles(context.Background(), t.TempDir(), ChangedFilesOptions{
 		IncludeSnippets: true,
@@ -210,15 +193,12 @@ func TestChangedFilesMarksTruncatedWhenTotalSnippetBudgetExceeded(t *testing.T) 
 		statusLines = append(statusLines, "?? "+filepath.ToSlash(fileName))
 	}
 
-	service := &Service{
-		gitRunner: func(ctx context.Context, dir string, args ...string) (string, error) {
-			if strings.Join(args, " ") == "status --porcelain=v1 --branch --untracked-files=normal" {
-				return strings.Join(statusLines, "\n"), nil
-			}
-			return "", nil
-		},
-		readFile: readFile,
-	}
+	service := newTestService(func(ctx context.Context, dir string, args ...string) (string, error) {
+		if strings.Join(args, " ") == "status --porcelain=v1 --branch --untracked-files=normal" {
+			return strings.Join(statusLines, "\n"), nil
+		}
+		return "", nil
+	})
 
 	result, err := service.ChangedFiles(context.Background(), workdir, ChangedFilesOptions{
 		IncludeSnippets: true,
@@ -345,6 +325,58 @@ func TestRetrieveSymbolFallsBackToWholeWordTextSearch(t *testing.T) {
 	}
 }
 
+func TestRetrieveSkipsSensitiveLargeAndBinaryFiles(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	mustWriteFile(t, filepath.Join(workdir, ".env"), "API_KEY=secret\n")
+	mustWriteFile(t, filepath.Join(workdir, "pkg", "notes.key"), "private")
+	mustWriteFile(t, filepath.Join(workdir, "pkg", "bin.dat"), string([]byte{0x00, 0x01, 0x02, 0x03}))
+	mustWriteFile(t, filepath.Join(workdir, "pkg", "target.txt"), "match line\n")
+
+	largeContent := strings.Repeat("x", maxRetrievalFileBytes+1)
+	mustWriteFile(t, filepath.Join(workdir, "pkg", "large.txt"), largeContent)
+
+	service := NewService()
+
+	pathHits, err := service.Retrieve(context.Background(), workdir, RetrievalQuery{
+		Mode:  RetrievalModePath,
+		Value: ".env",
+	})
+	if err != nil {
+		t.Fatalf("Retrieve(path sensitive) error = %v", err)
+	}
+	if len(pathHits) != 0 {
+		t.Fatalf("expected sensitive path retrieval to be filtered, got %+v", pathHits)
+	}
+
+	textHits, err := service.Retrieve(context.Background(), workdir, RetrievalQuery{
+		Mode:  RetrievalModeText,
+		Value: "match",
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("Retrieve(text) error = %v", err)
+	}
+	if len(textHits) != 1 || textHits[0].Path != filepath.Clean("pkg/target.txt") {
+		t.Fatalf("expected only safe text hit, got %+v", textHits)
+	}
+
+	globHits, err := service.Retrieve(context.Background(), workdir, RetrievalQuery{
+		Mode:  RetrievalModeGlob,
+		Value: "pkg/*",
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("Retrieve(glob) error = %v", err)
+	}
+	for _, hit := range globHits {
+		if hit.Path == filepath.Clean("pkg/large.txt") || hit.Path == filepath.Clean("pkg/notes.key") || hit.Path == filepath.Clean("pkg/bin.dat") {
+			t.Fatalf("expected filtered file to be excluded, got %+v", globHits)
+		}
+	}
+}
+
 func assertChangedFile(t *testing.T, file ChangedFile, path string, oldPath string, status ChangedFileStatus, snippetContains string) {
 	t.Helper()
 	if file.Path != path || file.OldPath != oldPath || file.Status != status {
@@ -368,5 +400,12 @@ func mustWriteFile(t *testing.T, path string, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
+	}
+}
+
+func newTestService(gitRunner func(ctx context.Context, workdir string, args ...string) (string, error)) *Service {
+	return &Service{
+		gitRunner: gitRunner,
+		readFile:  readFile,
 	}
 }

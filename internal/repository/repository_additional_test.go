@@ -334,7 +334,7 @@ func TestPathAndRetrievalHelpers(t *testing.T) {
 		}
 
 		visited := make([]string, 0, 2)
-		err := walkWorkspaceFiles(workdir, workdir, func(path string, entry fs.DirEntry) error {
+		err := walkWorkspaceFiles(context.Background(), workdir, workdir, func(path string, entry fs.DirEntry) error {
 			visited = append(visited, filepath.Base(path))
 			return nil
 		})
@@ -344,7 +344,7 @@ func TestPathAndRetrievalHelpers(t *testing.T) {
 		if slices.Contains(visited, "ignored.txt") {
 			t.Fatalf("expected node_modules file to be skipped, got %v", visited)
 		}
-		err = walkWorkspaceFiles(workdir, filepath.Join(workdir, "missing"), func(path string, entry fs.DirEntry) error {
+		err = walkWorkspaceFiles(context.Background(), workdir, filepath.Join(workdir, "missing"), func(path string, entry fs.DirEntry) error {
 			return nil
 		})
 		if err == nil {
@@ -370,10 +370,7 @@ func TestRetrieveAndServiceEdgeCases(t *testing.T) {
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "defs.go"), "package pkg\n\ntype Widget struct{}\n\nfunc BuildWidget() {}\nconst WidgetName = \"x\"\nvar WidgetVar = 1\n")
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "notes.txt"), "Widget WidgetName")
 
-	service := &Service{
-		gitRunner: runGitCommand,
-		readFile:  readFile,
-	}
+	service := newTestService(runGitCommand)
 
 	t.Run("retrieve path guards and not exist", func(t *testing.T) {
 		t.Parallel()
@@ -602,7 +599,7 @@ func TestRepositoryCoverageExtraBranches(t *testing.T) {
 		root := t.TempDir()
 		mustWriteFile(t, filepath.Join(root, "a.txt"), "a")
 		expectedErr := errors.New("stop")
-		err := walkWorkspaceFiles(root, root, func(path string, entry fs.DirEntry) error {
+		err := walkWorkspaceFiles(context.Background(), root, root, func(path string, entry fs.DirEntry) error {
 			return expectedErr
 		})
 		if !errors.Is(err, expectedErr) {
@@ -616,12 +613,21 @@ func TestRepositoryCoverageExtraBranches(t *testing.T) {
 		}
 		linkPath := filepath.Join(root, "escape.txt")
 		if err := os.Symlink(outsideFile, linkPath); err == nil {
-			err = walkWorkspaceFiles(root, root, func(path string, entry fs.DirEntry) error {
+			err = walkWorkspaceFiles(context.Background(), root, root, func(path string, entry fs.DirEntry) error {
 				return nil
 			})
 			if err == nil {
 				t.Fatalf("expected symlink escape error from walkWorkspaceFiles")
 			}
+		}
+
+		canceledCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err = walkWorkspaceFiles(canceledCtx, root, root, func(path string, entry fs.DirEntry) error {
+			return nil
+		})
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("walkWorkspaceFiles(canceled) err = %v", err)
 		}
 	})
 
@@ -640,10 +646,7 @@ func TestRepositoryCoverageExtraBranches(t *testing.T) {
 		}, "\n"))
 		mustWriteFile(t, filepath.Join(root, "pkg", "match.txt"), "hit\nhit\nhit")
 
-		svc := &Service{
-			gitRunner: runGitCommand,
-			readFile:  readFile,
-		}
+		svc := newTestService(runGitCommand)
 		canceledCtx, cancel := context.WithCancel(context.Background())
 		cancel()
 		if _, err := svc.retrieveByGlob(canceledCtx, root, root, RetrievalQuery{Mode: RetrievalModeGlob, Value: "*.go", Limit: 1}); !errors.Is(err, context.Canceled) {
@@ -762,16 +765,13 @@ func TestRepositoryCoverageExtraBranches(t *testing.T) {
 	t.Run("summary representative limit and changed-files without snippets", func(t *testing.T) {
 		t.Parallel()
 
-		service := &Service{
-			gitRunner: func(ctx context.Context, workdir string, args ...string) (string, error) {
-				lines := []string{"## main"}
-				for i := 0; i < representativeChangedFilesLimit+2; i++ {
-					lines = append(lines, fmt.Sprintf(" M file%d.go", i))
-				}
-				return strings.Join(lines, "\n"), nil
-			},
-			readFile: readFile,
-		}
+		service := newTestService(func(ctx context.Context, workdir string, args ...string) (string, error) {
+			lines := []string{"## main"}
+			for i := 0; i < representativeChangedFilesLimit+2; i++ {
+				lines = append(lines, fmt.Sprintf(" M file%d.go", i))
+			}
+			return strings.Join(lines, "\n"), nil
+		})
 		summary, err := service.Summary(context.Background(), t.TempDir())
 		if err != nil {
 			t.Fatalf("Summary() err = %v", err)
@@ -796,12 +796,9 @@ func TestRepositoryCoverageExtraBranches(t *testing.T) {
 			t.Fatalf("ChangedFiles(canceled) err = %v", err)
 		}
 
-		nonGitService := &Service{
-			gitRunner: func(ctx context.Context, workdir string, args ...string) (string, error) {
-				return "fatal: not a git repository", errors.New("exit status 128")
-			},
-			readFile: readFile,
-		}
+		nonGitService := newTestService(func(ctx context.Context, workdir string, args ...string) (string, error) {
+			return "fatal: not a git repository", errors.New("exit status 128")
+		})
 		ctxResult, err := nonGitService.ChangedFiles(context.Background(), t.TempDir(), ChangedFilesOptions{})
 		if err != nil {
 			t.Fatalf("ChangedFiles(non-git) err = %v", err)

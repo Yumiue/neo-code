@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"bytes"
 	"context"
 	"io/fs"
 	"os"
@@ -16,7 +17,20 @@ const (
 	defaultContextLines   = 3
 	maxContextLines       = 8
 	maxSnippetLines       = 20
+	maxRetrievalFileBytes = 256 * 1024
+	binaryProbePrefixSize = 1024
 )
+
+var blockedSensitiveExtensions = map[string]struct{}{
+	".key": {},
+	".pem": {},
+	".p12": {},
+	".pfx": {},
+	".jks": {},
+	".der": {},
+	".cer": {},
+	".crt": {},
+}
 
 // retrieveByPath 按路径读取目标文件的受限片段。
 func (s *Service) retrieveByPath(ctx context.Context, root string, query RetrievalQuery) ([]RetrievalHit, error) {
@@ -27,6 +41,9 @@ func (s *Service) retrieveByPath(ctx context.Context, root string, query Retriev
 	if err != nil {
 		return nil, err
 	}
+	if !allowRetrievalReadByPath(target) {
+		return []RetrievalHit{}, nil
+	}
 	content, err := s.readFile(target)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -34,19 +51,15 @@ func (s *Service) retrieveByPath(ctx context.Context, root string, query Retriev
 		}
 		return nil, err
 	}
+	if isBinaryContent(content) {
+		return []RetrievalHit{}, nil
+	}
 
-	snippet, lineHint := snippetAroundLine(string(content), 1, query.ContextLines)
-	relativePath, err := filepath.Rel(root, target)
+	hit, err := buildRetrievalHit(root, target, RetrievalModePath, query.Value, string(content), 1, query.ContextLines)
 	if err != nil {
 		return nil, err
 	}
-	return []RetrievalHit{{
-		Path:          filepath.Clean(relativePath),
-		Kind:          string(RetrievalModePath),
-		SymbolOrQuery: query.Value,
-		Snippet:       snippet,
-		LineHint:      lineHint,
-	}}, nil
+	return []RetrievalHit{hit}, nil
 }
 
 // retrieveByGlob 按 glob 模式在工作区内定位候选文件。
@@ -56,7 +69,10 @@ func (s *Service) retrieveByGlob(ctx context.Context, root string, scope string,
 	}
 
 	hits := make([]RetrievalHit, 0, query.Limit)
-	err := walkWorkspaceFiles(root, scope, func(path string, entry fs.DirEntry) error {
+	err := walkWorkspaceFiles(ctx, root, scope, func(path string, entry fs.DirEntry) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if len(hits) >= query.Limit {
 			return nil
 		}
@@ -77,23 +93,15 @@ func (s *Service) retrieveByGlob(ctx context.Context, root string, scope string,
 		if !match {
 			return nil
 		}
-
-		content, readErr := s.readFile(path)
-		if readErr != nil {
+		content, ok := s.readRetrievalText(path, entry)
+		if !ok {
 			return nil
 		}
-		snippet, lineHint := snippetAroundLine(string(content), 1, query.ContextLines)
-		relative, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			return relErr
+		hit, hitErr := buildRetrievalHit(root, path, RetrievalModeGlob, query.Value, content, 1, query.ContextLines)
+		if hitErr != nil {
+			return hitErr
 		}
-		hits = append(hits, RetrievalHit{
-			Path:          filepath.Clean(relative),
-			Kind:          string(RetrievalModeGlob),
-			SymbolOrQuery: query.Value,
-			Snippet:       snippet,
-			LineHint:      lineHint,
-		})
+		hits = append(hits, hit)
 		return nil
 	})
 	if err != nil {
@@ -118,18 +126,22 @@ func (s *Service) retrieveByText(ctx context.Context, root string, scope string,
 	}
 
 	hits := make([]RetrievalHit, 0, query.Limit)
-	err := walkWorkspaceFiles(root, scope, func(path string, entry fs.DirEntry) error {
+	err := walkWorkspaceFiles(ctx, root, scope, func(path string, entry fs.DirEntry) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if len(hits) >= query.Limit {
 			return nil
 		}
-		contentBytes, readErr := s.readFile(path)
-		if readErr != nil {
+		content, ok := s.readRetrievalText(path, entry)
+		if !ok {
 			return nil
 		}
-
-		content := string(contentBytes)
 		lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
 		for index, line := range lines {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			if len(hits) >= query.Limit {
 				break
 			}
@@ -141,18 +153,11 @@ func (s *Service) retrieveByText(ctx context.Context, root string, scope string,
 				continue
 			}
 
-			snippet, lineHint := snippetAroundLine(content, index+1, query.ContextLines)
-			relative, relErr := filepath.Rel(root, path)
-			if relErr != nil {
-				return relErr
+			hit, hitErr := buildRetrievalHit(root, path, RetrievalModeText, query.Value, content, index+1, query.ContextLines)
+			if hitErr != nil {
+				return hitErr
 			}
-			hits = append(hits, RetrievalHit{
-				Path:          filepath.Clean(relative),
-				Kind:          string(RetrievalModeText),
-				SymbolOrQuery: query.Value,
-				Snippet:       snippet,
-				LineHint:      lineHint,
-			})
+			hits = append(hits, hit)
 		}
 		return nil
 	})
@@ -171,36 +176,33 @@ func (s *Service) retrieveBySymbol(ctx context.Context, root string, scope strin
 	}
 
 	hits := make([]RetrievalHit, 0, query.Limit)
-	err := walkWorkspaceFiles(root, scope, func(path string, entry fs.DirEntry) error {
+	err := walkWorkspaceFiles(ctx, root, scope, func(path string, entry fs.DirEntry) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if len(hits) >= query.Limit {
 			return nil
 		}
 		if filepath.Ext(path) != ".go" {
 			return nil
 		}
-
-		contentBytes, readErr := s.readFile(path)
-		if readErr != nil {
+		content, ok := s.readRetrievalText(path, entry)
+		if !ok {
 			return nil
 		}
-		content := string(contentBytes)
 		lineNumbers := findGoSymbolDefinitions(content, query.Value)
 		for _, lineNumber := range lineNumbers {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			if len(hits) >= query.Limit {
 				break
 			}
-			snippet, lineHint := snippetAroundLine(content, lineNumber, query.ContextLines)
-			relative, relErr := filepath.Rel(root, path)
-			if relErr != nil {
-				return relErr
+			hit, hitErr := buildRetrievalHit(root, path, RetrievalModeSymbol, query.Value, content, lineNumber, query.ContextLines)
+			if hitErr != nil {
+				return hitErr
 			}
-			hits = append(hits, RetrievalHit{
-				Path:          filepath.Clean(relative),
-				Kind:          string(RetrievalModeSymbol),
-				SymbolOrQuery: query.Value,
-				Snippet:       snippet,
-				LineHint:      lineHint,
-			})
+			hits = append(hits, hit)
 		}
 		return nil
 	})
@@ -272,6 +274,98 @@ func sortRetrievalHits(hits []RetrievalHit) {
 	})
 }
 
+// readRetrievalText 读取并过滤检索候选文件，失败时按“无命中”处理。
+func (s *Service) readRetrievalText(path string, entry fs.DirEntry) (string, bool) {
+	if !allowRetrievalReadByEntry(path, entry) {
+		return "", false
+	}
+	content, err := s.readFile(path)
+	if err != nil || isBinaryContent(content) {
+		return "", false
+	}
+	return string(content), true
+}
+
+// buildRetrievalHit 基于命中文件和行号构造统一格式的检索结果。
+func buildRetrievalHit(
+	root string,
+	path string,
+	mode RetrievalMode,
+	query string,
+	content string,
+	lineNumber int,
+	contextLines int,
+) (RetrievalHit, error) {
+	relativePath, err := filepath.Rel(root, path)
+	if err != nil {
+		return RetrievalHit{}, err
+	}
+	snippet, lineHint := snippetAroundLine(content, lineNumber, contextLines)
+	return RetrievalHit{
+		Path:          filepath.Clean(relativePath),
+		Kind:          string(mode),
+		SymbolOrQuery: query,
+		Snippet:       snippet,
+		LineHint:      lineHint,
+	}, nil
+}
+
 func readFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
+}
+
+// allowRetrievalReadByPath 校验路径模式下目标文件是否允许读取。
+func allowRetrievalReadByPath(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	return allowRetrievalByNameAndSize(filepath.Base(path), info.Size())
+}
+
+// allowRetrievalReadByEntry 校验遍历模式下命中文件是否允许读取。
+func allowRetrievalReadByEntry(path string, entry fs.DirEntry) bool {
+	info, err := entry.Info()
+	if err != nil || info.IsDir() {
+		return false
+	}
+	return allowRetrievalByNameAndSize(filepath.Base(path), info.Size())
+}
+
+// allowRetrievalByNameAndSize 基于文件名和大小过滤敏感文件与高成本文件。
+func allowRetrievalByNameAndSize(name string, size int64) bool {
+	if size < 0 || size > maxRetrievalFileBytes {
+		return false
+	}
+	lowerName := strings.ToLower(strings.TrimSpace(name))
+	if lowerName == "" {
+		return false
+	}
+	if lowerName == ".env" || strings.HasPrefix(lowerName, ".env.") {
+		return false
+	}
+	if _, blocked := blockedSensitiveExtensions[filepath.Ext(lowerName)]; blocked {
+		return false
+	}
+	return true
+}
+
+// isBinaryContent 通过前缀字节判断文件是否为二进制内容。
+func isBinaryContent(content []byte) bool {
+	if len(content) == 0 {
+		return false
+	}
+	prefixBytes := content
+	if len(prefixBytes) > binaryProbePrefixSize {
+		prefixBytes = prefixBytes[:binaryProbePrefixSize]
+	}
+	if bytes.IndexByte(prefixBytes, 0x00) >= 0 {
+		return true
+	}
+	for _, b := range prefixBytes {
+		if b < 0x09 {
+			return true
+		}
+	}
+	return false
 }

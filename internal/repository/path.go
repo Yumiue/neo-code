@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -17,7 +18,9 @@ type fileReader func(path string) ([]byte, error)
 
 // normalizeRetrievalQuery 统一校验检索请求并补齐默认值。
 func normalizeRetrievalQuery(workdir string, query RetrievalQuery) (string, string, RetrievalQuery, error) {
-	if strings.TrimSpace(query.Value) == "" {
+	normalized := query
+	normalized.Value = strings.TrimSpace(query.Value)
+	if normalized.Value == "" {
 		return "", "", RetrievalQuery{}, errors.New("repository: query value is empty")
 	}
 
@@ -30,15 +33,13 @@ func normalizeRetrievalQuery(workdir string, query RetrievalQuery) (string, stri
 		return "", "", RetrievalQuery{}, err
 	}
 
-	normalized := query
-	switch query.Mode {
+	switch normalized.Mode {
 	case RetrievalModePath, RetrievalModeGlob, RetrievalModeText, RetrievalModeSymbol:
 	default:
 		return "", "", RetrievalQuery{}, errInvalidMode
 	}
-	normalized.Value = strings.TrimSpace(query.Value)
-	normalized.Limit = normalizeLimit(query.Limit, defaultRetrievalLimit, maxRetrievalLimit)
-	normalized.ContextLines = normalizeLimit(query.ContextLines, defaultContextLines, maxContextLines)
+	normalized.Limit = normalizeLimit(normalized.Limit, defaultRetrievalLimit, maxRetrievalLimit)
+	normalized.ContextLines = normalizeLimit(normalized.ContextLines, defaultContextLines, maxContextLines)
 	return root, scope, normalized, nil
 }
 
@@ -121,9 +122,20 @@ func snippetAroundLine(content string, lineNumber int, contextLines int) (string
 	return snippet.text, lineNumber
 }
 
-// walkWorkspaceFiles 遍历工作区文件，同时跳过已约定的噪声目录。
-func walkWorkspaceFiles(root string, scope string, visit func(path string, entry fs.DirEntry) error) error {
+// walkWorkspaceFiles 遍历工作区文件，同时跳过已约定的噪声目录，并支持取消信号快速中断。
+func walkWorkspaceFiles(
+	ctx context.Context,
+	root string,
+	scope string,
+	visit func(path string, entry fs.DirEntry) error,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return filepath.WalkDir(scope, func(path string, entry fs.DirEntry, err error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if err != nil {
 			return err
 		}
