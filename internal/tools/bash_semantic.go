@@ -161,13 +161,17 @@ func parseGitSubcommand(tokens []string) (string, []string, []string, bool) {
 
 // shouldConsumeGitFlagValue 判断当前 git 全局参数是否需要消费下一个参数值。
 func shouldConsumeGitFlagValue(flag string) bool {
-	flag = strings.ToLower(strings.TrimSpace(flag))
-	switch flag {
-	case "-c", "-C", "--config-env", "--git-dir", "--work-tree":
-		return true
-	default:
+	flag = strings.TrimSpace(flag)
+	if flag == "" {
 		return false
 	}
+	if strings.HasPrefix(flag, "--") {
+		return !strings.Contains(flag, "=") && hasToken([]string{gitFlagKey(flag)}, "--config-env", "--git-dir", "--work-tree")
+	}
+	if strings.HasPrefix(flag, "-c") || strings.HasPrefix(flag, "-C") {
+		return len(flag) == 2
+	}
+	return flag == "--git-dir" || flag == "--work-tree"
 }
 
 // classifyGitIntent 按子命令与关键参数做一级权限分类。
@@ -212,12 +216,35 @@ func classifyGitIntent(subcommand string, flags []string, args []string) string 
 // hasRiskyGitConfigFlag 判断命令是否带有可能注入执行语义的高风险配置参数。
 func hasRiskyGitConfigFlag(flags []string) bool {
 	for _, flag := range flags {
-		switch strings.ToLower(strings.TrimSpace(flag)) {
+		switch gitFlagKey(flag) {
 		case "-c", "--config-env":
 			return true
 		}
 	}
 	return false
+}
+
+// gitFlagKey 将 git 参数归一化到“参数名”维度，兼容 --flag=value 与 -fVALUE 形式。
+func gitFlagKey(flag string) string {
+	trimmed := strings.TrimSpace(flag)
+	if trimmed == "" {
+		return ""
+	}
+	if strings.HasPrefix(trimmed, "--") {
+		key := trimmed
+		if idx := strings.Index(key, "="); idx >= 0 {
+			key = key[:idx]
+		}
+		return strings.ToLower(key)
+	}
+	if strings.HasPrefix(trimmed, "-C") {
+		return "-C"
+	}
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(lower, "-c") {
+		return "-c"
+	}
+	return lower
 }
 
 // hasToken 判断输入集合中是否包含指定 token（大小写不敏感）。
@@ -238,7 +265,41 @@ func containsShellControlOperators(command string) bool {
 	if strings.Contains(command, "\n") || strings.Contains(command, "\r") {
 		return true
 	}
-	return strings.ContainsAny(command, "&;|><`")
+	var inSingleQuote bool
+	var inDoubleQuote bool
+	escaped := false
+	for i := 0; i < len(command); i++ {
+		ch := command[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '\\' && !inSingleQuote {
+			escaped = true
+			continue
+		}
+		if ch == '\'' && !inDoubleQuote {
+			inSingleQuote = !inSingleQuote
+			continue
+		}
+		if ch == '"' && !inSingleQuote {
+			inDoubleQuote = !inDoubleQuote
+			continue
+		}
+		if inSingleQuote {
+			continue
+		}
+		if ch == '$' && i+1 < len(command) && command[i+1] == '(' {
+			return true
+		}
+		if ch == '`' {
+			return true
+		}
+		if !inDoubleQuote && strings.ContainsRune("&;|><", rune(ch)) {
+			return true
+		}
+	}
+	return false
 }
 
 // isGitBinary 判断首 token 是否为裸 git 可执行文件，拒绝路径伪装形式。

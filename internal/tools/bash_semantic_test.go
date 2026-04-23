@@ -64,11 +64,40 @@ func TestAnalyzeBashCommandClassifiesGitCommand(t *testing.T) {
 			wantComposite: true,
 		},
 		{
+			name:          "command substitution downgrades to unknown",
+			command:       "git show $(touch /tmp/pwn)",
+			wantIsGit:     false,
+			wantClass:     BashIntentClassificationUnknown,
+			wantSubCmd:    "",
+			wantComposite: true,
+		},
+		{
 			name:       "path masquerade git binary rejected",
 			command:    "./git status",
 			wantIsGit:  false,
 			wantClass:  BashIntentClassificationUnknown,
 			wantSubCmd: "",
+		},
+		{
+			name:       "short risky config with attached value becomes unknown",
+			command:    "git -ccore.pager=cat log",
+			wantIsGit:  true,
+			wantClass:  BashIntentClassificationUnknown,
+			wantSubCmd: "log",
+		},
+		{
+			name:       "config env equals form becomes unknown",
+			command:    "git --config-env=core.pager=PAGER_ENV show HEAD",
+			wantIsGit:  true,
+			wantClass:  BashIntentClassificationUnknown,
+			wantSubCmd: "show",
+		},
+		{
+			name:       "uppercase C does not become risky config",
+			command:    "git -C /tmp log",
+			wantIsGit:  true,
+			wantClass:  BashIntentClassificationReadOnly,
+			wantSubCmd: "log",
 		},
 	}
 
