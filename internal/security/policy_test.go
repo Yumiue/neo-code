@@ -41,6 +41,44 @@ func TestPolicyEngineRecommendedRules(t *testing.T) {
 			wantRuleID:   "allow-bash-git-read-only",
 		},
 		{
+			name: "git read-only sensitive path ask",
+			action: Action{
+				Type: ActionTypeBash,
+				Payload: ActionPayload{
+					ToolName:              "bash",
+					Resource:              "bash_git_read_only",
+					Operation:             "git_show",
+					SemanticType:          "git",
+					SemanticClass:         "read_only",
+					NormalizedIntent:      "git show",
+					TargetType:            TargetTypeCommand,
+					Target:                "git show HEAD:.env.production",
+					PermissionFingerprint: "bash.git|read_only|show",
+				},
+			},
+			wantDecision: DecisionAsk,
+			wantRuleID:   "ask-bash-git-read-only-sensitive",
+		},
+		{
+			name: "git read-only private key deny",
+			action: Action{
+				Type: ActionTypeBash,
+				Payload: ActionPayload{
+					ToolName:              "bash",
+					Resource:              "bash_git_read_only",
+					Operation:             "git_show",
+					SemanticType:          "git",
+					SemanticClass:         "read_only",
+					NormalizedIntent:      "git show",
+					TargetType:            TargetTypeCommand,
+					Target:                "git show HEAD:.ssh/id_rsa",
+					PermissionFingerprint: "bash.git|read_only|show",
+				},
+			},
+			wantDecision: DecisionDeny,
+			wantRuleID:   "deny-bash-git-read-only-private-keys",
+		},
+		{
 			name: "git remote bash ask",
 			action: Action{
 				Type: ActionTypeBash,

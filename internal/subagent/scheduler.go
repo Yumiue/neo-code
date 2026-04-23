@@ -640,7 +640,7 @@ func (s *Scheduler) updateTodoWithPatch(
 	}
 	latest, ok := s.store.FindTodo(item.ID)
 	if !ok {
-		return item, true, nil
+		return item, false, nil
 	}
 	return latest, true, nil
 }

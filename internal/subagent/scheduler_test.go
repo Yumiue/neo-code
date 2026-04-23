@@ -1188,7 +1188,7 @@ func TestSchedulerHandleOneOutcomeIgnoresStaleAttempt(t *testing.T) {
 	}
 }
 
-func TestSchedulerUpdateTodoWithPatchSuccessFallsBackToInputSnapshot(t *testing.T) {
+func TestSchedulerUpdateTodoWithPatchSuccessFallsBackToInputSnapshotWithoutStateChange(t *testing.T) {
 	t.Parallel()
 
 	store := &functionTodoStore{
@@ -1213,8 +1213,8 @@ func TestSchedulerUpdateTodoWithPatchSuccessFallsBackToInputSnapshot(t *testing.
 	if err != nil {
 		t.Fatalf("updateTodoWithPatch() error = %v", err)
 	}
-	if !changed {
-		t.Fatalf("changed = false, want true")
+	if changed {
+		t.Fatalf("changed = true, want false when latest snapshot missing")
 	}
 	if latest.ID != item.ID || latest.Revision != item.Revision {
 		t.Fatalf("latest = %+v, want fallback item %+v", latest, item)

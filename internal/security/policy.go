@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
@@ -39,11 +39,6 @@ type PolicyEngine struct {
 	rules           []PolicyRule
 }
 
-type compiledRule struct {
-	rule  PolicyRule
-	order int
-}
-
 type actionView struct {
 	action       Action
 	resource     string
@@ -64,7 +59,7 @@ func NewPolicyEngine(defaultDecision Decision, rules []PolicyRule) (*PolicyEngin
 		return nil, err
 	}
 
-	compiled := make([]compiledRule, 0, len(rules))
+	sortedRules := make([]PolicyRule, 0, len(rules))
 	for idx := range rules {
 		rule := rules[idx]
 		if strings.TrimSpace(rule.ID) == "" {
@@ -81,28 +76,30 @@ func NewPolicyEngine(defaultDecision Decision, rules []PolicyRule) (*PolicyEngin
 				return nil, fmt.Errorf("security: policy rule %q: %w", rule.ID, err)
 			}
 		}
-		compiled = append(compiled, compiledRule{
-			rule:  normalizePolicyRule(rule),
-			order: idx,
-		})
+		sortedRules = append(sortedRules, normalizePolicyRule(rule))
 	}
 
-	sort.SliceStable(compiled, func(i, j int) bool {
-		if compiled[i].rule.Priority == compiled[j].rule.Priority {
-			return compiled[i].order < compiled[j].order
-		}
-		return compiled[i].rule.Priority > compiled[j].rule.Priority
-	})
-
-	sortedRules := make([]PolicyRule, 0, len(compiled))
-	for _, item := range compiled {
-		sortedRules = append(sortedRules, item.rule)
-	}
+	// 稳定排序保证同优先级规则维持声明顺序。
+	sortPolicyRulesByPriority(sortedRules)
 
 	return &PolicyEngine{
 		defaultDecision: defaultDecision,
 		rules:           sortedRules,
 	}, nil
+}
+
+// sortPolicyRulesByPriority 按优先级从高到低稳定排序策略规则。
+func sortPolicyRulesByPriority(rules []PolicyRule) {
+	slices.SortStableFunc(rules, func(a, b PolicyRule) int {
+		switch {
+		case a.Priority > b.Priority:
+			return -1
+		case a.Priority < b.Priority:
+			return 1
+		default:
+			return 0
+		}
+	})
 }
 
 // Check 返回首条命中规则；若无命中则返回默认决策。
@@ -149,6 +146,8 @@ func (e *PolicyEngine) Check(ctx context.Context, action Action) (CheckResult, e
 func NewRecommendedPolicyEngine() (*PolicyEngine, error) {
 	const (
 		reasonAllowGitReadOnly    = "git read-only operation allowed by policy"
+		reasonDenyGitPrivateRead  = "git read-only access to private key material is blocked"
+		reasonAskGitSensitiveRead = "git read-only access to sensitive path requires approval"
 		reasonAskGitRemote        = "git remote operation requires approval"
 		reasonAskGitDestructive   = "git destructive operation requires approval"
 		reasonAskGitMutation      = "git local mutation requires approval"
@@ -186,6 +185,27 @@ func NewRecommendedPolicyEngine() (*PolicyEngine, error) {
 			TargetTypes:          []TargetType{TargetTypePath, TargetTypeDirectory},
 			RequireHostMissing:   false,
 			RequireHostMatch:     false,
+		},
+		{
+			ID:               "deny-bash-git-read-only-private-keys",
+			Priority:         875,
+			Decision:         DecisionDeny,
+			Reason:           reasonDenyGitPrivateRead,
+			ActionTypes:      []ActionType{ActionTypeBash},
+			ResourcePatterns: []string{"bash_git_read_only"},
+			PathBasenamePatterns: []string{
+				"id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "*.pem", "*.p12", "*.pfx", "*.key",
+			},
+			RequireSensitivePath: true,
+		},
+		{
+			ID:                   "ask-bash-git-read-only-sensitive",
+			Priority:             870,
+			Decision:             DecisionAsk,
+			Reason:               reasonAskGitSensitiveRead,
+			ActionTypes:          []ActionType{ActionTypeBash},
+			ResourcePatterns:     []string{"bash_git_read_only"},
+			RequireSensitivePath: true,
 		},
 		{
 			ID:               "allow-bash-git-read-only",
@@ -359,6 +379,9 @@ func newActionView(action Action) actionView {
 	targetPath := filepath.ToSlash(strings.ToLower(strings.TrimSpace(target)))
 	category := deriveToolCategory(action)
 	sensitive := classifySensitivePath(targetPath)
+	if !sensitive && resource == "bash_git_read_only" {
+		sensitive = classifySensitiveGitReadOnlyCommand(target)
+	}
 
 	return actionView{
 		action:       action,
@@ -586,6 +609,38 @@ func classifySensitivePath(normalizedTargetPath string) bool {
 	}
 	return matchesPathSegmentKeyword(normalizedTargetPath, []string{"secrets", ".ssh", ".gnupg", ".aws", ".config"}) ||
 		matchesPathBasenamePattern(normalizedTargetPath, []string{".env", ".env.*", "*.env", "*.secret", "*.secrets", "*.token", "*.key", "*.pem", "id_rsa", "id_ed25519"})
+}
+
+// classifySensitiveGitReadOnlyCommand 从 git 只读命令中提取潜在路径片段，并复用敏感路径判定。
+func classifySensitiveGitReadOnlyCommand(command string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(command))
+	if normalized == "" {
+		return false
+	}
+
+	candidates := []string{normalized}
+	tokens := strings.Fields(normalized)
+	for _, token := range tokens {
+		trimmed := strings.TrimSpace(strings.Trim(token, `"'`))
+		if trimmed == "" {
+			continue
+		}
+		candidates = append(candidates, trimmed)
+		if idx := strings.LastIndex(trimmed, ":"); idx >= 0 && idx+1 < len(trimmed) {
+			candidates = append(candidates, trimmed[idx+1:])
+		}
+	}
+
+	for _, candidate := range candidates {
+		cleaned := strings.Trim(candidate, `"'()[]{}<>,;`)
+		if cleaned == "" {
+			continue
+		}
+		if classifySensitivePath(filepath.ToSlash(cleaned)) {
+			return true
+		}
+	}
+	return false
 }
 
 func matchesPathSegmentKeyword(normalizedTargetPath string, keywords []string) bool {
