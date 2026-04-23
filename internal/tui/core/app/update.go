@@ -66,6 +66,13 @@ var lookupProviderUserEnvVar = config.LookupUserEnvVar
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	var spinCmd tea.Cmd
+	batchUpdateCmds := func() tea.Cmd {
+		if a.deferredFooterTick != nil {
+			cmds = append(cmds, a.deferredFooterTick)
+			a.deferredFooterTick = nil
+		}
+		return tea.Batch(cmds...)
+	}
 	a.syncFooterErrorToast()
 	a.spinner, spinCmd = a.spinner.Update(msg)
 	if a.isBusy() {
@@ -75,6 +82,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, a.deferredLogPersistCmd)
 		a.deferredLogPersistCmd = nil
 	}
+	if a.deferredFooterTick != nil {
+		cmds = append(cmds, a.deferredFooterTick)
+		a.deferredFooterTick = nil
+	}
 
 	switch typed := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -82,15 +93,26 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.height = typed.Height
 		a.layoutCached = false
 		a.applyComponentLayout(true)
-		return a, tea.Batch(cmds...)
+		return a, batchUpdateCmds()
+	case tickMsg:
+		now := time.Time(typed)
+		needNextTick := false
+
+		if !a.footerErrorUntil.IsZero() && now.Before(a.footerErrorUntil) {
+			needNextTick = true
+		}
+		if needNextTick {
+			cmds = append(cmds, appTickCmd())
+		}
+		return a, batchUpdateCmds()
 	case providerAddResultMsg:
 		a.handleProviderAddResultMsg(typed)
-		return a, nil
+		return a, batchUpdateCmds()
 	case RuntimeMsg:
 		runtimeEvent, ok := typed.Event.(tuiservices.RuntimeEvent)
 		if !ok {
 			cmds = append(cmds, ListenForRuntimeEvent(a.runtime.Events()))
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 		transcriptDirty := a.handleRuntimeEvent(runtimeEvent)
 		if a.deferredEventCmd != nil {
@@ -102,13 +124,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.rebuildTranscript()
 		}
 		cmds = append(cmds, ListenForRuntimeEvent(a.runtime.Events()))
-		return a, tea.Batch(cmds...)
+		return a, batchUpdateCmds()
 	case logPersistFlushMsg:
 		if typed.Version != a.logPersistVersion || !a.logPersistDirty {
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 		a.persistLogEntriesForActiveSession()
-		return a, tea.Batch(cmds...)
+		return a, batchUpdateCmds()
 	case RuntimeClosedMsg:
 		a.state.IsAgentRunning = false
 		a.state.StreamingReply = false
@@ -120,7 +142,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if strings.TrimSpace(a.state.StatusText) == "" {
 			a.state.StatusText = statusRuntimeClosed
 		}
-		return a, tea.Batch(cmds...)
+		return a, batchUpdateCmds()
 	case runFinishedMsg:
 		if typed.Err != nil {
 			a.state.IsAgentRunning = false
@@ -142,7 +164,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.syncActiveSessionTitle()
 		a.syncTodosFromRun()
-		return a, tea.Batch(cmds...)
+		return a, batchUpdateCmds()
 	case permissionResolutionFinishedMsg:
 		if a.pendingPermission != nil && a.pendingPermission.Request.RequestID == typed.RequestID {
 			if typed.Err != nil {
@@ -158,24 +180,24 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.refreshPermissionPromptLayout()
 			}
 		}
-		return a, tea.Batch(cmds...)
+		return a, batchUpdateCmds()
 	case modelCatalogRefreshMsg:
 		if strings.EqualFold(a.modelRefreshID, typed.ProviderID) {
 			a.modelRefreshID = ""
 		}
 		if !strings.EqualFold(strings.TrimSpace(a.state.CurrentProvider), strings.TrimSpace(typed.ProviderID)) {
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 		if typed.Err != nil {
 			a.appendActivity("provider", "Failed to refresh models", typed.Err.Error(), true)
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 
 		replacePickerItems(&a.modelPicker, mapModelItems(typed.Models))
 		cfg := a.configManager.Get()
 		a.syncConfigState(cfg)
 		selectPickerItemByID(&a.modelPicker, cfg.CurrentModel)
-		return a, tea.Batch(cmds...)
+		return a, batchUpdateCmds()
 	case compactFinishedMsg:
 		a.state.IsCompacting = false
 		if typed.Err != nil && strings.TrimSpace(a.state.ExecutionError) == "" {
@@ -190,7 +212,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.syncActiveSessionTitle()
 		a.rebuildTranscript()
 		a.transcript.GotoBottom()
-		return a, tea.Batch(cmds...)
+		return a, batchUpdateCmds()
 	case localCommandResultMsg:
 		if typed.Err != nil {
 			a.state.ExecutionError = typed.Err.Error()
@@ -206,13 +228,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					a.state.ExecutionError = err.Error()
 					a.state.StatusText = err.Error()
 					a.appendActivity("system", "Failed to refresh providers", err.Error(), true)
-					return a, tea.Batch(cmds...)
+					return a, batchUpdateCmds()
 				}
 				if err := a.refreshModelPicker(); err != nil {
 					a.state.ExecutionError = err.Error()
 					a.state.StatusText = err.Error()
 					a.appendActivity("system", "Failed to refresh models", err.Error(), true)
-					return a, tea.Batch(cmds...)
+					return a, batchUpdateCmds()
 				}
 				a.selectCurrentProvider(cfg.SelectedProvider)
 				a.selectCurrentModel(cfg.CurrentModel)
@@ -224,13 +246,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			a.appendActivity("command", typed.Notice, "", false)
 		}
-		return a, tea.Batch(cmds...)
+		return a, batchUpdateCmds()
 	case skillCommandResultMsg:
 		requestSessionID := strings.TrimSpace(typed.RequestSessionID)
 		activeSessionID := strings.TrimSpace(a.state.ActiveSessionID)
 		if requestSessionID != "" && !strings.EqualFold(requestSessionID, activeSessionID) {
 			a.recordStaleSkillCommandResult(requestSessionID, activeSessionID, typed.Err)
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 		if typed.Err != nil {
 			a.state.ExecutionError = typed.Err.Error()
@@ -250,19 +272,19 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 	case tea.MouseMsg:
 		if a.logViewerVisible && a.handleLogViewerMouse(typed) {
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 		if a.handleTranscriptMouse(typed) {
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 		if a.handleActivityMouse(typed) {
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 		if a.handleTodoMouse(typed) {
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 		if a.handleInputMouse(typed) {
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 	case tea.KeyMsg:
 		if key.Matches(typed, a.keys.Quit) {
@@ -272,20 +294,20 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.state.ShowHelp = !a.state.ShowHelp
 			a.help.ShowAll = a.state.ShowHelp
 			a.applyComponentLayout(true)
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 		if a.state.IsAgentRunning && key.Matches(typed, a.keys.CancelAgent) {
 			if a.runtime.CancelActiveRun() {
 				a.state.StatusText = statusCanceling
 			}
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 		if a.state.ActivePicker != pickerNone {
 			return a.updatePicker(typed)
 		}
 		if a.logViewerVisible {
 			if handled := a.handleLogViewerKey(typed); handled {
-				return a, tea.Batch(cmds...)
+				return a, batchUpdateCmds()
 			}
 		}
 
@@ -294,12 +316,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if cmd != nil {
 					cmds = append(cmds, cmd)
 				}
-				return a, tea.Batch(cmds...)
+				return a, batchUpdateCmds()
 			}
 		}
 		if a.focus == panelInput && key.Matches(typed, a.keys.NextPanel) {
 			if a.applySelectedCommandSuggestion() {
-				return a, tea.Batch(cmds...)
+				return a, batchUpdateCmds()
 			}
 			if a.shouldHandleTabAsInput(typed) {
 				tabMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'	'}, Paste: typed.Paste}
@@ -308,21 +330,25 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if key.Matches(typed, a.keys.NextPanel) {
 			a.focusNext()
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 		if key.Matches(typed, a.keys.PrevPanel) {
 			a.focusPrev()
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 		if key.Matches(typed, a.keys.FocusInput) {
 			a.clearTextSelection()
 			a.focus = panelInput
 			a.applyFocus()
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 		if key.Matches(typed, a.keys.NewSession) && !a.isBusy() {
 			a.startDraftSession()
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
+		}
+		if key.Matches(typed, a.keys.OpenWorkspace) {
+			a.openFileBrowser()
+			return a, batchUpdateCmds()
 		}
 
 		if key.Matches(typed, a.keys.PasteImage) {
@@ -330,7 +356,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.state.StatusText = err.Error()
 				a.appendActivity("multimodal", "Failed to paste image", err.Error(), true)
 			}
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 
 		if key.Matches(typed, a.keys.LogViewer) {
@@ -340,16 +366,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.logViewerPrevStatus = strings.TrimSpace(a.state.StatusText)
 			a.state.StatusText = "Log viewer"
 			a.applyComponentLayout(false)
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 
 		switch a.focus {
 		case panelTranscript:
 			a.handleViewportKeys(&a.transcript, typed)
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		case panelActivity:
 			a.handleViewportKeys(&a.activity, typed)
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		case panelTodo:
 			switch {
 			case key.Matches(typed, a.keys.ScrollUp):
@@ -386,25 +412,32 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				a.applyComponentLayout(false)
 			}
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		case panelInput:
 			return a.updateInputPanel(msg, typed, cmds)
 		}
 	}
 
-	return a, tea.Batch(cmds...)
+	return a, batchUpdateCmds()
 }
 
 func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
 	now := a.now()
 	effectiveTyped := typed
+	batchUpdateCmds := func() tea.Cmd {
+		if a.deferredFooterTick != nil {
+			cmds = append(cmds, a.deferredFooterTick)
+			a.deferredFooterTick = nil
+		}
+		return tea.Batch(cmds...)
+	}
 
 	if a.pendingPermission != nil {
 		if cmd, handled := a.updatePendingPermissionInput(typed); handled {
 			if cmd != nil {
 				cmds = append(cmds, cmd)
 			}
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 	}
 
@@ -417,7 +450,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			input := strings.TrimSpace(a.input.Value())
 			hasImages := a.hasImageAttachments()
 			if (input == "" && !hasImages) || a.isBusy() {
-				return a, tea.Batch(cmds...)
+				return a, batchUpdateCmds()
 			}
 
 			if handled, cmd := a.handleImmediateSlashCommand(input); handled {
@@ -429,7 +462,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				if cmd != nil {
 					cmds = append(cmds, cmd)
 				}
-				return a, tea.Batch(cmds...)
+				return a, batchUpdateCmds()
 			}
 
 			if isImageReferenceInput(input) {
@@ -443,7 +476,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				a.applyComponentLayout(true)
 				a.refreshCommandMenu()
 				a.resetPasteHeuristics()
-				return a, tea.Batch(cmds...)
+				return a, batchUpdateCmds()
 			}
 
 			a.input.Reset()
@@ -455,46 +488,46 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			case slashCommandHelp:
 				a.refreshHelpPicker()
 				a.openHelpPicker()
-				return a, tea.Batch(cmds...)
+				return a, batchUpdateCmds()
 			case slashCommandProvider:
 				if err := a.refreshProviderPicker(); err != nil {
 					a.state.ExecutionError = err.Error()
 					a.state.StatusText = err.Error()
 					a.appendActivity("system", "Failed to refresh providers", err.Error(), true)
-					return a, tea.Batch(cmds...)
+					return a, batchUpdateCmds()
 				}
 				a.openProviderPicker()
-				return a, tea.Batch(cmds...)
+				return a, batchUpdateCmds()
 			case slashCommandModelPick:
 				if err := a.refreshModelPicker(); err != nil {
 					a.state.ExecutionError = err.Error()
 					a.state.StatusText = err.Error()
 					a.appendActivity("system", "Failed to refresh models", err.Error(), true)
-					return a, tea.Batch(cmds...)
+					return a, batchUpdateCmds()
 				}
 				a.openModelPicker()
 				if cmd := a.requestModelCatalogRefresh(a.state.CurrentProvider); cmd != nil {
 					cmds = append(cmds, cmd)
 				}
-				return a, tea.Batch(cmds...)
+				return a, batchUpdateCmds()
 			case slashCommandSession:
 				if err := a.ensureSessionSwitchAllowed(""); err != nil {
 					a.state.ExecutionError = err.Error()
 					a.state.StatusText = err.Error()
 					a.appendActivity("session", "Failed to open session picker", err.Error(), true)
-					return a, tea.Batch(cmds...)
+					return a, batchUpdateCmds()
 				}
 				if err := a.refreshSessionPicker(); err != nil {
 					a.state.ExecutionError = err.Error()
 					a.state.StatusText = err.Error()
 					a.appendActivity("system", "Failed to refresh sessions", err.Error(), true)
-					return a, tea.Batch(cmds...)
+					return a, batchUpdateCmds()
 				}
 				a.openPicker(pickerSession, statusChooseSession, &a.sessionPicker, a.state.ActiveSessionID)
-				return a, tea.Batch(cmds...)
+				return a, batchUpdateCmds()
 			case slashCommandProviderAdd:
 				a.startProviderAddForm()
-				return a, tea.Batch(cmds...)
+				return a, batchUpdateCmds()
 			}
 
 			if strings.HasPrefix(input, slashPrefix) {
@@ -507,7 +540,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				a.state.ExecutionError = err.Error()
 				a.state.StatusText = err.Error()
 				a.appendActivity("multimodal", "Failed to absorb inline image reference", err.Error(), true)
-				return a, tea.Batch(cmds...)
+				return a, batchUpdateCmds()
 			}
 			if absorbedImages > 0 {
 				input = normalizedInput
@@ -523,6 +556,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 
 			a.clearActivities()
 			a.clearRunProgress()
+			a.startupScreenLocked = false
 			a.state.IsAgentRunning = true
 			a.state.IsCompacting = false
 			a.state.StreamingReply = false
@@ -548,7 +582,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				Images:    images,
 			}))
 			a.clearImageAttachments()
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 	}
 
@@ -567,7 +601,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 	a.applyComponentLayout(false)
 	a.refreshCommandMenu()
 	cmds = append(cmds, cmd)
-	return a, tea.Batch(cmds...)
+	return a, batchUpdateCmds()
 }
 
 // updatePendingPermissionInput handles keyboard interaction in the permission prompt.
@@ -1766,6 +1800,8 @@ func (a *App) showFooterError(message string) {
 	}
 	a.footerErrorText = message
 	a.footerErrorUntil = a.now().Add(footerErrorFlashDuration)
+	// 新错误出现时主动补发一次 tick，确保空闲状态下也能驱动自动消失。
+	a.deferredFooterTick = appTickCmd()
 }
 
 func (a *App) clearActivities() {
@@ -2045,7 +2081,7 @@ func (a App) inputBounds() (int, int, int, int) {
 	streamX := contentX
 	streamY := bodyY
 
-	inputY := streamY + a.transcript.Height + a.activityPreviewHeight() + a.todoPreviewHeight() + a.commandMenuHeight(lay.contentWidth)
+	inputY := streamY + a.transcript.Height + a.activityPreviewHeight() + a.todoPreviewHeight() + a.commandMenuHeight(lay.contentWidth, lay.contentHeight)
 	inputHeight := lipgloss.Height(a.renderPrompt(lay.contentWidth))
 	return streamX, inputY, lay.contentWidth, inputHeight
 }
@@ -2657,6 +2693,7 @@ func (a App) currentStatusSnapshot() tuistatus.Snapshot {
 
 func (a *App) startDraftSession() {
 	a.setActiveSessionID("")
+	a.startupScreenLocked = false
 	a.state.ActiveSessionTitle = draftSessionTitle
 	a.activeMessages = nil
 	a.clearActivities()
@@ -2743,6 +2780,9 @@ func runCompact(runtime tuiservices.Runtime, sessionID string) tea.Cmd {
 func (a *App) setActiveSessionID(sessionID string) {
 	next := strings.TrimSpace(sessionID)
 	current := strings.TrimSpace(a.state.ActiveSessionID)
+	if next != "" {
+		a.startupScreenLocked = false
+	}
 	if strings.EqualFold(current, next) {
 		a.state.ActiveSessionID = next
 		return
