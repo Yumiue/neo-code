@@ -47,7 +47,7 @@ $env:QINIU_API_KEY = "your_key_here"`
       <CodePanel language="powershell" label="PowerShell" :code="envWindows" />
       <div class="quickstart-links">
         <p>Workspace isolation: <code>--workdir</code></p>
-        <p>Gateway mode: <code>--runtime-mode gateway</code></p>
+        <p>Gateway command: <code>neocode gateway</code></p>
         <p><a href="/neo-code/guide/quick-start">Chinese quick start</a></p>
         <p><a href="/neo-code/en/docs/">English docs index</a></p>
       </div>
@@ -82,7 +82,7 @@ $env:QINIU_API_KEY = "your_key_here"`
       <CodePanel language="powershell" label="PowerShell" :code="envWindows" />
       <div class="quickstart-links">
         <p>工作区隔离：<code>--workdir</code></p>
-        <p>网关模式：<code>--runtime-mode gateway</code></p>
+        <p>网关命令：<code>neocode gateway</code></p>
         <p><a href="/neo-code/guide/quick-start">继续看首次上手</a></p>
         <p><a href="/neo-code/guide/gateway">查看 Gateway 用法</a></p>
       </div>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 
 const props = withDefaults(
 	defineProps<{
@@ -62,8 +62,13 @@ function fallbackCopy(text: string) {
 	textarea.style.opacity = '0'
 	document.body.appendChild(textarea)
 	textarea.select()
-	document.execCommand('copy')
-	document.body.removeChild(textarea)
+	try {
+		if (!document.execCommand('copy')) {
+			throw new Error('execCommand copy failed')
+		}
+	} finally {
+		document.body.removeChild(textarea)
+	}
 }
 
 // scheduleReset 用于在提示短暂展示后恢复默认文案。
@@ -81,6 +86,10 @@ function clearResetTimer() {
 		resetTimer = undefined
 	}
 }
+
+onBeforeUnmount(() => {
+	clearResetTimer()
+})
 </script>
 
 <template>
