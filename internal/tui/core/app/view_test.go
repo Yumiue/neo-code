@@ -41,7 +41,7 @@ func TestViewStartupScreenRendersStartupSections(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.startupScreenLocked = true
 	app.width = 120
-	app.height = 36
+	app.height = 40
 
 	view := app.View()
 	plain := copyCodeANSIPattern.ReplaceAllString(view, "")
@@ -545,7 +545,7 @@ func TestViewSmallWindowHint(t *testing.T) {
 func TestViewNormalIncludesHeaderAndBody(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.width = 100
-	app.height = 30
+	app.height = 40
 	app.state.CurrentModel = "test-model"
 	app.state.CurrentWorkdir = "/tmp/workdir"
 	app.state.StatusText = "running"
