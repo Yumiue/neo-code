@@ -1,12 +1,10 @@
-name: Vercel Optimization Deployment
-env:
-  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+name: Cloudflare Pages Direct Deployment
 on:
   push:
     branches:
       - main
-  pull_request: # 关键：任何人的 PR 都会触发，且不再需要手动授权
+  pull_request: # 组员提 PR 也会触发预览！
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -16,28 +14,27 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10.32.0 # 对应你 package.json 里的 pnpm 版本
+          version: 10
 
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          
 
-      - name: Install Vercel CLI
-        run: npm install --global vercel@latest
+      - name: Install Dependencies
+        run: pnpm install
+        working-directory: ./www # 假设你的目录叫 www
 
-      - name: Pull Vercel Environment Information
-        run: vercel pull --yes --environment=preview --token=${{ secrets.VERCEL_TOKEN }}
+      - name: Build Docs
+        run: pnpm run docs:build
+        working-directory: ./www
 
-      - name: Build Project Artifacts
-        run: vercel build --token=${{ secrets.VERCEL_TOKEN }}
-
-      - name: Deploy Project Artifacts to Vercel
-        run: vercel deploy --prebuilt --token=${{ secrets.VERCEL_TOKEN }} > deployment_url.txt
-
-      # 可选：如果你想让机器人在 PR 下面自动留言预览链接
-      - name: Output Deployment URL
-        if: github.event_name == 'pull_request'
-        run: |
-          echo "预览地址已生成: $(cat deployment_url.txt)"
+      # 魔法时刻：强推到 Cloudflare Pages
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          projectName: 'neocode-docs' # 填你在第二步创建的 Cloudflare 项目名
+          directory: 'www/.vitepress/dist' # 构建输出的路径
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
