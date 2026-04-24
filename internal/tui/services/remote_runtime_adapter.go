@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -239,11 +240,30 @@ func (r *RemoteRuntimeAdapter) Compact(ctx context.Context, input CompactInput) 
 	}, nil
 }
 
-// ExecuteSystemTool 在 gateway 模式下显式不支持，避免任何本地 fallback。
+// ExecuteSystemTool 转发 gateway.executeSystemTool 请求，并兼容旧网关的未实现错误。
 func (r *RemoteRuntimeAdapter) ExecuteSystemTool(ctx context.Context, input SystemToolInput) (tools.ToolResult, error) {
-	_ = ctx
-	_ = input
-	return tools.ToolResult{}, unsupportedGatewayActionError()
+	if err := r.authenticate(ctx); err != nil {
+		return tools.ToolResult{}, err
+	}
+
+	frame, err := r.callFrame(ctx, protocol.MethodGatewayExecuteSystemTool, protocol.ExecuteSystemToolParams{
+		SessionID: strings.TrimSpace(input.SessionID),
+		RunID:     strings.TrimSpace(input.RunID),
+		Workdir:   strings.TrimSpace(input.Workdir),
+		ToolName:  strings.TrimSpace(input.ToolName),
+		Arguments: normalizeSystemToolArguments(input.Arguments),
+	}, GatewayRPCCallOptions{
+		Timeout: r.timeout,
+		Retries: r.retryCount,
+	})
+	if err != nil {
+		if isGatewayUnsupportedActionError(err) {
+			return tools.ToolResult{}, unsupportedGatewayActionError()
+		}
+		return tools.ToolResult{}, err
+	}
+
+	return decodeFramePayload[tools.ToolResult](frame.Payload)
 }
 
 // ResolvePermission 转发 gateway.resolvePermission 请求。
@@ -522,6 +542,30 @@ func (r *RemoteRuntimeAdapter) activeRun() (string, string) {
 	r.activeMu.Lock()
 	defer r.activeMu.Unlock()
 	return strings.TrimSpace(r.activeRunID), strings.TrimSpace(r.activeSession)
+}
+
+// normalizeSystemToolArguments 归一化系统工具参数，空值统一回退为 "{}"。
+func normalizeSystemToolArguments(arguments []byte) json.RawMessage {
+	trimmed := bytes.TrimSpace(arguments)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return json.RawMessage("{}")
+	}
+	cloned := make([]byte, len(trimmed))
+	copy(cloned, trimmed)
+	return json.RawMessage(cloned)
+}
+
+// isGatewayUnsupportedActionError 判断错误是否为网关未实现动作，供适配层执行兼容降级。
+func isGatewayUnsupportedActionError(err error) bool {
+	var rpcErr *GatewayRPCError
+	if !errors.As(err, &rpcErr) || rpcErr == nil {
+		return false
+	}
+	gatewayCode := strings.ToLower(strings.TrimSpace(rpcErr.GatewayCode))
+	if gatewayCode == strings.ToLower(protocol.GatewayCodeUnsupportedAction) {
+		return true
+	}
+	return rpcErr.Code == protocol.JSONRPCCodeMethodNotFound
 }
 
 // unsupportedGatewayActionError 返回 gateway 模式下不支持本地动作时的统一错误。

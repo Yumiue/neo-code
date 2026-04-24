@@ -13,6 +13,7 @@ import (
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
 	agentsession "neo-code/internal/session"
+	"neo-code/internal/tools"
 )
 
 const bridgeLocalSubjectID = "local_admin"
@@ -113,6 +114,24 @@ func (b *gatewayRuntimePortBridge) Compact(ctx context.Context, input gateway.Co
 		TranscriptID:   result.TranscriptID,
 		TranscriptPath: result.TranscriptPath,
 	}, nil
+}
+
+// ExecuteSystemTool 将 gateway.executeSystemTool 请求映射到 runtime 系统工具执行能力。
+func (b *gatewayRuntimePortBridge) ExecuteSystemTool(
+	ctx context.Context,
+	input gateway.ExecuteSystemToolInput,
+) (tools.ToolResult, error) {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
+		return tools.ToolResult{}, err
+	}
+
+	return b.runtime.ExecuteSystemTool(ctx, agentruntime.SystemToolInput{
+		SessionID: strings.TrimSpace(input.SessionID),
+		RunID:     strings.TrimSpace(input.RunID),
+		Workdir:   strings.TrimSpace(input.Workdir),
+		ToolName:  strings.TrimSpace(input.ToolName),
+		Arguments: append([]byte(nil), input.Arguments...),
+	})
 }
 
 // ResolvePermission 将网关审批决策转换为 runtime 审批输入并提交。

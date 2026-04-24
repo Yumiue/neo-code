@@ -71,6 +71,17 @@ func TestValidateFrameCancelAndListSessions(t *testing.T) {
 		t.Fatalf("list_sessions request should be valid, got %v", listErr)
 	}
 
+	executeErr := ValidateFrame(MessageFrame{
+		Type:   FrameTypeRequest,
+		Action: FrameActionExecuteSystemTool,
+		Payload: map[string]any{
+			"tool_name": "memo_list",
+		},
+	})
+	if executeErr != nil {
+		t.Fatalf("execute_system_tool request should be valid, got %v", executeErr)
+	}
+
 	bindErr := ValidateFrame(MessageFrame{
 		Type:   FrameTypeRequest,
 		Action: FrameActionBindStream,

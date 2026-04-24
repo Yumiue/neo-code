@@ -28,6 +28,8 @@ const (
 	FrameActionRun FrameAction = "run"
 	// FrameActionCompact 表示触发一次手动压缩。
 	FrameActionCompact FrameAction = "compact"
+	// FrameActionExecuteSystemTool 表示触发一次系统工具执行。
+	FrameActionExecuteSystemTool FrameAction = "execute_system_tool"
 	// FrameActionCancel 表示取消当前活跃运行。
 	FrameActionCancel FrameAction = "cancel"
 	// FrameActionListSessions 表示获取会话摘要列表。

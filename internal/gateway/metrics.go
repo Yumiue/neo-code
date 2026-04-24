@@ -20,6 +20,7 @@ var allowedRPCMethodMetricLabels = map[string]struct{}{
 	strings.ToLower(protocol.MethodGatewayBindStream):        {},
 	strings.ToLower(protocol.MethodGatewayRun):               {},
 	strings.ToLower(protocol.MethodGatewayCompact):           {},
+	strings.ToLower(protocol.MethodGatewayExecuteSystemTool): {},
 	strings.ToLower(protocol.MethodGatewayCancel):            {},
 	strings.ToLower(protocol.MethodGatewayListSessions):      {},
 	strings.ToLower(protocol.MethodGatewayLoadSession):       {},

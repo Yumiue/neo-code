@@ -8,12 +8,15 @@ import (
 	"time"
 
 	"neo-code/internal/gateway/protocol"
+	"neo-code/internal/tools"
 )
 
 type rpcRunCaptureRuntimeStub struct {
-	runInput      RunInput
-	runCh         chan RunInput
-	loadSessionFn func(ctx context.Context, input LoadSessionInput) (Session, error)
+	runInput            RunInput
+	runCh               chan RunInput
+	executeSystemToolIn ExecuteSystemToolInput
+	executeSystemToolFn func(ctx context.Context, input ExecuteSystemToolInput) (tools.ToolResult, error)
+	loadSessionFn       func(ctx context.Context, input LoadSessionInput) (Session, error)
 }
 
 func (s *rpcRunCaptureRuntimeStub) Run(_ context.Context, input RunInput) error {
@@ -26,6 +29,17 @@ func (s *rpcRunCaptureRuntimeStub) Run(_ context.Context, input RunInput) error 
 
 func (s *rpcRunCaptureRuntimeStub) Compact(_ context.Context, _ CompactInput) (CompactResult, error) {
 	return CompactResult{}, nil
+}
+
+func (s *rpcRunCaptureRuntimeStub) ExecuteSystemTool(
+	ctx context.Context,
+	input ExecuteSystemToolInput,
+) (tools.ToolResult, error) {
+	s.executeSystemToolIn = input
+	if s.executeSystemToolFn != nil {
+		return s.executeSystemToolFn(ctx, input)
+	}
+	return tools.ToolResult{}, nil
 }
 
 func (s *rpcRunCaptureRuntimeStub) ResolvePermission(_ context.Context, _ PermissionResolutionInput) error {
@@ -367,6 +381,51 @@ func TestDispatchRPCRequestResolvePermissionDoesNotRequireSession(t *testing.T) 
 	}
 	if frame.Action != FrameActionResolvePermission {
 		t.Fatalf("response action = %q, want %q", frame.Action, FrameActionResolvePermission)
+	}
+}
+
+func TestDispatchRPCRequestExecuteSystemToolDoesNotRequireSession(t *testing.T) {
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithRequestACL(ctx, NewStrictControlPlaneACL())
+
+	runtimeStub := &rpcRunCaptureRuntimeStub{
+		executeSystemToolFn: func(_ context.Context, input ExecuteSystemToolInput) (tools.ToolResult, error) {
+			if input.ToolName != "memo_list" {
+				t.Fatalf("tool_name = %q, want %q", input.ToolName, "memo_list")
+			}
+			if string(input.Arguments) != "{}" {
+				t.Fatalf("arguments = %s, want {}", string(input.Arguments))
+			}
+			if input.Workdir != "/repo" {
+				t.Fatalf("workdir = %q, want %q", input.Workdir, "/repo")
+			}
+			return tools.ToolResult{
+				Name:    "memo_list",
+				Content: "ok",
+			}, nil
+		},
+	}
+
+	response := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-exec-no-session"`),
+		Method:  protocol.MethodGatewayExecuteSystemTool,
+		Params: json.RawMessage(`{
+			"tool_name":"memo_list",
+			"workdir":" /repo ",
+			"arguments":null
+		}`),
+	}, runtimeStub)
+	if response.Error != nil {
+		t.Fatalf("execute system tool should pass without session_id, got error: %+v", response.Error)
+	}
+
+	frame, err := decodeJSONRPCResultFrame(response)
+	if err != nil {
+		t.Fatalf("decode execute_system_tool result frame: %v", err)
+	}
+	if frame.Action != FrameActionExecuteSystemTool {
+		t.Fatalf("response action = %q, want %q", frame.Action, FrameActionExecuteSystemTool)
 	}
 }
 

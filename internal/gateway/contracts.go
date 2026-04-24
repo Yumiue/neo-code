@@ -3,6 +3,8 @@ package gateway
 import (
 	"context"
 	"time"
+
+	"neo-code/internal/tools"
 )
 
 // RuntimeEventType 表示运行时事件类型。
@@ -67,6 +69,24 @@ type CompactInput struct {
 	SessionID string
 	// RunID 是运行标识。
 	RunID string
+}
+
+// ExecuteSystemToolInput 表示 gateway.executeSystemTool 动作的下游输入。
+type ExecuteSystemToolInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// RequestID 是客户端请求标识。
+	RequestID string
+	// SessionID 是会话标识，可选。
+	SessionID string
+	// RunID 是运行标识，可选。
+	RunID string
+	// Workdir 是请求级工作目录覆盖值，可选。
+	Workdir string
+	// ToolName 是要执行的系统工具名。
+	ToolName string
+	// Arguments 是工具参数 JSON 字节串。
+	Arguments []byte
 }
 
 // CancelInput 表示 gateway.cancel 动作的下游输入。
@@ -177,6 +197,8 @@ type RuntimePort interface {
 	Run(ctx context.Context, input RunInput) error
 	// Compact 对指定会话触发一次手动压缩。
 	Compact(ctx context.Context, input CompactInput) (CompactResult, error)
+	// ExecuteSystemTool 执行一次系统工具调用。
+	ExecuteSystemTool(ctx context.Context, input ExecuteSystemToolInput) (tools.ToolResult, error)
 	// ResolvePermission 向运行时提交一次权限审批决策。
 	ResolvePermission(ctx context.Context, input PermissionResolutionInput) error
 	// CancelRun 按 run_id 精确取消运行态任务。

@@ -11,11 +11,13 @@ import (
 
 	"neo-code/internal/gateway/handlers"
 	"neo-code/internal/gateway/protocol"
+	"neo-code/internal/tools"
 )
 
 type bootstrapRuntimeStub struct {
 	runFn               func(ctx context.Context, input RunInput) error
 	compactFn           func(ctx context.Context, input CompactInput) (CompactResult, error)
+	executeSystemToolFn func(ctx context.Context, input ExecuteSystemToolInput) (tools.ToolResult, error)
 	resolvePermissionFn func(ctx context.Context, input PermissionResolutionInput) error
 	cancelRunFn         func(ctx context.Context, input CancelInput) (bool, error)
 	events              <-chan RuntimeEvent
@@ -35,6 +37,16 @@ func (s *bootstrapRuntimeStub) Compact(ctx context.Context, input CompactInput) 
 		return s.compactFn(ctx, input)
 	}
 	return CompactResult{}, nil
+}
+
+func (s *bootstrapRuntimeStub) ExecuteSystemTool(
+	ctx context.Context,
+	input ExecuteSystemToolInput,
+) (tools.ToolResult, error) {
+	if s != nil && s.executeSystemToolFn != nil {
+		return s.executeSystemToolFn(ctx, input)
+	}
+	return tools.ToolResult{}, nil
 }
 
 func (s *bootstrapRuntimeStub) ResolvePermission(ctx context.Context, input PermissionResolutionInput) error {
@@ -588,6 +600,103 @@ func TestHandleCompactFrameBranches(t *testing.T) {
 			Action:    FrameActionCompact,
 			RequestID: "compact-timeout",
 			SessionID: "session-compact",
+		}, stub)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeTimeout.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeTimeout.String())
+		}
+	})
+}
+
+func TestHandleExecuteSystemToolFrameBranches(t *testing.T) {
+	t.Run("runtime unavailable", func(t *testing.T) {
+		response := handleExecuteSystemToolFrame(context.Background(), MessageFrame{
+			Type:   FrameTypeRequest,
+			Action: FrameActionExecuteSystemTool,
+			Payload: protocol.ExecuteSystemToolParams{
+				ToolName: "memo_list",
+			},
+		}, nil)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("invalid payload", func(t *testing.T) {
+		response := handleExecuteSystemToolFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionExecuteSystemTool,
+			RequestID: "exec-invalid-1",
+			Payload: map[string]any{
+				"tool_name": " ",
+			},
+		}, &bootstrapRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeMissingRequiredField.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeMissingRequiredField.String())
+		}
+	})
+
+	t.Run("success", func(t *testing.T) {
+		stub := &bootstrapRuntimeStub{
+			executeSystemToolFn: func(ctx context.Context, input ExecuteSystemToolInput) (tools.ToolResult, error) {
+				if _, ok := ctx.Deadline(); !ok {
+					t.Fatal("execute_system_tool should use timeout context")
+				}
+				if input.ToolName != "memo_list" {
+					t.Fatalf("tool name = %q, want %q", input.ToolName, "memo_list")
+				}
+				if string(input.Arguments) != "{}" {
+					t.Fatalf("arguments = %s, want {}", string(input.Arguments))
+				}
+				if input.Workdir != "/repo" {
+					t.Fatalf("workdir = %q, want %q", input.Workdir, "/repo")
+				}
+				return tools.ToolResult{
+					Name:    "memo_list",
+					Content: "ok",
+				}, nil
+			},
+		}
+		response := handleExecuteSystemToolFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionExecuteSystemTool,
+			RequestID: "exec-ok-1",
+			Workdir:   "/repo",
+			Payload: protocol.ExecuteSystemToolParams{
+				ToolName:  "memo_list",
+				Arguments: []byte("null"),
+			},
+		}, stub)
+		if response.Type != FrameTypeAck {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+		}
+		if response.Action != FrameActionExecuteSystemTool {
+			t.Fatalf("response action = %q, want %q", response.Action, FrameActionExecuteSystemTool)
+		}
+	})
+
+	t.Run("runtime error", func(t *testing.T) {
+		stub := &bootstrapRuntimeStub{
+			executeSystemToolFn: func(_ context.Context, _ ExecuteSystemToolInput) (tools.ToolResult, error) {
+				return tools.ToolResult{}, context.DeadlineExceeded
+			},
+		}
+		response := handleExecuteSystemToolFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionExecuteSystemTool,
+			RequestID: "exec-timeout-1",
+			Payload: protocol.ExecuteSystemToolParams{
+				ToolName:  "memo_list",
+				Arguments: []byte("{}"),
+			},
 		}, stub)
 		if response.Type != FrameTypeError {
 			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)

@@ -184,6 +184,38 @@ func TestNormalizeJSONRPCRequestRuntimeMethods(t *testing.T) {
 		t.Fatalf("compact normalized = %#v", compactNormalized)
 	}
 
+	execNormalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`"exec-1"`),
+		Method:  MethodGatewayExecuteSystemTool,
+		Params: json.RawMessage(`{
+			"session_id":" s-1 ",
+			"run_id":" r-1 ",
+			"workdir":" /repo ",
+			"tool_name":" memo_list ",
+			"arguments":{"scope":"all"}
+		}`),
+	})
+	if rpcErr != nil {
+		t.Fatalf("normalize executeSystemTool request: %v", rpcErr)
+	}
+	if execNormalized.Action != "execute_system_tool" {
+		t.Fatalf("executeSystemTool action = %q, want %q", execNormalized.Action, "execute_system_tool")
+	}
+	if execNormalized.SessionID != "s-1" || execNormalized.RunID != "r-1" || execNormalized.Workdir != "/repo" {
+		t.Fatalf("executeSystemTool normalized ids/workdir = %#v", execNormalized)
+	}
+	execParams, ok := execNormalized.Payload.(ExecuteSystemToolParams)
+	if !ok {
+		t.Fatalf("executeSystemTool payload type = %T, want ExecuteSystemToolParams", execNormalized.Payload)
+	}
+	if execParams.ToolName != "memo_list" {
+		t.Fatalf("executeSystemTool tool_name = %q, want %q", execParams.ToolName, "memo_list")
+	}
+	if string(execParams.Arguments) != `{"scope":"all"}` {
+		t.Fatalf("executeSystemTool arguments = %s, want %s", string(execParams.Arguments), `{"scope":"all"}`)
+	}
+
 	cancelNormalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
 		JSONRPC: JSONRPCVersion,
 		ID:      json.RawMessage(`"cancel-1"`),
@@ -452,6 +484,38 @@ func TestNormalizeJSONRPCRequestErrors(t *testing.T) {
 			wantGatewayCode: GatewayCodeInvalidFrame,
 		},
 		{
+			name: "executeSystemTool missing params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayExecuteSystemTool,
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "executeSystemTool invalid params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayExecuteSystemTool,
+				Params:  json.RawMessage(`{invalid}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeInvalidFrame,
+		},
+		{
+			name: "executeSystemTool missing tool_name",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayExecuteSystemTool,
+				Params:  json.RawMessage(`{"tool_name":" "}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
 			name: "compact missing params",
 			request: JSONRPCRequest{
 				JSONRPC: JSONRPCVersion,
@@ -597,6 +661,11 @@ func TestJSONRPCDecode_RejectUnknownFields(t *testing.T) {
 			name:   "loadSession params contain unknown field",
 			method: MethodGatewayLoadSession,
 			params: `{"session_id":"s-1","extra":1}`,
+		},
+		{
+			name:   "executeSystemTool params contain unknown field",
+			method: MethodGatewayExecuteSystemTool,
+			params: `{"tool_name":"memo_list","unknown":"x"}`,
 		},
 	}
 

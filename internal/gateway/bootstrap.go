@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -37,6 +38,7 @@ var requestFrameHandlers = map[FrameAction]requestFrameHandler{
 	},
 	FrameActionRun:               handleRunFrame,
 	FrameActionCompact:           handleCompactFrame,
+	FrameActionExecuteSystemTool: handleExecuteSystemToolFrame,
 	FrameActionCancel:            handleCancelFrame,
 	FrameActionListSessions:      handleListSessionsFrame,
 	FrameActionLoadSession:       handleLoadSessionFrame,
@@ -239,6 +241,55 @@ func handleCompactFrame(ctx context.Context, frame MessageFrame, runtimePort Run
 		RequestID: frame.RequestID,
 		SessionID: strings.TrimSpace(frame.SessionID),
 		RunID:     strings.TrimSpace(frame.RunID),
+		Payload:   result,
+	}
+}
+
+// handleExecuteSystemToolFrame 处理 gateway.executeSystemTool 请求。
+func handleExecuteSystemToolFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	params, parseErr := decodeExecuteSystemToolPayload(frame.Payload)
+	if parseErr != nil {
+		return errorFrame(frame, parseErr)
+	}
+	if params.SessionID == "" {
+		params.SessionID = strings.TrimSpace(frame.SessionID)
+	}
+	if params.RunID == "" {
+		params.RunID = strings.TrimSpace(frame.RunID)
+	}
+	if params.Workdir == "" {
+		params.Workdir = strings.TrimSpace(frame.Workdir)
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	result, err := runtimePort.ExecuteSystemTool(callCtx, ExecuteSystemToolInput{
+		SubjectID: subjectID,
+		RequestID: strings.TrimSpace(frame.RequestID),
+		SessionID: params.SessionID,
+		RunID:     params.RunID,
+		Workdir:   params.Workdir,
+		ToolName:  params.ToolName,
+		Arguments: append([]byte(nil), params.Arguments...),
+	})
+	if err != nil {
+		return runtimeCallFailedFrame(callCtx, frame, err, "execute_system_tool")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionExecuteSystemTool,
+		RequestID: frame.RequestID,
+		SessionID: params.SessionID,
+		RunID:     params.RunID,
 		Payload:   result,
 	}
 }
@@ -493,6 +544,14 @@ type cancelParams struct {
 	RunID     string
 }
 
+type executeSystemToolParams struct {
+	SessionID string
+	RunID     string
+	Workdir   string
+	ToolName  string
+	Arguments []byte
+}
+
 // decodeBindStreamParams 解析 bind_stream 的负载参数。
 func decodeBindStreamParams(payload any) (bindStreamParams, *FrameError) {
 	switch typed := payload.(type) {
@@ -617,6 +676,68 @@ func decodeCancelInput(frame MessageFrame) (cancelParams, *FrameError) {
 		return cancelParams{}, NewMissingRequiredFieldError("payload.run_id")
 	}
 	return params, nil
+}
+
+// decodeExecuteSystemToolPayload 解析 execute_system_tool 负载并收敛为统一输入结构。
+func decodeExecuteSystemToolPayload(payload any) (executeSystemToolParams, *FrameError) {
+	switch typed := payload.(type) {
+	case protocol.ExecuteSystemToolParams:
+		return normalizeExecuteSystemToolParams(typed)
+	case *protocol.ExecuteSystemToolParams:
+		if typed == nil {
+			return executeSystemToolParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid execute_system_tool payload")
+		}
+		return normalizeExecuteSystemToolParams(*typed)
+	case map[string]any:
+		params := protocol.ExecuteSystemToolParams{
+			SessionID: readStringValue(typed, "session_id"),
+			RunID:     readStringValue(typed, "run_id"),
+			Workdir:   readStringValue(typed, "workdir"),
+			ToolName:  readStringValue(typed, "tool_name"),
+		}
+		if rawArgs, exists := typed["arguments"]; exists {
+			encodedArgs, err := json.Marshal(rawArgs)
+			if err != nil {
+				return executeSystemToolParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid execute_system_tool arguments")
+			}
+			params.Arguments = encodedArgs
+		}
+		return normalizeExecuteSystemToolParams(params)
+	default:
+		raw, marshalErr := json.Marshal(payload)
+		if marshalErr != nil {
+			return executeSystemToolParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid execute_system_tool payload")
+		}
+		var decoded protocol.ExecuteSystemToolParams
+		if unmarshalErr := json.Unmarshal(raw, &decoded); unmarshalErr != nil {
+			return executeSystemToolParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid execute_system_tool payload")
+		}
+		return normalizeExecuteSystemToolParams(decoded)
+	}
+}
+
+// normalizeExecuteSystemToolParams 校验并归一化 execute_system_tool 请求参数。
+func normalizeExecuteSystemToolParams(params protocol.ExecuteSystemToolParams) (executeSystemToolParams, *FrameError) {
+	normalized := executeSystemToolParams{
+		SessionID: strings.TrimSpace(params.SessionID),
+		RunID:     strings.TrimSpace(params.RunID),
+		Workdir:   strings.TrimSpace(params.Workdir),
+		ToolName:  strings.TrimSpace(params.ToolName),
+	}
+	if normalized.ToolName == "" {
+		return executeSystemToolParams{}, NewMissingRequiredFieldError("payload.tool_name")
+	}
+
+	arguments := bytes.TrimSpace(params.Arguments)
+	switch {
+	case len(arguments) == 0, bytes.Equal(arguments, []byte("null")):
+		normalized.Arguments = []byte("{}")
+	case !json.Valid(arguments):
+		return executeSystemToolParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid execute_system_tool arguments")
+	default:
+		normalized.Arguments = append([]byte(nil), arguments...)
+	}
+	return normalized, nil
 }
 
 // normalizeBindStreamParams 校验并归一化 bind_stream 请求参数。

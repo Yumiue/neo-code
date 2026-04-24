@@ -20,6 +20,9 @@ type runtimeStub struct {
 	compactInput    agentruntime.CompactInput
 	compactResult   agentruntime.CompactResult
 	compactErr      error
+	systemToolInput agentruntime.SystemToolInput
+	systemToolRes   tools.ToolResult
+	systemToolErr   error
 	permissionInput agentruntime.PermissionResolutionInput
 	permissionErr   error
 	cancelReturn    bool
@@ -54,8 +57,9 @@ func (s *runtimeStub) Compact(_ context.Context, input agentruntime.CompactInput
 	return s.compactResult, s.compactErr
 }
 
-func (s *runtimeStub) ExecuteSystemTool(context.Context, agentruntime.SystemToolInput) (tools.ToolResult, error) {
-	return tools.ToolResult{}, nil
+func (s *runtimeStub) ExecuteSystemTool(_ context.Context, input agentruntime.SystemToolInput) (tools.ToolResult, error) {
+	s.systemToolInput = input
+	return s.systemToolRes, s.systemToolErr
 }
 
 func (s *runtimeStub) ResolvePermission(_ context.Context, input agentruntime.PermissionResolutionInput) error {
@@ -172,6 +176,12 @@ func TestNewGatewayRuntimePortBridgeRuntimeUnavailable(t *testing.T) {
 	if _, err := nilBridge.Compact(context.Background(), gateway.CompactInput{}); err == nil {
 		t.Fatal("expected compact error for nil bridge")
 	}
+	if _, err := nilBridge.ExecuteSystemTool(context.Background(), gateway.ExecuteSystemToolInput{
+		SubjectID: testBridgeSubjectID,
+		ToolName:  "memo_list",
+	}); err == nil {
+		t.Fatal("expected execute_system_tool error for nil bridge")
+	}
 	if err := nilBridge.ResolvePermission(context.Background(), gateway.PermissionResolutionInput{}); err == nil {
 		t.Fatal("expected resolve_permission error for nil bridge")
 	}
@@ -207,6 +217,11 @@ func TestGatewayRuntimePortBridgeRuntimeMethods(t *testing.T) {
 			TriggerMode:    "manual",
 			TranscriptID:   "tx-1",
 			TranscriptPath: "/tmp/tx-1.md",
+		},
+		systemToolRes: tools.ToolResult{
+			ToolCallID: "call-system-1",
+			Name:       "memo_list",
+			Content:    "memo ok",
 		},
 		sessionList: []agentsession.Summary{
 			{
@@ -293,6 +308,30 @@ func TestGatewayRuntimePortBridgeRuntimeMethods(t *testing.T) {
 	}
 	if !compactResult.Applied || compactResult.BeforeChars != 200 || compactResult.AfterChars != 100 || compactResult.SavedRatio != 0.5 {
 		t.Fatalf("compact result = %#v", compactResult)
+	}
+
+	systemToolResult, err := bridge.ExecuteSystemTool(context.Background(), gateway.ExecuteSystemToolInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: " session-1 ",
+		RunID:     " run-1 ",
+		Workdir:   " /tmp/work ",
+		ToolName:  " memo_list ",
+		Arguments: []byte(`{"limit":10}`),
+	})
+	if err != nil {
+		t.Fatalf("execute_system_tool: %v", err)
+	}
+	if stub.systemToolInput.SessionID != "session-1" || stub.systemToolInput.RunID != "run-1" {
+		t.Fatalf("system tool input ids = %#v, want trimmed session/run ids", stub.systemToolInput)
+	}
+	if stub.systemToolInput.Workdir != "/tmp/work" || stub.systemToolInput.ToolName != "memo_list" {
+		t.Fatalf("system tool input = %#v, want trimmed workdir/tool_name", stub.systemToolInput)
+	}
+	if string(stub.systemToolInput.Arguments) != `{"limit":10}` {
+		t.Fatalf("system tool arguments = %s, want {\"limit\":10}", string(stub.systemToolInput.Arguments))
+	}
+	if systemToolResult.Content != "memo ok" || systemToolResult.Name != "memo_list" {
+		t.Fatalf("system tool result = %#v, want stubbed result", systemToolResult)
 	}
 
 	if err := bridge.ResolvePermission(context.Background(), gateway.PermissionResolutionInput{
@@ -413,6 +452,7 @@ func TestGatewayRuntimePortBridgeRuntimeMethodErrors(t *testing.T) {
 	stub := &runtimeStub{
 		submitErr:     errors.New("submit failed"),
 		compactErr:    errors.New("compact failed"),
+		systemToolErr: errors.New("system tool failed"),
 		permissionErr: errors.New("permission failed"),
 		listErr:       errors.New("list failed"),
 		loadErr:       errors.New("load failed"),
@@ -428,6 +468,12 @@ func TestGatewayRuntimePortBridgeRuntimeMethodErrors(t *testing.T) {
 	}
 	if _, err := bridge.Compact(context.Background(), gateway.CompactInput{SubjectID: testBridgeSubjectID}); err == nil {
 		t.Fatal("expected compact error from runtime")
+	}
+	if _, err := bridge.ExecuteSystemTool(context.Background(), gateway.ExecuteSystemToolInput{
+		SubjectID: testBridgeSubjectID,
+		ToolName:  "memo_list",
+	}); err == nil {
+		t.Fatal("expected execute_system_tool error from runtime")
 	}
 	if err := bridge.ResolvePermission(context.Background(), gateway.PermissionResolutionInput{
 		SubjectID: testBridgeSubjectID,

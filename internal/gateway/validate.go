@@ -30,7 +30,7 @@ func validateRequestFrame(frame MessageFrame) *FrameError {
 	}
 
 	switch frame.Action {
-	case FrameActionAuthenticate, FrameActionBindStream, FrameActionWakeOpenURL:
+	case FrameActionAuthenticate, FrameActionBindStream, FrameActionWakeOpenURL, FrameActionExecuteSystemTool:
 		if frame.Payload == nil {
 			return NewMissingRequiredFieldError("payload")
 		}
@@ -179,6 +179,7 @@ func isValidFrameAction(action FrameAction) bool {
 		FrameActionWakeOpenURL,
 		FrameActionRun,
 		FrameActionCompact,
+		FrameActionExecuteSystemTool,
 		FrameActionCancel,
 		FrameActionListSessions,
 		FrameActionLoadSession,

@@ -1,6 +1,10 @@
 package gateway
 
-import "context"
+import (
+	"context"
+
+	"neo-code/internal/tools"
+)
 
 // runtimePortCompileStub 用于编译期验证 RuntimePort 契约完整性。
 type runtimePortCompileStub struct{}
@@ -11,6 +15,13 @@ func (s *runtimePortCompileStub) Run(_ context.Context, _ RunInput) error {
 
 func (s *runtimePortCompileStub) Compact(_ context.Context, _ CompactInput) (CompactResult, error) {
 	return CompactResult{}, nil
+}
+
+func (s *runtimePortCompileStub) ExecuteSystemTool(
+	_ context.Context,
+	_ ExecuteSystemToolInput,
+) (tools.ToolResult, error) {
+	return tools.ToolResult{}, nil
 }
 
 func (s *runtimePortCompileStub) ResolvePermission(_ context.Context, _ PermissionResolutionInput) error {

@@ -24,6 +24,8 @@ const (
 	MethodGatewayRun = "gateway.run"
 	// MethodGatewayCompact 表示通过网关触发一次会话压缩。
 	MethodGatewayCompact = "gateway.compact"
+	// MethodGatewayExecuteSystemTool 表示通过网关触发一次系统工具执行。
+	MethodGatewayExecuteSystemTool = "gateway.executeSystemTool"
 	// MethodGatewayCancel 表示取消当前活跃运行。
 	MethodGatewayCancel = "gateway.cancel"
 	// MethodGatewayListSessions 表示查询会话摘要列表。
@@ -168,6 +170,15 @@ type CompactParams struct {
 	RunID     string `json:"run_id,omitempty"`
 }
 
+// ExecuteSystemToolParams 表示 gateway.executeSystemTool 参数。
+type ExecuteSystemToolParams struct {
+	SessionID string          `json:"session_id,omitempty"`
+	RunID     string          `json:"run_id,omitempty"`
+	Workdir   string          `json:"workdir,omitempty"`
+	ToolName  string          `json:"tool_name"`
+	Arguments json.RawMessage `json:"arguments,omitempty"`
+}
+
 // LoadSessionParams 表示 gateway.loadSession 参数。
 type LoadSessionParams struct {
 	SessionID string `json:"session_id"`
@@ -248,6 +259,17 @@ func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRP
 		normalized.Action = "compact"
 		normalized.SessionID = strings.TrimSpace(params.SessionID)
 		normalized.RunID = strings.TrimSpace(params.RunID)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayExecuteSystemTool:
+		params, parseErr := decodeExecuteSystemToolParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "execute_system_tool"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.RunID = strings.TrimSpace(params.RunID)
+		normalized.Workdir = strings.TrimSpace(params.Workdir)
 		normalized.Payload = params
 		return normalized, nil
 	case MethodGatewayCancel:
@@ -647,6 +669,43 @@ func decodeCompactParams(raw json.RawMessage) (CompactParams, *JSONRPCError) {
 			GatewayCodeMissingRequiredField,
 		)
 	}
+	return params, nil
+}
+
+// decodeExecuteSystemToolParams 对 gateway.executeSystemTool 的 params 执行反序列化与字段校验。
+func decodeExecuteSystemToolParams(raw json.RawMessage) (ExecuteSystemToolParams, *JSONRPCError) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return ExecuteSystemToolParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+
+	var params ExecuteSystemToolParams
+	if err := decodeStrictJSON(trimmed, &params); err != nil {
+		return ExecuteSystemToolParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"invalid params for gateway.executeSystemTool",
+			GatewayCodeInvalidFrame,
+		)
+	}
+
+	params.SessionID = strings.TrimSpace(params.SessionID)
+	params.RunID = strings.TrimSpace(params.RunID)
+	params.Workdir = strings.TrimSpace(params.Workdir)
+	params.ToolName = strings.TrimSpace(params.ToolName)
+	params.Arguments = cloneJSONRawMessage(bytes.TrimSpace(params.Arguments))
+
+	if params.ToolName == "" {
+		return ExecuteSystemToolParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params.tool_name",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+
 	return params, nil
 }
 
