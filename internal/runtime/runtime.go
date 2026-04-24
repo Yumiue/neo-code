@@ -267,10 +267,13 @@ func (s *Service) loadConfigSnapshot(ctx context.Context) (config.Config, error)
 	if s == nil || s.configManager == nil {
 		return config.Config{}, errors.New("runtime: config manager is nil")
 	}
-	if ctx != nil && ctx.Err() != nil {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
 		return s.configManager.Get(), nil
 	}
-	return s.configManager.Load(context.Background())
+	return s.configManager.Load(ctx)
 }
 
 // ListSessions 返回当前会话存储中的所有摘要。

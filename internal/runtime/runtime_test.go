@@ -1855,6 +1855,42 @@ func TestServiceRunReloadsConfigSnapshotBeforeBuildingProvider(t *testing.T) {
 	}
 }
 
+func TestServiceLoadConfigSnapshotUsesContextAndNilFallback(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	service := NewWithFactory(manager, tools.NewRegistry(), newMemoryStore(), nil, nil)
+
+	snapshot, err := service.loadConfigSnapshot(nil)
+	if err != nil {
+		t.Fatalf("loadConfigSnapshot(nil) error = %v", err)
+	}
+	if strings.TrimSpace(snapshot.SelectedProvider) == "" {
+		t.Fatalf("expected selected provider to be loaded, got %+v", snapshot)
+	}
+}
+
+func TestServiceLoadConfigSnapshotUsesCachedConfigWhenContextCanceled(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	service := NewWithFactory(manager, tools.NewRegistry(), newMemoryStore(), nil, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	snapshot, err := service.loadConfigSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("loadConfigSnapshot(canceled) error = %v", err)
+	}
+	if strings.TrimSpace(snapshot.SelectedProvider) == "" {
+		t.Fatalf("expected cached selected provider, got %+v", snapshot)
+	}
+}
+
+func TestServiceLoadConfigSnapshotRejectsNilConfigManager(t *testing.T) {
+	service := &Service{}
+	if _, err := service.loadConfigSnapshot(context.Background()); err == nil || !strings.Contains(err.Error(), "config manager is nil") {
+		t.Fatalf("expected config manager nil error, got %v", err)
+	}
+}
+
 func TestServiceRunWaitsForPermissionResolutionAndContinues(t *testing.T) {
 	t.Parallel()
 
