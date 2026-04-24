@@ -145,11 +145,14 @@ func defaultSilentUpdateCheck(ctx context.Context) {
 			return
 		}
 
-		latestVersion := sanitizeVersionForTerminal(result.LatestVersion)
-		if latestVersion == "" {
+		installableVersion := sanitizeVersionForTerminal(result.InstallableVersion)
+		if installableVersion == "" {
+			installableVersion = sanitizeVersionForTerminal(result.LatestVersion)
+		}
+		if installableVersion == "" {
 			return
 		}
-		setUpdateNotice(fmt.Sprintf("\u53d1\u73b0\u65b0\u7248\u672c: %s\uff0c\u8fd0\u884c neocode update \u5373\u53ef\u5347\u7ea7", latestVersion))
+		setUpdateNotice(fmt.Sprintf("\u53d1\u73b0\u65b0\u7248\u672c: %s\uff0c\u8fd0\u884c neocode update \u5373\u53ef\u5347\u7ea7", installableVersion))
 	}(parentCtx, currentVersion, done)
 }
 

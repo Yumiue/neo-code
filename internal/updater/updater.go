@@ -76,6 +76,8 @@ type probeResult struct {
 	Status               probeStatus
 	Release              releaseView
 	LatestVersion        string
+	InstallableVersion   string
+	LatestInstallable    bool
 	ExpectedPattern      string
 	AvailableAssetsCount int
 	CandidateAssets      []string
@@ -115,10 +117,11 @@ type CheckOptions struct {
 
 // CheckResult 表示静默探测流程返回的版本信息。
 type CheckResult struct {
-	CurrentVersion   string
-	LatestVersion    string
-	HasUpdate        bool
-	ComparableLatest bool
+	CurrentVersion     string
+	LatestVersion      string
+	InstallableVersion string
+	HasUpdate          bool
+	ComparableLatest   bool
 }
 
 // UpdateOptions 描述手动更新命令的输入参数。
@@ -154,18 +157,19 @@ func CheckLatest(ctx context.Context, opts CheckOptions) (CheckResult, error) {
 	}
 
 	result := CheckResult{
-		CurrentVersion: currentVersion,
-		LatestVersion:  strings.TrimSpace(probe.LatestVersion),
+		CurrentVersion:     currentVersion,
+		LatestVersion:      strings.TrimSpace(probe.LatestVersion),
+		InstallableVersion: strings.TrimSpace(probe.InstallableVersion),
 	}
 	if result.LatestVersion == "" {
 		return result, nil
 	}
-	result.ComparableLatest = probe.Status == probeStatusMatched && probe.Release != nil
-	if !result.ComparableLatest {
-		return result, nil
+	result.ComparableLatest = probe.LatestInstallable && probe.Status == probeStatusMatched && probe.Release != nil
+	if result.InstallableVersion == "" && probe.Release != nil {
+		result.InstallableVersion = strings.TrimSpace(probe.Release.Version())
 	}
 
-	if version.IsSemverRelease(currentVersion) {
+	if version.IsSemverRelease(currentVersion) && probe.Release != nil {
 		result.HasUpdate = probe.Release.GreaterThan(currentVersion)
 	}
 	return result, nil
@@ -273,7 +277,8 @@ func (c selfupdateClient) ProbeLatest(
 		return result, nil
 	}
 
-	result.LatestVersion = latestMatched.Version.String()
+	result.InstallableVersion = latestMatched.Version.String()
+	result.LatestInstallable = latestEligible != nil && latestEligible.Version.Equal(latestMatched.Version)
 	result.AvailableAssetsCount = len(latestMatched.Release.GetAssets())
 
 	matchedNames := collectAssetNames(latestMatched.MatchedAssets)
@@ -300,7 +305,7 @@ func (c selfupdateClient) ProbeLatest(
 
 	result.Status = probeStatusMatched
 	result.Release = release
-	result.LatestVersion = strings.TrimSpace(release.Version())
+	result.InstallableVersion = strings.TrimSpace(release.Version())
 	return result, nil
 }
 

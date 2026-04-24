@@ -17,13 +17,14 @@ type versionCommandOptions struct {
 }
 
 type versionCommandResult struct {
-	CurrentVersion    string
-	LatestVersion     string
-	HasUpdate         bool
-	Comparable        bool
-	ComparableLatest  bool
-	IncludePrerelease bool
-	CheckErr          error
+	CurrentVersion     string
+	LatestVersion      string
+	InstallableVersion string
+	HasUpdate          bool
+	Comparable         bool
+	ComparableLatest   bool
+	IncludePrerelease  bool
+	CheckErr           error
 }
 
 var runVersionCommand = defaultVersionCommandRunner
@@ -69,6 +70,7 @@ func defaultVersionCommandRunner(ctx context.Context, options versionCommandOpti
 	}
 
 	result.LatestVersion = strings.TrimSpace(probe.LatestVersion)
+	result.InstallableVersion = strings.TrimSpace(probe.InstallableVersion)
 	result.ComparableLatest = probe.ComparableLatest
 	if result.Comparable {
 		result.HasUpdate = probe.HasUpdate
@@ -93,6 +95,7 @@ func printVersionCommandResult(out io.Writer, result versionCommandResult) {
 
 	latest := displayVersionForTerminal(result.LatestVersion)
 	_, _ = fmt.Fprintf(out, "%s: %s\n", label, latest)
+	installable := displayVersionForTerminal(result.InstallableVersion)
 
 	if !result.Comparable {
 		_, _ = fmt.Fprintln(out, "Comparison skipped: current build is non-semver.")
@@ -103,7 +106,17 @@ func printVersionCommandResult(out io.Writer, result versionCommandResult) {
 		return
 	}
 	if !result.ComparableLatest {
-		_, _ = fmt.Fprintln(out, "Update status: unknown (latest release has no installable asset for current platform).")
+		if result.HasUpdate {
+			if installable != "unknown" {
+				_, _ = fmt.Fprintf(out, "Update available for this platform: run neocode update (target: %s)\n", installable)
+			} else {
+				_, _ = fmt.Fprintln(out, "Update available for this platform: run neocode update")
+			}
+			_, _ = fmt.Fprintln(out, "Remote notice: a newer release exists but is currently not installable on this platform.")
+			return
+		}
+		_, _ = fmt.Fprintln(out, "You are on the latest installable version for this platform.")
+		_, _ = fmt.Fprintln(out, "Remote notice: a newer release exists but is currently not installable on this platform.")
 		return
 	}
 	if result.HasUpdate {

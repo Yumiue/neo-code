@@ -26,11 +26,12 @@ func TestVersionCommandPassesPrereleaseFlag(t *testing.T) {
 	runVersionCommand = func(_ context.Context, options versionCommandOptions) (versionCommandResult, error) {
 		received = options
 		return versionCommandResult{
-			CurrentVersion:   "v1.0.0",
-			LatestVersion:    "v1.0.0",
-			Comparable:       true,
-			HasUpdate:        false,
-			ComparableLatest: true,
+			CurrentVersion:     "v1.0.0",
+			LatestVersion:      "v1.0.0",
+			InstallableVersion: "v1.0.0",
+			Comparable:         true,
+			HasUpdate:          false,
+			ComparableLatest:   true,
 		}, nil
 	}
 
@@ -61,11 +62,12 @@ func TestVersionCommandShowsUpdateAvailable(t *testing.T) {
 	runSilentUpdateCheck = func(context.Context) {}
 	runVersionCommand = func(context.Context, versionCommandOptions) (versionCommandResult, error) {
 		return versionCommandResult{
-			CurrentVersion:   "v1.0.0",
-			LatestVersion:    "v1.2.0",
-			Comparable:       true,
-			HasUpdate:        true,
-			ComparableLatest: true,
+			CurrentVersion:     "v1.0.0",
+			LatestVersion:      "v1.2.0",
+			InstallableVersion: "v1.2.0",
+			Comparable:         true,
+			HasUpdate:          true,
+			ComparableLatest:   true,
 		}, nil
 	}
 
@@ -100,11 +102,12 @@ func TestVersionCommandShowsUpToDate(t *testing.T) {
 	runSilentUpdateCheck = func(context.Context) {}
 	runVersionCommand = func(context.Context, versionCommandOptions) (versionCommandResult, error) {
 		return versionCommandResult{
-			CurrentVersion:   "v1.2.0",
-			LatestVersion:    "v1.2.0",
-			Comparable:       true,
-			HasUpdate:        false,
-			ComparableLatest: true,
+			CurrentVersion:     "v1.2.0",
+			LatestVersion:      "v1.2.0",
+			InstallableVersion: "v1.2.0",
+			Comparable:         true,
+			HasUpdate:          false,
+			ComparableLatest:   true,
 		}, nil
 	}
 
@@ -220,10 +223,11 @@ func TestDefaultVersionCommandRunnerUsesProbeOptions(t *testing.T) {
 		capturedIncludePrerelease = includePrerelease
 		capturedTimeout = timeout
 		return updater.CheckResult{
-			CurrentVersion:   "v1.0.0",
-			LatestVersion:    "v1.1.0",
-			HasUpdate:        true,
-			ComparableLatest: true,
+			CurrentVersion:     "v1.0.0",
+			LatestVersion:      "v1.1.0",
+			InstallableVersion: "v1.1.0",
+			HasUpdate:          true,
+			ComparableLatest:   true,
 		}, nil
 	}
 
@@ -242,6 +246,9 @@ func TestDefaultVersionCommandRunnerUsesProbeOptions(t *testing.T) {
 	}
 	if !result.HasUpdate || result.LatestVersion != "v1.1.0" {
 		t.Fatalf("unexpected result: %+v", result)
+	}
+	if result.InstallableVersion != "v1.1.0" {
+		t.Fatalf("InstallableVersion = %q, want %q", result.InstallableVersion, "v1.1.0")
 	}
 }
 
@@ -274,9 +281,10 @@ func TestDefaultVersionCommandRunnerTrimsLatestVersionAndSkipsNonSemverCompare(t
 	readCurrentVersion = func() string { return "dev" }
 	runReleaseProbe = func(context.Context, string, bool, time.Duration) (updater.CheckResult, error) {
 		return updater.CheckResult{
-			LatestVersion:    "  v1.2.0  ",
-			HasUpdate:        true,
-			ComparableLatest: true,
+			LatestVersion:      "  v1.2.0  ",
+			InstallableVersion: "  v1.2.0  ",
+			HasUpdate:          true,
+			ComparableLatest:   true,
 		}, nil
 	}
 
@@ -286,6 +294,9 @@ func TestDefaultVersionCommandRunnerTrimsLatestVersionAndSkipsNonSemverCompare(t
 	}
 	if result.LatestVersion != "v1.2.0" {
 		t.Fatalf("LatestVersion = %q, want %q", result.LatestVersion, "v1.2.0")
+	}
+	if result.InstallableVersion != "v1.2.0" {
+		t.Fatalf("InstallableVersion = %q, want %q", result.InstallableVersion, "v1.2.0")
 	}
 	if result.HasUpdate {
 		t.Fatalf("HasUpdate = true, want false for non-semver current version")
@@ -325,13 +336,37 @@ func TestPrintVersionCommandResultBranches(t *testing.T) {
 	t.Run("latest exists but no installable asset", func(t *testing.T) {
 		var out bytes.Buffer
 		printVersionCommandResult(&out, versionCommandResult{
-			CurrentVersion:   "v1.0.0",
-			LatestVersion:    "v2.0.0",
-			Comparable:       true,
-			ComparableLatest: false,
+			CurrentVersion:     "v1.0.0",
+			LatestVersion:      "v2.0.0",
+			InstallableVersion: "v1.9.0",
+			Comparable:         true,
+			HasUpdate:          true,
+			ComparableLatest:   false,
 		})
-		if !strings.Contains(out.String(), "Update status: unknown (latest release has no installable asset for current platform).") {
-			t.Fatalf("output = %q, want no-installable-asset message", out.String())
+		text := out.String()
+		if !strings.Contains(text, "Update available for this platform: run neocode update (target: v1.9.0)") {
+			t.Fatalf("output = %q, want installable update guidance", text)
+		}
+		if !strings.Contains(text, "Remote notice: a newer release exists but is currently not installable on this platform.") {
+			t.Fatalf("output = %q, want remote notice", text)
+		}
+	})
+
+	t.Run("latest exists but current already on latest installable", func(t *testing.T) {
+		var out bytes.Buffer
+		printVersionCommandResult(&out, versionCommandResult{
+			CurrentVersion:     "v1.9.0",
+			LatestVersion:      "v2.0.0",
+			InstallableVersion: "v1.9.0",
+			Comparable:         true,
+			ComparableLatest:   false,
+		})
+		text := out.String()
+		if !strings.Contains(text, "You are on the latest installable version for this platform.") {
+			t.Fatalf("output = %q, want latest installable message", text)
+		}
+		if !strings.Contains(text, "Remote notice: a newer release exists but is currently not installable on this platform.") {
+			t.Fatalf("output = %q, want remote notice", text)
 		}
 	})
 }

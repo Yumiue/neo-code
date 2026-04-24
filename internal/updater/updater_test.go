@@ -39,6 +39,8 @@ type fakeClient struct {
 	lastUpdatePath          string
 	probeStatus             probeStatus
 	probeLatestVersion      string
+	probeInstallableVersion string
+	probeLatestInstallable  bool
 	probeExpectedPattern    string
 	probeAvailableAssetSize int
 	probeCandidates         []string
@@ -57,12 +59,18 @@ func (c *fakeClient) ProbeLatest(_ context.Context, _ selfupdate.Repository, tar
 	if latest == "" && c.release != nil {
 		latest = strings.TrimSpace(c.release.Version())
 	}
+	installable := strings.TrimSpace(c.probeInstallableVersion)
+	if installable == "" && c.release != nil {
+		installable = strings.TrimSpace(c.release.Version())
+	}
 
 	if c.probeStatus != 0 {
 		return probeResult{
 			Status:               c.probeStatus,
 			Release:              c.release,
 			LatestVersion:        latest,
+			InstallableVersion:   installable,
+			LatestInstallable:    c.probeLatestInstallable,
 			ExpectedPattern:      expectedPattern,
 			AvailableAssetsCount: c.probeAvailableAssetSize,
 			CandidateAssets:      append([]string(nil), c.probeCandidates...),
@@ -72,6 +80,8 @@ func (c *fakeClient) ProbeLatest(_ context.Context, _ selfupdate.Repository, tar
 		return probeResult{
 			Status:               probeStatusNoCandidate,
 			LatestVersion:        latest,
+			InstallableVersion:   installable,
+			LatestInstallable:    c.probeLatestInstallable,
 			ExpectedPattern:      expectedPattern,
 			AvailableAssetsCount: c.probeAvailableAssetSize,
 			CandidateAssets:      append([]string(nil), c.probeCandidates...),
@@ -82,6 +92,8 @@ func (c *fakeClient) ProbeLatest(_ context.Context, _ selfupdate.Repository, tar
 		Status:               probeStatusMatched,
 		Release:              c.release,
 		LatestVersion:        latest,
+		InstallableVersion:   installable,
+		LatestInstallable:    c.probeLatestInstallable || latest == installable,
 		ExpectedPattern:      expectedPattern,
 		AvailableAssetsCount: c.probeAvailableAssetSize,
 		CandidateAssets:      append([]string(nil), c.probeCandidates...),
@@ -296,6 +308,9 @@ func TestCheckLatest(t *testing.T) {
 	if result.LatestVersion != "v1.2.0" {
 		t.Fatalf("LatestVersion = %q, want %q", result.LatestVersion, "v1.2.0")
 	}
+	if result.InstallableVersion != "v1.2.0" {
+		t.Fatalf("InstallableVersion = %q, want %q", result.InstallableVersion, "v1.2.0")
+	}
 }
 
 func TestCheckLatestErrorBranches(t *testing.T) {
@@ -423,8 +438,16 @@ func TestCheckLatestErrorBranches(t *testing.T) {
 		runtimeGOARCH = "amd64"
 		newClient = func(selfupdate.Config) (updateClient, error) {
 			return &fakeClient{
-				probeStatus:        probeStatusNoCandidate,
-				probeLatestVersion: "v2.0.0",
+				probeStatus:             probeStatusMatched,
+				probeLatestVersion:      "v2.0.0",
+				probeInstallableVersion: "v1.9.0",
+				release: fakeRelease{
+					version: "v1.9.0",
+					greaterFn: func(other string) bool {
+						return other == "v1.0.0"
+					},
+				},
+				found: true,
 			}, nil
 		}
 
@@ -435,8 +458,11 @@ func TestCheckLatestErrorBranches(t *testing.T) {
 		if result.LatestVersion != "v2.0.0" {
 			t.Fatalf("LatestVersion = %q, want %q", result.LatestVersion, "v2.0.0")
 		}
-		if result.HasUpdate {
-			t.Fatalf("HasUpdate = true, want false when latest is not installable")
+		if result.InstallableVersion != "v1.9.0" {
+			t.Fatalf("InstallableVersion = %q, want %q", result.InstallableVersion, "v1.9.0")
+		}
+		if !result.HasUpdate {
+			t.Fatalf("HasUpdate = false, want true when installable version is newer")
 		}
 		if result.ComparableLatest {
 			t.Fatalf("ComparableLatest = true, want false when latest is not installable")
@@ -1140,6 +1166,69 @@ func TestSelfupdateClientProbeLatestNoMatchedAssetReturnsEligibleDiagnostic(t *t
 	}
 	if len(probe.CandidateAssets) != 2 {
 		t.Fatalf("len(CandidateAssets) = %d, want 2", len(probe.CandidateAssets))
+	}
+}
+
+func TestSelfupdateClientProbeLatestKeepsEligibleLatestAndInstallableLatest(t *testing.T) {
+	source := stubSource{
+		releases: []selfupdate.SourceRelease{
+			stubSourceRelease{
+				id:      2,
+				tagName: "v2.0.0",
+				assets: []selfupdate.SourceAsset{
+					stubSourceAsset{id: 20, name: "checksums.txt", size: 1},
+				},
+			},
+			stubSourceRelease{
+				id:      1,
+				tagName: "v1.9.0",
+				assets: []selfupdate.SourceAsset{
+					stubSourceAsset{id: 10, name: "neocode_linux_x86_64.tar.gz", size: 1},
+					stubSourceAsset{id: 11, name: "checksums.txt", size: 1},
+				},
+			},
+		},
+	}
+
+	updater, err := selfupdate.NewUpdater(selfupdate.Config{
+		Source: source,
+		OS:     "linux",
+		Arch:   "x86_64",
+	})
+	if err != nil {
+		t.Fatalf("NewUpdater() error = %v", err)
+	}
+
+	client := selfupdateClient{
+		updater: updater,
+		source:  source,
+		config: selfupdate.Config{
+			Source: source,
+			OS:     "linux",
+			Arch:   "x86_64",
+		},
+	}
+	target := assetTarget{
+		OSToken:   "linux",
+		ArchToken: "x86_64",
+		Ext:       "tar.gz",
+	}
+
+	probe, err := client.ProbeLatest(context.Background(), selfupdate.NewRepositorySlug(repositoryOwner, repositoryName), target)
+	if err != nil {
+		t.Fatalf("ProbeLatest() error = %v", err)
+	}
+	if probe.Status != probeStatusMatched {
+		t.Fatalf("Status = %v, want matched", probe.Status)
+	}
+	if probe.LatestVersion != "2.0.0" {
+		t.Fatalf("LatestVersion = %q, want %q", probe.LatestVersion, "2.0.0")
+	}
+	if probe.InstallableVersion != "1.9.0" {
+		t.Fatalf("InstallableVersion = %q, want %q", probe.InstallableVersion, "1.9.0")
+	}
+	if probe.LatestInstallable {
+		t.Fatalf("LatestInstallable = true, want false")
 	}
 }
 

@@ -1503,9 +1503,10 @@ func TestDefaultSilentUpdateCheckSetsSanitizedNotice(t *testing.T) {
 	checkLatestRelease = func(context.Context, updater.CheckOptions) (updater.CheckResult, error) {
 		close(done)
 		return updater.CheckResult{
-			CurrentVersion: "v0.1.0",
-			LatestVersion:  "\x1b[31mv0.2.1\x1b[0m\t\n\r",
-			HasUpdate:      true,
+			CurrentVersion:     "v0.1.0",
+			LatestVersion:      "\x1b[31mv9.9.9\x1b[0m\t\n\r",
+			InstallableVersion: "\x1b[31mv0.2.1\x1b[0m\t\n\r",
+			HasUpdate:          true,
 		}, nil
 	}
 
