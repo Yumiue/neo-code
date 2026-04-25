@@ -1362,6 +1362,92 @@ func TestSaveCustomProviderManualModelsPersistOptionalFields(t *testing.T) {
 	}
 }
 
+func TestSaveAndLoadCustomProviderPersistsGenerateControls(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	const providerName = "retry-controls-provider"
+	err := SaveCustomProviderWithModels(baseDir, SaveCustomProviderInput{
+		Name:                    providerName,
+		Driver:                  provider.DriverOpenAICompat,
+		BaseURL:                 "https://llm.example.com/v1",
+		APIKeyEnv:               "RETRY_CONTROLS_PROVIDER_API_KEY",
+		ModelSource:             ModelSourceDiscover,
+		DiscoveryEndpointPath:   provider.DiscoveryEndpointPathModels,
+		GenerateMaxRetries:      7,
+		GenerateStartTimeoutSec: 75,
+		GenerateIdleTimeoutSec:  420,
+	})
+	if err != nil {
+		t.Fatalf("SaveCustomProviderWithModels() error = %v", err)
+	}
+
+	cfg, err := loadCustomProvider(filepath.Join(baseDir, providersDirName, providerName))
+	if err != nil {
+		t.Fatalf("loadCustomProvider() error = %v", err)
+	}
+	if cfg.GenerateMaxRetries != 7 {
+		t.Fatalf("expected GenerateMaxRetries=7, got %d", cfg.GenerateMaxRetries)
+	}
+	if cfg.GenerateStartTimeoutSec != 75 {
+		t.Fatalf("expected GenerateStartTimeoutSec=75, got %d", cfg.GenerateStartTimeoutSec)
+	}
+	if cfg.GenerateIdleTimeoutSec != 420 {
+		t.Fatalf("expected GenerateIdleTimeoutSec=420, got %d", cfg.GenerateIdleTimeoutSec)
+	}
+}
+
+func TestSaveCustomProviderOmitsDefaultGenerateControlsWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	const providerName = "omit-default-generate-controls"
+	err := SaveCustomProviderWithModels(baseDir, SaveCustomProviderInput{
+		Name:                  providerName,
+		Driver:                provider.DriverOpenAICompat,
+		BaseURL:               "https://llm.example.com/v1",
+		APIKeyEnv:             "OMIT_DEFAULT_GENERATE_CONTROLS_API_KEY",
+		ModelSource:           ModelSourceDiscover,
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+	})
+	if err != nil {
+		t.Fatalf("SaveCustomProviderWithModels() error = %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(baseDir, providersDirName, providerName, customProviderConfigName))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	content := string(data)
+	if strings.Contains(content, "generate_max_retries") {
+		t.Fatalf("expected generate_max_retries to be omitted, got %q", content)
+	}
+	if strings.Contains(content, "generate_start_timeout_sec") {
+		t.Fatalf("expected generate_start_timeout_sec to be omitted, got %q", content)
+	}
+	if strings.Contains(content, "generate_idle_timeout_sec") {
+		t.Fatalf("expected generate_idle_timeout_sec to be omitted, got %q", content)
+	}
+}
+
+func TestSaveCustomProviderRejectsNegativeGenerateControls(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	err := SaveCustomProviderWithModels(baseDir, SaveCustomProviderInput{
+		Name:                   "invalid-generate-controls",
+		Driver:                 provider.DriverOpenAICompat,
+		BaseURL:                "https://llm.example.com/v1",
+		APIKeyEnv:              "INVALID_GENERATE_CONTROLS_API_KEY",
+		ModelSource:            ModelSourceDiscover,
+		DiscoveryEndpointPath:  provider.DiscoveryEndpointPathModels,
+		GenerateIdleTimeoutSec: -1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "generate_idle_timeout_sec") {
+		t.Fatalf("expected negative generate control to be rejected, got %v", err)
+	}
+}
+
 func TestToCustomProviderModelFiles(t *testing.T) {
 	t.Parallel()
 

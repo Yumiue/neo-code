@@ -3,9 +3,11 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
@@ -20,17 +22,20 @@ const (
 )
 
 type ProviderConfig struct {
-	Name                  string                          `yaml:"name"`
-	Driver                string                          `yaml:"driver"`
-	BaseURL               string                          `yaml:"base_url"`
-	Model                 string                          `yaml:"model"`
-	APIKeyEnv             string                          `yaml:"api_key_env"`
-	ModelSource           string                          `yaml:"-"`
-	ChatAPIMode           string                          `yaml:"-"`
-	ChatEndpointPath      string                          `yaml:"-"`
-	DiscoveryEndpointPath string                          `yaml:"-"`
-	Models                []providertypes.ModelDescriptor `yaml:"-"`
-	Source                ProviderSource                  `yaml:"-"`
+	Name                    string                          `yaml:"name"`
+	Driver                  string                          `yaml:"driver"`
+	BaseURL                 string                          `yaml:"base_url"`
+	Model                   string                          `yaml:"model"`
+	APIKeyEnv               string                          `yaml:"api_key_env"`
+	GenerateMaxRetries      int                             `yaml:"generate_max_retries,omitempty"`
+	GenerateStartTimeoutSec int                             `yaml:"generate_start_timeout_sec,omitempty"`
+	GenerateIdleTimeoutSec  int                             `yaml:"generate_idle_timeout_sec,omitempty"`
+	ModelSource             string                          `yaml:"-"`
+	ChatAPIMode             string                          `yaml:"-"`
+	ChatEndpointPath        string                          `yaml:"-"`
+	DiscoveryEndpointPath   string                          `yaml:"-"`
+	Models                  []providertypes.ModelDescriptor `yaml:"-"`
+	Source                  ProviderSource                  `yaml:"-"`
 }
 
 type ResolvedProviderConfig struct {
@@ -79,6 +84,15 @@ func (p ProviderConfig) Validate() error {
 	if strings.TrimSpace(p.APIKeyEnv) == "" {
 		return fmt.Errorf("provider %q api_key_env is empty", p.Name)
 	}
+	if err := validateOptionalNonNegativeGenerateControl("generate_max_retries", p.GenerateMaxRetries); err != nil {
+		return fmt.Errorf("provider %q: %w", p.Name, err)
+	}
+	if err := validateOptionalGenerateDurationSeconds("generate_start_timeout_sec", p.GenerateStartTimeoutSec); err != nil {
+		return fmt.Errorf("provider %q: %w", p.Name, err)
+	}
+	if err := validateOptionalGenerateDurationSeconds("generate_idle_timeout_sec", p.GenerateIdleTimeoutSec); err != nil {
+		return fmt.Errorf("provider %q: %w", p.Name, err)
+	}
 
 	normalizedModelSource := NormalizeModelSource(p.ModelSource)
 	if normalizedModelSource == "" {
@@ -104,6 +118,25 @@ func (p ProviderConfig) Validate() error {
 	}
 	if _, err := p.Identity(); err != nil {
 		return fmt.Errorf("provider %q: %w", p.Name, err)
+	}
+	return nil
+}
+
+// validateOptionalNonNegativeGenerateControl 校验可选的整型生成控制字段，拒绝会被运行时静默吞掉的负数输入。
+func validateOptionalNonNegativeGenerateControl(field string, value int) error {
+	if value < 0 {
+		return fmt.Errorf("%s must be greater than or equal to 0", field)
+	}
+	return nil
+}
+
+// validateOptionalGenerateDurationSeconds 校验秒级超时字段，避免负值和 duration 溢出在运行时被悄悄回退为默认值。
+func validateOptionalGenerateDurationSeconds(field string, value int) error {
+	if err := validateOptionalNonNegativeGenerateControl(field, value); err != nil {
+		return err
+	}
+	if int64(value) > math.MaxInt64/int64(time.Second) {
+		return fmt.Errorf("%s exceeds supported range", field)
 	}
 	return nil
 }
@@ -239,6 +272,9 @@ func (p ResolvedProviderConfig) ToRuntimeConfig() (provider.RuntimeConfig, error
 		ChatAPIMode:           chatAPIMode,
 		ChatEndpointPath:      chatEndpointPath,
 		DiscoveryEndpointPath: discoveryEndpointPath,
+		GenerateMaxRetries:    provider.NormalizeGenerateMaxRetries(p.GenerateMaxRetries),
+		GenerateStartTimeout:  provider.NormalizeGenerateStartTimeout(time.Duration(p.GenerateStartTimeoutSec) * time.Second),
+		GenerateIdleTimeout:   provider.NormalizeGenerateIdleTimeout(time.Duration(p.GenerateIdleTimeoutSec) * time.Second),
 	}, nil
 }
 

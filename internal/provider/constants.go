@@ -2,7 +2,7 @@ package provider
 
 import "time"
 
-// Driver 与 OpenAI-compatible 协议常量用于在 config/provider 间共享稳定枚举值，避免字面量漂移。
+// Driver 是 config/provider 间共享的稳定枚举，避免字面量分支漂移。
 const (
 	DriverOpenAICompat = "openaicompat"
 	DriverGemini       = "gemini"
@@ -11,5 +11,41 @@ const (
 	DiscoveryEndpointPathModels = "/models"
 )
 
-// DefaultSDKRequestTimeout 定义 provider 层对外部模型 SDK 请求的统一超时，避免流式请求无限悬挂。
-const DefaultSDKRequestTimeout = 10 * time.Minute
+const (
+	// DefaultGenerateMaxRetries 定义生成链路默认额外重试次数，不含首次尝试。
+	DefaultGenerateMaxRetries = 5
+	// DefaultGenerateStartTimeout 定义生成链路等待首个有效 payload 的默认窗口。
+	DefaultGenerateStartTimeout = 60 * time.Second
+	// DefaultGenerateIdleTimeout 定义首包后默认的流空闲超时窗口。
+	DefaultGenerateIdleTimeout = 5 * time.Minute
+	// DefaultGenerateRetryBaseWait 定义生成链路重试退避的基础等待时长。
+	DefaultGenerateRetryBaseWait = 1 * time.Second
+	// DefaultGenerateRetryMaxWait 定义生成链路重试退避的最大等待时长。
+	DefaultGenerateRetryMaxWait = 5 * time.Second
+	// DefaultSDKRequestTimeout 定义非生成链路访问外部模型 SDK 的统一保底超时。
+	DefaultSDKRequestTimeout = 10 * time.Minute
+)
+
+// NormalizeGenerateMaxRetries 归一化生成链路额外重试次数，非正值回退到默认值。
+func NormalizeGenerateMaxRetries(value int) int {
+	if value <= 0 {
+		return DefaultGenerateMaxRetries
+	}
+	return value
+}
+
+// NormalizeGenerateStartTimeout 归一化生成链路首包超时，非正值回退到默认值。
+func NormalizeGenerateStartTimeout(value time.Duration) time.Duration {
+	if value <= 0 {
+		return DefaultGenerateStartTimeout
+	}
+	return value
+}
+
+// NormalizeGenerateIdleTimeout 归一化生成链路空闲超时，非正值回退到默认值。
+func NormalizeGenerateIdleTimeout(value time.Duration) time.Duration {
+	if value <= 0 {
+		return DefaultGenerateIdleTimeout
+	}
+	return value
+}
