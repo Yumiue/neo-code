@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/genai"
+
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 )
@@ -493,6 +495,222 @@ func TestNormalizeGenerateErrorMapsNetworkTimeouts(t *testing.T) {
 	err = normalizeGenerateError(net.UnknownNetworkError("dns failure"))
 	if !errors.As(err, &providerErr) || providerErr.Code != provider.ErrorCodeNetwork {
 		t.Fatalf("expected network provider error, got %v", err)
+	}
+}
+
+func TestProviderGenerateReturnsRetryWaitError(t *testing.T) {
+	t.Parallel()
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		http.Error(w, "temporary", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	p, err := New(provider.RuntimeConfig{
+		Driver:         provider.DriverGemini,
+		BaseURL:        server.URL,
+		DefaultModel:   "gemini-2.5-flash",
+		APIKeyEnv:      "GEMINI_TEST_KEY",
+		APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	sentinel := errors.New("retry wait failed")
+	p.retryBackoff = func(attempt int) time.Duration {
+		_ = attempt
+		return 0
+	}
+	p.retryWait = func(ctx context.Context, wait time.Duration) error {
+		_ = ctx
+		_ = wait
+		return sentinel
+	}
+
+	events := make(chan providertypes.StreamEvent, 8)
+	err = p.Generate(context.Background(), providertypes.GenerateRequest{
+		Messages: []providertypes.Message{{
+			Role:  providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")},
+		}},
+	}, events)
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("expected retry wait error, got %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("expected one request before retry wait failure, got %d", requests)
+	}
+}
+
+func TestProviderGenerateReturnsEmptyModelForPreparedRequest(t *testing.T) {
+	t.Parallel()
+
+	p, err := New(provider.RuntimeConfig{
+		Driver:         provider.DriverGemini,
+		BaseURL:        "https://generativelanguage.googleapis.com/v1beta",
+		DefaultModel:   "gemini-2.5-flash",
+		APIKeyEnv:      "GEMINI_TEST_KEY",
+		APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	req := providertypes.GenerateRequest{
+		Messages: []providertypes.Message{{
+			Role:  providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")},
+		}},
+	}
+	signature := provider.BuildGenerateRequestSignature(req)
+	p.storePreparedRequest(signature, "   ", nil, nil)
+
+	events := make(chan providertypes.StreamEvent, 4)
+	err = p.Generate(context.Background(), req, events)
+	if err == nil || !strings.Contains(err.Error(), "model is empty") {
+		t.Fatalf("expected model empty error, got %v", err)
+	}
+}
+
+func TestGenerateHelpers(t *testing.T) {
+	t.Parallel()
+
+	t.Run("normalize_model", func(t *testing.T) {
+		t.Parallel()
+		if got := normalizeGeminiModelName(" models/gemini-2.5-pro "); got != "gemini-2.5-pro" {
+			t.Fatalf("normalizeGeminiModelName() = %q", got)
+		}
+		if got := normalizeGeminiModelName("  "); got != "" {
+			t.Fatalf("normalizeGeminiModelName() = %q, want empty", got)
+		}
+	})
+
+	t.Run("encode_arguments", func(t *testing.T) {
+		t.Parallel()
+		encoded, err := encodeArguments(nil)
+		if err != nil || encoded != "{}" {
+			t.Fatalf("encodeArguments(nil) = %q, %v", encoded, err)
+		}
+		_, err = encodeArguments(map[string]any{"bad": make(chan int)})
+		if err == nil || !strings.Contains(err.Error(), "encode function args") {
+			t.Fatalf("expected encode error, got %v", err)
+		}
+	})
+
+	t.Run("retryable_error", func(t *testing.T) {
+		t.Parallel()
+		if isRetryableGenerateError(nil) {
+			t.Fatal("nil should not be retryable")
+		}
+		if isRetryableGenerateError(errors.New("plain")) {
+			t.Fatal("plain error should not be retryable")
+		}
+		if !isRetryableGenerateError(provider.NewNetworkProviderError("temporary")) {
+			t.Fatal("network provider error should be retryable")
+		}
+	})
+
+	t.Run("timeout_error", func(t *testing.T) {
+		t.Parallel()
+		if !isTimeoutGenerateError(context.DeadlineExceeded) {
+			t.Fatal("context deadline should be timeout")
+		}
+		if isTimeoutGenerateError(errors.New("plain")) {
+			t.Fatal("plain error should not be timeout")
+		}
+	})
+}
+
+func TestRetryBackoffAndWait(t *testing.T) {
+	t.Parallel()
+
+	if wait := generateRetryBackoff(0); wait != 0 {
+		t.Fatalf("attempt 0 backoff = %v, want 0", wait)
+	}
+
+	for attempt := 1; attempt <= 6; attempt++ {
+		wait := generateRetryBackoff(attempt)
+		if wait < 0 {
+			t.Fatalf("attempt %d backoff should be non-negative, got %v", attempt, wait)
+		}
+		if wait > generateRetryMaxWait {
+			t.Fatalf("attempt %d backoff should be <= %v, got %v", attempt, generateRetryMaxWait, wait)
+		}
+	}
+
+	if err := waitForRetry(context.Background(), 0); err != nil {
+		t.Fatalf("waitForRetry(0) error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := waitForRetry(ctx, time.Millisecond); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context canceled, got %v", err)
+	}
+	if err := waitForRetry(context.Background(), time.Millisecond); err != nil {
+		t.Fatalf("waitForRetry(timeout) error = %v", err)
+	}
+}
+
+func TestMapGeminiSDKError(t *testing.T) {
+	t.Parallel()
+
+	if err := mapGeminiSDKError(errors.New("plain")); err != nil {
+		t.Fatalf("plain error should not map, got %v", err)
+	}
+
+	cases := []struct {
+		name       string
+		err        error
+		wantCode   provider.ProviderErrorCode
+		wantSubstr string
+	}{
+		{
+			name:       "status from name unauthenticated",
+			err:        genai.APIError{Status: "UNAUTHENTICATED", Message: "bad token"},
+			wantCode:   provider.ErrorCodeAuthFailed,
+			wantSubstr: "bad token",
+		},
+		{
+			name:       "bad request api key heuristic",
+			err:        genai.APIError{Code: http.StatusBadRequest, Message: "x-goog-api-key invalid"},
+			wantCode:   provider.ErrorCodeAuthFailed,
+			wantSubstr: "x-goog-api-key invalid",
+		},
+		{
+			name:       "bad request quota heuristic",
+			err:        &genai.APIError{Code: http.StatusBadRequest, Message: "RESOURCE_EXHAUSTED quota"},
+			wantCode:   provider.ErrorCodeRateLimit,
+			wantSubstr: "RESOURCE_EXHAUSTED quota",
+		},
+		{
+			name:       "permission denied",
+			err:        genai.APIError{Status: "PERMISSION_DENIED", Message: "forbidden"},
+			wantCode:   provider.ErrorCodeForbidden,
+			wantSubstr: "forbidden",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := mapGeminiSDKError(tc.err)
+			if err == nil {
+				t.Fatal("expected mapped error")
+			}
+			var providerErr *provider.ProviderError
+			if !errors.As(err, &providerErr) {
+				t.Fatalf("expected provider error, got %T %v", err, err)
+			}
+			if providerErr.Code != tc.wantCode {
+				t.Fatalf("provider code = %q, want %q", providerErr.Code, tc.wantCode)
+			}
+			if !strings.Contains(err.Error(), tc.wantSubstr) {
+				t.Fatalf("mapped error %q does not contain %q", err.Error(), tc.wantSubstr)
+			}
+		})
 	}
 }
 
