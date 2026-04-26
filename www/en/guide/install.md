@@ -36,7 +36,7 @@ go run ./cmd/neocode
 
 ## 3. Set API key
 
-NeoCode reads API keys from environment variables — they are never written to config files.
+NeoCode reads API keys from environment variables and never writes them to config files.
 
 macOS / Linux:
 
@@ -66,9 +66,8 @@ Other providers:
 neocode
 ```
 
-You'll see the TUI interface. Type at the bottom to start a conversation.
-
-To specify a workspace:
+You will enter the TUI. Type in the input box at the bottom to start a conversation.
+To open a specific workspace:
 
 ```bash
 neocode --workdir /path/to/your/project
@@ -76,7 +75,7 @@ neocode --workdir /path/to/your/project
 
 ## 5. First conversation
 
-Not sure what to ask? Try these:
+Need a starting prompt? Try:
 
 ```text
 Read the current project directory structure and give a module summary
@@ -86,19 +85,20 @@ Read the current project directory structure and give a module summary
 Find the tool result injection logic in internal/runtime
 ```
 
-The agent will automatically use file reading and search tools. When it requests file writes or command execution, the TUI will prompt for your approval.
+The agent will use file reading and search tools automatically. When it needs to write files or run commands, the TUI will ask for approval.
 
-## 6. Command cheat sheet
+## 6. Common `/` commands
 
-Inside the TUI, type `/` commands to perform operations:
+Inside the TUI, use `/` commands for common actions:
 
 | Command | Action |
 |---|---|
 | `/help` | Show all commands |
 | `/provider` | Switch provider |
+| `/provider add` | Add a custom provider |
 | `/model` | Switch model |
-| `/status` | Show current status |
 | `/compact` | Compress long session context |
+| `/clear` | Clear the current draft |
 | `/cwd [path]` | View/switch workspace |
 | `/session` | Switch session |
 | `/memo` | View memory index |
