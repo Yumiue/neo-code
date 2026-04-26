@@ -1,6 +1,9 @@
 package provider
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestNormalizeGenerateMaxRetries(t *testing.T) {
 	t.Parallel()
@@ -24,5 +27,35 @@ func TestNormalizeGenerateMaxRetries(t *testing.T) {
 				t.Fatalf("NormalizeGenerateMaxRetries(%d) = %d, want %d", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestNormalizeGenerateStartTimeout(t *testing.T) {
+	t.Parallel()
+
+	if got := NormalizeGenerateStartTimeout(0); got != DefaultGenerateStartTimeout {
+		t.Fatalf("NormalizeGenerateStartTimeout(0) = %s, want %s", got, DefaultGenerateStartTimeout)
+	}
+	if got := NormalizeGenerateStartTimeout(-time.Second); got != DefaultGenerateStartTimeout {
+		t.Fatalf("NormalizeGenerateStartTimeout(-1s) = %s, want %s", got, DefaultGenerateStartTimeout)
+	}
+	want := 3 * time.Second
+	if got := NormalizeGenerateStartTimeout(want); got != want {
+		t.Fatalf("NormalizeGenerateStartTimeout(3s) = %s, want %s", got, want)
+	}
+}
+
+func TestNormalizeGenerateIdleTimeout(t *testing.T) {
+	t.Parallel()
+
+	if got := NormalizeGenerateIdleTimeout(0); got != DefaultGenerateIdleTimeout {
+		t.Fatalf("NormalizeGenerateIdleTimeout(0) = %s, want %s", got, DefaultGenerateIdleTimeout)
+	}
+	if got := NormalizeGenerateIdleTimeout(-time.Second); got != DefaultGenerateIdleTimeout {
+		t.Fatalf("NormalizeGenerateIdleTimeout(-1s) = %s, want %s", got, DefaultGenerateIdleTimeout)
+	}
+	want := 4 * time.Second
+	if got := NormalizeGenerateIdleTimeout(want); got != want {
+		t.Fatalf("NormalizeGenerateIdleTimeout(4s) = %s, want %s", got, want)
 	}
 }
