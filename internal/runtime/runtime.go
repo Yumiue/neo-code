@@ -301,7 +301,7 @@ func (s *Service) CreateSession(ctx context.Context, id string) (agentsession.Se
 	}
 	sessionID := strings.TrimSpace(id)
 	if sessionID == "" {
-		return agentsession.Session{}, errors.New("runtime: session id is empty")
+		sessionID = agentsession.NewID("session")
 	}
 	defaultWorkdir := ""
 	if s.configManager != nil {

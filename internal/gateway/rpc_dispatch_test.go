@@ -14,6 +14,8 @@ import (
 type rpcRunCaptureRuntimeStub struct {
 	runInput            RunInput
 	runCh               chan RunInput
+	createSessionID     string
+	createSessionFn     func(ctx context.Context, input CreateSessionInput) (string, error)
 	executeSystemToolIn ExecuteSystemToolInput
 	executeSystemToolFn func(ctx context.Context, input ExecuteSystemToolInput) (tools.ToolResult, error)
 	activateSkillFn     func(ctx context.Context, input SessionSkillMutationInput) error
@@ -101,6 +103,14 @@ func (s *rpcRunCaptureRuntimeStub) LoadSession(ctx context.Context, input LoadSe
 		return s.loadSessionFn(ctx, input)
 	}
 	return Session{}, nil
+}
+
+func (s *rpcRunCaptureRuntimeStub) CreateSession(ctx context.Context, input CreateSessionInput) (string, error) {
+	s.createSessionID = strings.TrimSpace(input.SessionID)
+	if s.createSessionFn != nil {
+		return s.createSessionFn(ctx, input)
+	}
+	return s.createSessionID, nil
 }
 
 func TestDispatchRPCRequestResultEncodeError(t *testing.T) {

@@ -119,8 +119,8 @@ func handleBindStreamFrame(ctx context.Context, frame MessageFrame) MessageFrame
 	}
 }
 
-// handleWakeOpenURLFrame 处理 wake.openUrl 请求。
-func handleWakeOpenURLFrame(_ context.Context, frame MessageFrame) MessageFrame {
+// handleWakeOpenURLFrame 处理 wake.openUrl 请求，并在 run 场景下串联 runtime.run。
+func handleWakeOpenURLFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
 	intent, err := decodeWakeIntent(frame.Payload)
 	if err != nil {
 		return errorFrame(frame, NewFrameError(ErrorCodeInvalidFrame, "invalid wake payload"))
@@ -130,9 +130,37 @@ func handleWakeOpenURLFrame(_ context.Context, frame MessageFrame) MessageFrame 
 	if wakeErr != nil {
 		return errorFrame(frame, toFrameError(wakeErr))
 	}
-	sessionID := intent.SessionID
-	if strings.TrimSpace(sessionID) == "" {
-		sessionID = strings.TrimSpace(frame.SessionID)
+	sessionID := strings.TrimSpace(intent.SessionID)
+	if strings.EqualFold(strings.TrimSpace(intent.Action), protocol.WakeActionRun) {
+		if runtimePort == nil {
+			return runtimePortUnavailableFrame(frame)
+		}
+		subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+		if subjectErr != nil {
+			return errorFrame(frame, subjectErr)
+		}
+		createdSessionID, createErr := runtimePort.CreateSession(ctx, CreateSessionInput{
+			SubjectID: subjectID,
+			SessionID: sessionID,
+		})
+		if createErr != nil {
+			return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "failed to create wake session"))
+		}
+		sessionID = strings.TrimSpace(createdSessionID)
+		runResponse := handleRunFrame(detachWakeRunContext(ctx), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionRun,
+			RequestID: strings.TrimSpace(frame.RequestID),
+			SessionID: sessionID,
+			Workdir:   strings.TrimSpace(intent.Workdir),
+			InputText: strings.TrimSpace(intent.Params["prompt"]),
+		}, runtimePort)
+		if runResponse.Type == FrameTypeError {
+			if runResponse.Error != nil {
+				return errorFrame(frame, runResponse.Error)
+			}
+			return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "wake run failed"))
+		}
 	}
 
 	return MessageFrame{
@@ -142,6 +170,14 @@ func handleWakeOpenURLFrame(_ context.Context, frame MessageFrame) MessageFrame 
 		SessionID: sessionID,
 		Payload:   result,
 	}
+}
+
+// detachWakeRunContext 为 wake.run 创建脱离连接取消信号的上下文，避免短连接提前中断后台 run。
+func detachWakeRunContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return context.WithoutCancel(ctx)
 }
 
 // handleRunFrame 处理 gateway.run，采用“受理即返回”的异步执行模型。

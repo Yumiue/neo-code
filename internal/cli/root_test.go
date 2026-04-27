@@ -38,12 +38,15 @@ func TestNewRootCommandPassesWorkdirFlagToLauncher(t *testing.T) {
 	}
 
 	cmd := NewRootCommand()
-	cmd.SetArgs([]string{"--workdir", `D:\项目\中文目录`})
+	cmd.SetArgs([]string{"--workdir", `D:\项目\中文目录`, "--session", "session-flag"})
 	if err := cmd.ExecuteContext(context.Background()); err != nil {
 		t.Fatalf("ExecuteContext() error = %v", err)
 	}
 	if captured.Workdir != `D:\项目\中文目录` {
 		t.Fatalf("expected workdir to be forwarded, got %q", captured.Workdir)
+	}
+	if captured.SessionID != "session-flag" {
+		t.Fatalf("expected session id to be forwarded, got %q", captured.SessionID)
 	}
 }
 
@@ -64,6 +67,9 @@ func TestNewRootCommandAllowsEmptyWorkdir(t *testing.T) {
 	}
 	if captured.Workdir != "" {
 		t.Fatalf("expected empty workdir override, got %q", captured.Workdir)
+	}
+	if captured.SessionID != "" {
+		t.Fatalf("expected empty session override, got %q", captured.SessionID)
 	}
 }
 
@@ -100,13 +106,16 @@ func TestExecuteUsesOSArgs(t *testing.T) {
 		captured = opts
 		return nil
 	}
-	os.Args = []string{"neocode", "--workdir", `D:\项目\中文目录`}
+	os.Args = []string{"neocode", "--workdir", `D:\项目\中文目录`, "--session", "session-execute"}
 
 	if err := Execute(context.Background()); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	if captured.Workdir != `D:\项目\中文目录` {
 		t.Fatalf("expected Execute to forward workdir, got %q", captured.Workdir)
+	}
+	if captured.SessionID != "session-execute" {
+		t.Fatalf("expected Execute to forward session id, got %q", captured.SessionID)
 	}
 }
 
@@ -1105,6 +1114,64 @@ func TestURLDispatchSubcommandDefaultRunnerSuccess(t *testing.T) {
 	}
 }
 
+func TestURLDispatchSubcommandDefaultRunnerExitZeroWhenTerminalLaunched(t *testing.T) {
+	originalRunner := runURLDispatchCommand
+	originalDispatch := dispatchURLThroughIPC
+	originalExitProcess := exitProcess
+	originalPreload := runGlobalPreload
+	originalStdout := os.Stdout
+	t.Cleanup(func() { runURLDispatchCommand = originalRunner })
+	t.Cleanup(func() { dispatchURLThroughIPC = originalDispatch })
+	t.Cleanup(func() { exitProcess = originalExitProcess })
+	t.Cleanup(func() { runGlobalPreload = originalPreload })
+	t.Cleanup(func() { os.Stdout = originalStdout })
+	runGlobalPreload = func(context.Context) error { return nil }
+
+	runURLDispatchCommand = defaultURLDispatchCommandRunner
+	dispatchURLThroughIPC = func(context.Context, urlscheme.DispatchRequest) (urlscheme.DispatchResult, error) {
+		return urlscheme.DispatchResult{
+			ListenAddress: "/tmp/gateway.sock",
+			Response: gateway.MessageFrame{
+				Type:      gateway.FrameTypeAck,
+				Action:    gateway.FrameActionWakeOpenURL,
+				RequestID: "wake-run-1",
+				SessionID: "session-run-1",
+				Payload: map[string]any{
+					"message": "wake intent accepted",
+					"action":  "run",
+				},
+			},
+			TerminalLaunched: true,
+		}, nil
+	}
+
+	exitCode := -1
+	exitProcess = func(code int) {
+		exitCode = code
+	}
+
+	stdoutReader, stdoutWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create stdout pipe: %v", err)
+	}
+	t.Cleanup(func() { _ = stdoutReader.Close() })
+	os.Stdout = stdoutWriter
+
+	command := NewRootCommand()
+	command.SetArgs([]string{"url-dispatch", "--url", "neocode://run?prompt=hello"})
+	if err := command.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
+	}
+
+	_ = stdoutWriter.Close()
+	if _, err := io.ReadAll(stdoutReader); err != nil {
+		t.Fatalf("read stdout: %v", err)
+	}
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want %d", exitCode, 0)
+	}
+}
+
 func TestURLDispatchSubcommandDefaultRunnerPassesAuthToken(t *testing.T) {
 	originalRunner := runURLDispatchCommand
 	originalDispatch := dispatchURLThroughIPC
@@ -1698,6 +1765,10 @@ func (stubRuntimePort) ListSessions(context.Context) ([]gateway.SessionSummary, 
 
 func (stubRuntimePort) LoadSession(context.Context, gateway.LoadSessionInput) (gateway.Session, error) {
 	return gateway.Session{}, nil
+}
+
+func (stubRuntimePort) CreateSession(context.Context, gateway.CreateSessionInput) (string, error) {
+	return "", nil
 }
 
 func (s *stubGatewayServer) ListenAddress() string {

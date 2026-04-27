@@ -16,6 +16,7 @@ import (
 
 type bootstrapRuntimeStub struct {
 	runFn               func(ctx context.Context, input RunInput) error
+	createSessionFn     func(ctx context.Context, input CreateSessionInput) (string, error)
 	compactFn           func(ctx context.Context, input CompactInput) (CompactResult, error)
 	executeSystemToolFn func(ctx context.Context, input ExecuteSystemToolInput) (tools.ToolResult, error)
 	activateSkillFn     func(ctx context.Context, input SessionSkillMutationInput) error
@@ -122,6 +123,13 @@ func (s *bootstrapRuntimeStub) LoadSession(ctx context.Context, input LoadSessio
 	return Session{}, nil
 }
 
+func (s *bootstrapRuntimeStub) CreateSession(ctx context.Context, input CreateSessionInput) (string, error) {
+	if s != nil && s.createSessionFn != nil {
+		return s.createSessionFn(ctx, input)
+	}
+	return strings.TrimSpace(input.SessionID), nil
+}
+
 func TestDispatchRequestFramePing(t *testing.T) {
 	response := dispatchRequestFrame(context.Background(), MessageFrame{
 		Type:      FrameTypeRequest,
@@ -192,6 +200,159 @@ func TestDispatchRequestFrameWakeOpenURLMissingPath(t *testing.T) {
 	}
 	if response.Error == nil || response.Error.Code != ErrorCodeMissingRequiredField.String() {
 		t.Fatalf("error = %#v, want code %q", response.Error, ErrorCodeMissingRequiredField.String())
+	}
+}
+
+func TestDispatchRequestFrameWakeOpenURLRunSuccess(t *testing.T) {
+	runInputs := make(chan RunInput, 1)
+	createInputs := make(chan CreateSessionInput, 1)
+	stub := &bootstrapRuntimeStub{
+		createSessionFn: func(_ context.Context, input CreateSessionInput) (string, error) {
+			createInputs <- input
+			return "session-created-by-runtime", nil
+		},
+		runFn: func(_ context.Context, input RunInput) error {
+			runInputs <- input
+			return nil
+		},
+	}
+
+	response := dispatchRequestFrame(context.Background(), MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionWakeOpenURL,
+		RequestID: "req-wake-run",
+		Payload: map[string]any{
+			"action": "run",
+			"params": map[string]string{
+				"prompt": "写一个简单的HTTP服务器",
+			},
+		},
+	}, stub)
+
+	if response.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+	}
+	if response.Action != FrameActionWakeOpenURL {
+		t.Fatalf("response action = %q, want %q", response.Action, FrameActionWakeOpenURL)
+	}
+	if response.SessionID != "session-created-by-runtime" {
+		t.Fatalf("response session_id = %q, want %q", response.SessionID, "session-created-by-runtime")
+	}
+
+	select {
+	case createInput := <-createInputs:
+		if createInput.SubjectID != defaultLocalSubjectID {
+			t.Fatalf("create session subject_id = %q, want %q", createInput.SubjectID, defaultLocalSubjectID)
+		}
+		if createInput.SessionID != "" {
+			t.Fatalf("create session input session_id = %q, want empty", createInput.SessionID)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected wake.run to create session before run")
+	}
+
+	select {
+	case input := <-runInputs:
+		if input.SessionID != "session-created-by-runtime" {
+			t.Fatalf("runtime session_id = %q, want %q", input.SessionID, "session-created-by-runtime")
+		}
+		if input.InputText != "写一个简单的HTTP服务器" {
+			t.Fatalf("runtime input_text = %q, want %q", input.InputText, "写一个简单的HTTP服务器")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected wake.run to dispatch runtime.Run asynchronously")
+	}
+}
+
+func TestDispatchRequestFrameWakeOpenURLRunDetachesCanceledParentContext(t *testing.T) {
+	runContextErrors := make(chan error, 1)
+	stub := &bootstrapRuntimeStub{
+		createSessionFn: func(_ context.Context, _ CreateSessionInput) (string, error) {
+			return "session-detached-run", nil
+		},
+		runFn: func(ctx context.Context, _ RunInput) error {
+			runContextErrors <- ctx.Err()
+			return nil
+		},
+	}
+
+	parentCtx, cancelParent := context.WithCancel(context.Background())
+	cancelParent()
+
+	response := dispatchRequestFrame(parentCtx, MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionWakeOpenURL,
+		RequestID: "req-wake-run-canceled-parent",
+		Payload: map[string]any{
+			"action": "run",
+			"params": map[string]string{
+				"prompt": "echo hello",
+			},
+		},
+	}, stub)
+
+	if response.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+	}
+
+	select {
+	case runErr := <-runContextErrors:
+		if runErr != nil {
+			t.Fatalf("runtime run context should stay active, got %v", runErr)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected wake.run to invoke runtime.Run")
+	}
+}
+
+func TestDispatchRequestFrameWakeOpenURLRunCreateSessionFailed(t *testing.T) {
+	stub := &bootstrapRuntimeStub{
+		createSessionFn: func(_ context.Context, _ CreateSessionInput) (string, error) {
+			return "", errors.New("create failed")
+		},
+	}
+
+	response := dispatchRequestFrame(context.Background(), MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionWakeOpenURL,
+		RequestID: "req-wake-run-create-failed",
+		Payload: map[string]any{
+			"action": "run",
+			"params": map[string]string{
+				"prompt": "hello",
+			},
+		},
+	}, stub)
+
+	if response.Type != FrameTypeError {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+	}
+	if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+		t.Fatalf("error = %#v, want code %q", response.Error, ErrorCodeInternalError.String())
+	}
+	if response.Error.Message != "failed to create wake session" {
+		t.Fatalf("error message = %q, want %q", response.Error.Message, "failed to create wake session")
+	}
+}
+
+func TestDispatchRequestFrameWakeOpenURLRunRequiresRuntimePort(t *testing.T) {
+	response := dispatchRequestFrame(context.Background(), MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionWakeOpenURL,
+		RequestID: "req-wake-run-no-runtime",
+		Payload: map[string]any{
+			"action": "run",
+			"params": map[string]string{
+				"prompt": "hello",
+			},
+		},
+	}, nil)
+
+	if response.Type != FrameTypeError {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+	}
+	if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+		t.Fatalf("error = %#v, want code %q", response.Error, ErrorCodeInternalError.String())
 	}
 }
 
@@ -1444,6 +1605,19 @@ func TestDeriveRuntimeExecutionContextBranches(t *testing.T) {
 	otherCtx := WithRequestSource(context.Background(), RequestSourceIPC)
 	if got := deriveRuntimeExecutionContext(otherCtx); got != otherCtx {
 		t.Fatal("non-http context should be returned as-is")
+	}
+}
+
+func TestDetachWakeRunContextBranches(t *testing.T) {
+	if got := detachWakeRunContext(nil); got == nil {
+		t.Fatal("nil input should return non-nil context")
+	}
+
+	parentCtx, cancelParent := context.WithCancel(context.Background())
+	detached := detachWakeRunContext(parentCtx)
+	cancelParent()
+	if detached.Err() != nil {
+		t.Fatalf("detached context should ignore parent cancel, got %v", detached.Err())
 	}
 }
 
