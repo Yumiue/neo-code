@@ -117,7 +117,6 @@ neocode --workdir /path/to/your/project
 /provider             Switch provider
 /model                Switch model
 /compact              Compact current session context
-/cwd [path]           Show or change workspace
 /memo                 Show memory
 /remember <text>      Save memory
 /skills               List available skills

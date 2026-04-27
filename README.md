@@ -117,7 +117,6 @@ neocode --workdir /path/to/your/project
 /provider             切换 Provider
 /model                切换模型
 /compact              压缩当前会话上下文
-/cwd [path]           查看或切换工作区
 /memo                 查看记忆
 /remember <text>      保存记忆
 /skills               查看可用 skills
