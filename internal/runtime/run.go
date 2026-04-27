@@ -168,14 +168,18 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			}
 			switch decision.Action {
 			case controlplane.TurnBudgetActionCompact:
-				if _, err := s.applyCompactForState(
+				applied, err := s.applyCompactForState(
 					ctx,
 					&state,
 					snapshot.Config,
 					contextcompact.ModeProactive,
 					compactErrorBestEffort,
-				); err != nil {
+				)
+				if err != nil {
 					return s.handleRunError(err)
+				}
+				if !applied {
+					state.compactCount++
 				}
 				continue
 			case controlplane.TurnBudgetActionStop:
@@ -183,7 +187,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				return nil
 			}
 
-			turnOutput, err := s.callProviderWithRetry(ctx, &state, snapshot, modelProvider)
+			turnOutput, err := s.callProvider(ctx, &state, snapshot, modelProvider)
 			if err != nil {
 				if provider.IsContextTooLong(err) &&
 					state.reactiveCompactAttempts < snapshot.Config.Context.Budget.MaxReactiveCompacts {
@@ -206,15 +210,28 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			if err != nil {
 				return s.handleRunError(err)
 			}
-			if err := s.appendAssistantMessageAndSave(
-				ctx,
-				&state,
-				snapshot,
-				turnOutput.assistant,
-				reconciled.inputTokens,
-				reconciled.outputTokens,
-			); err != nil {
-				return s.handleRunError(err)
+			hasToolCalls := len(turnOutput.assistant.ToolCalls) > 0
+			if hasToolCalls {
+				if err := s.appendAssistantMessageAndSave(
+					ctx,
+					&state,
+					snapshot,
+					turnOutput.assistant,
+					reconciled.inputTokens,
+					reconciled.outputTokens,
+				); err != nil {
+					return s.handleRunError(err)
+				}
+			} else {
+				if err := s.persistAssistantTurnUsageAndMetadata(
+					ctx,
+					&state,
+					snapshot,
+					reconciled.inputTokens,
+					reconciled.outputTokens,
+				); err != nil {
+					return s.handleRunError(err)
+				}
 			}
 			s.emitLedgerReconciled(ctx, &state, turnOutput.usageObservation, reconciled)
 			s.emitTokenUsage(ctx, &state, reconciled)
@@ -223,16 +240,16 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			state.completion = collectCompletionState(
 				&state,
 				turnOutput.assistant,
-				len(turnOutput.assistant.ToolCalls) > 0,
+				hasToolCalls,
 			)
 			completionState, completed := controlplane.EvaluateCompletion(
 				state.completion,
-				len(turnOutput.assistant.ToolCalls) > 0,
+				hasToolCalls,
 			)
 			state.completion = completionState
 			state.mu.Unlock()
 
-			if len(turnOutput.assistant.ToolCalls) == 0 {
+			if !hasToolCalls {
 				if err := s.setBaseRunState(ctx, &state, controlplane.RunStateVerify); err != nil {
 					return s.handleRunError(err)
 				}
@@ -270,6 +287,9 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 
 				switch acceptanceDecision.Status {
 				case acceptance.AcceptanceAccepted:
+					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
+						return s.handleRunError(err)
+					}
 					s.emitRunScoped(ctx, EventVerificationCompleted, &state, VerificationCompletedPayload{
 						StopReason: acceptanceDecision.StopReason,
 					})
@@ -285,28 +305,18 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					if err := s.appendSystemMessageAndSave(ctx, &state, reminder); err != nil {
 						return s.handleRunError(err)
 					}
-					state.mu.Lock()
-					progressInput := collectProgressInput(
-						controlplane.RunStateVerify,
-						state.session.TaskState.Clone(),
-						state.session.TaskState.Clone(),
-						cloneTodosForPersistence(state.session.Todos),
-						cloneTodosForPersistence(state.session.Todos),
-						toolExecutionSummary{},
-						snapshot.NoProgressStreakLimit,
-						snapshot.RepeatCycleStreakLimit,
-					)
-					state.progress = controlplane.EvaluateProgress(state.progress, progressInput)
-					state.finalInterceptStreak = state.progress.LastScore.NoProgressStreak
-					currentScore := state.progress.LastScore
-					state.mu.Unlock()
-					s.emitRunScoped(ctx, EventProgressEvaluated, &state, ProgressEvaluatedPayload{Score: currentScore})
 					break turnAttempt
 				case acceptance.AcceptanceIncomplete:
+					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
+						return s.handleRunError(err)
+					}
 					recordAcceptanceTerminal(&state, acceptanceDecision)
 					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
 					return nil
 				case acceptance.AcceptanceFailed:
+					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
+						return s.handleRunError(err)
+					}
 					s.emitRunScoped(ctx, EventVerificationFailed, &state, VerificationFailedPayload{
 						StopReason: acceptanceDecision.StopReason,
 						ErrorClass: acceptanceDecision.ErrorClass,
@@ -315,6 +325,9 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
 					return nil
 				default:
+					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
+						return s.handleRunError(err)
+					}
 					recordAcceptanceTerminal(&state, acceptanceDecision)
 					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
 					return nil
@@ -347,6 +360,9 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			)
 			state.progress = controlplane.EvaluateProgress(state.progress, progressInput)
 			currentScore := state.progress.LastScore
+			if currentScore.HasBusinessProgress || currentScore.HasExplorationProgress {
+				state.pendingFinalProgress = true
+			}
 			state.mu.Unlock()
 
 			s.emitRunScoped(ctx, EventProgressEvaluated, &state, ProgressEvaluatedPayload{Score: currentScore})
@@ -479,73 +495,35 @@ func resolveRuntimeMaxTurns(rc config.RuntimeConfig) int {
 	return rc.MaxTurns
 }
 
-// callProviderWithRetry 使用冻结后的 TurnBudgetSnapshot 执行 provider 调用与必要重试。
-func (s *Service) callProviderWithRetry(
+// callProvider 使用冻结后的 TurnBudgetSnapshot 执行单次 provider 调用。
+func (s *Service) callProvider(
 	ctx context.Context,
 	state *runState,
 	snapshot TurnBudgetSnapshot,
-	initialProvider provider.Provider,
+	modelProvider provider.Provider,
 ) (turnProviderOutput, error) {
-	var lastErr error
-
-	for retryAttempt := 0; retryAttempt <= defaultProviderRetryMax; retryAttempt++ {
-		if retryAttempt > 0 {
-			wait := providerRetryBackoff(retryAttempt)
-			s.emitRunScoped(ctx, EventProviderRetry, state,
-				fmt.Sprintf("retrying provider call (attempt %d/%d, wait=%.1fs)...",
-					retryAttempt, defaultProviderRetryMax, wait.Seconds()))
-
-			select {
-			case <-ctx.Done():
-				return turnProviderOutput{}, ctx.Err()
-			case <-time.After(wait):
-			}
-		}
-
-		modelProvider := initialProvider
-		if retryAttempt > 0 {
-			var err error
-			modelProvider, err = s.providerFactory.Build(ctx, snapshot.ProviderConfig)
-			if err != nil {
-				return turnProviderOutput{}, err
-			}
-		}
-
-		streamOutcome := generateStreamingMessage(ctx, modelProvider, snapshot.Request, streaming.Hooks{
-			OnTextDelta: func(text string) {
-				s.emitRunScoped(ctx, EventAgentChunk, state, text)
-			},
-			OnToolCallStart: func(payload providertypes.ToolCallStartPayload) {
-				s.emitRunScoped(ctx, EventToolCallThinking, state, payload.Name)
-			},
-		})
-		if streamOutcome.err != nil {
-			lastErr = streamOutcome.err
-			if !isRetryableProviderError(lastErr) {
-				return turnProviderOutput{}, lastErr
-			}
-			if ctx.Err() != nil {
-				return turnProviderOutput{}, ctx.Err()
-			}
-			continue
-		}
-
-		return turnProviderOutput{
-			assistant: streamOutcome.message,
-			usageObservation: newTurnBudgetUsageObservation(
-				snapshot.ID,
-				streamOutcome.inputTokens,
-				streamOutcome.outputTokens,
-				streamOutcome.inputObserved,
-				streamOutcome.outputObserved,
-			),
-		}, nil
+	streamOutcome := generateStreamingMessage(ctx, modelProvider, snapshot.Request, streaming.Hooks{
+		OnTextDelta: func(text string) {
+			s.emitRunScoped(ctx, EventAgentChunk, state, text)
+		},
+		OnToolCallStart: func(payload providertypes.ToolCallStartPayload) {
+			s.emitRunScoped(ctx, EventToolCallThinking, state, payload.Name)
+		},
+	})
+	if streamOutcome.err != nil {
+		return turnProviderOutput{}, streamOutcome.err
 	}
 
-	if lastErr == nil {
-		lastErr = errors.New("max retries exceeded")
-	}
-	return turnProviderOutput{}, fmt.Errorf("runtime: max retries exhausted, last error: %w", lastErr)
+	return turnProviderOutput{
+		assistant: streamOutcome.message,
+		usageObservation: newTurnBudgetUsageObservation(
+			snapshot.ID,
+			streamOutcome.inputTokens,
+			streamOutcome.outputTokens,
+			streamOutcome.inputObserved,
+			streamOutcome.outputObserved,
+		),
+	}, nil
 }
 
 // emitTokenUsage 在单轮 provider 调用成功后发出 token_usage 事件。

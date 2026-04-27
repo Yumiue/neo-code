@@ -19,6 +19,7 @@ import (
 	"neo-code/internal/config"
 	"neo-code/internal/gateway"
 	"neo-code/internal/gateway/adapters/urlscheme"
+	"neo-code/internal/tools"
 	"neo-code/internal/updater"
 )
 
@@ -305,11 +306,11 @@ func TestDefaultGatewayCommandRunnerSuccess(t *testing.T) {
 	newAuthManager = stubGatewayAuthManagerBuilder()
 
 	server := &stubGatewayServer{listenAddress: "stub://gateway"}
-	newGatewayServer = func(options gateway.ServerOptions) (gatewayServer, error) {
+	newGatewayServer = func(options gateway.ServerOptions) (gateway.TransportAdapter, error) {
 		return server, nil
 	}
 	networkServer := &stubGatewayServer{listenAddress: "127.0.0.1:8080"}
-	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gatewayNetworkServer, error) {
+	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gateway.TransportAdapter, error) {
 		return networkServer, nil
 	}
 
@@ -371,10 +372,10 @@ func TestDefaultGatewayCommandRunnerReturnsConstructorError(t *testing.T) {
 	newAuthManager = stubGatewayAuthManagerBuilder()
 
 	expected := errors.New("new gateway server failed")
-	newGatewayServer = func(options gateway.ServerOptions) (gatewayServer, error) {
+	newGatewayServer = func(options gateway.ServerOptions) (gateway.TransportAdapter, error) {
 		return nil, expected
 	}
-	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gatewayNetworkServer, error) {
+	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gateway.TransportAdapter, error) {
 		return &stubGatewayServer{listenAddress: "127.0.0.1:8080"}, nil
 	}
 
@@ -417,10 +418,10 @@ func TestDefaultGatewayCommandRunnerReturnsAuthManagerError(t *testing.T) {
 	newAuthManager = func(string) (gateway.TokenAuthenticator, error) {
 		return nil, errors.New("auth manager failed")
 	}
-	newGatewayServer = func(options gateway.ServerOptions) (gatewayServer, error) {
+	newGatewayServer = func(options gateway.ServerOptions) (gateway.TransportAdapter, error) {
 		return &stubGatewayServer{listenAddress: "stub://gateway"}, nil
 	}
-	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gatewayNetworkServer, error) {
+	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gateway.TransportAdapter, error) {
 		return &stubGatewayServer{listenAddress: "127.0.0.1:8080"}, nil
 	}
 
@@ -452,11 +453,11 @@ func TestDefaultGatewayCommandRunnerReturnsServeError(t *testing.T) {
 		listenAddress: "stub://gateway",
 		serveErr:      expected,
 	}
-	newGatewayServer = func(options gateway.ServerOptions) (gatewayServer, error) {
+	newGatewayServer = func(options gateway.ServerOptions) (gateway.TransportAdapter, error) {
 		return server, nil
 	}
 	networkServer := &stubGatewayServer{listenAddress: "127.0.0.1:8080"}
-	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gatewayNetworkServer, error) {
+	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gateway.TransportAdapter, error) {
 		return networkServer, nil
 	}
 
@@ -490,14 +491,14 @@ func TestDefaultGatewayCommandRunnerDegradesWhenNetworkServeFails(t *testing.T) 
 	newAuthManager = stubGatewayAuthManagerBuilder()
 
 	ipcServer := &stubGatewayServer{listenAddress: "stub://gateway"}
-	newGatewayServer = func(options gateway.ServerOptions) (gatewayServer, error) {
+	newGatewayServer = func(options gateway.ServerOptions) (gateway.TransportAdapter, error) {
 		return ipcServer, nil
 	}
 	networkServer := &stubGatewayServer{
 		listenAddress: "127.0.0.1:8080",
 		serveErr:      errors.New("bind: address already in use"),
 	}
-	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gatewayNetworkServer, error) {
+	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gateway.TransportAdapter, error) {
 		return networkServer, nil
 	}
 
@@ -535,10 +536,10 @@ func TestDefaultGatewayCommandRunnerReturnsNetworkConstructorError(t *testing.T)
 
 	networkErr := errors.New("new network server failed")
 	ipcServer := &stubGatewayServer{listenAddress: "stub://gateway"}
-	newGatewayServer = func(options gateway.ServerOptions) (gatewayServer, error) {
+	newGatewayServer = func(options gateway.ServerOptions) (gateway.TransportAdapter, error) {
 		return ipcServer, nil
 	}
-	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gatewayNetworkServer, error) {
+	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gateway.TransportAdapter, error) {
 		return nil, networkErr
 	}
 
@@ -1339,6 +1340,9 @@ func TestShouldSkipSilentUpdateCheck(t *testing.T) {
 	if !shouldSkipSilentUpdateCheck(&cobra.Command{Use: "update"}) {
 		t.Fatal("update should skip silent update check")
 	}
+	if !shouldSkipSilentUpdateCheck(&cobra.Command{Use: "version"}) {
+		t.Fatal("version should skip silent update check")
+	}
 	if shouldSkipSilentUpdateCheck(&cobra.Command{Use: "gateway"}) {
 		t.Fatal("gateway should not skip silent update check")
 	}
@@ -1432,6 +1436,34 @@ func TestUpdateCommandSkipsSilentUpdateCheck(t *testing.T) {
 	}
 }
 
+func TestVersionCommandSkipsSilentUpdateCheck(t *testing.T) {
+	originalSilentCheck := runSilentUpdateCheck
+	originalRunner := runVersionCommand
+	t.Cleanup(func() { runSilentUpdateCheck = originalSilentCheck })
+	t.Cleanup(func() { runVersionCommand = originalRunner })
+
+	var called bool
+	runSilentUpdateCheck = func(context.Context) {
+		called = true
+	}
+	runVersionCommand = func(context.Context, versionCommandOptions) (versionCommandResult, error) {
+		return versionCommandResult{
+			CurrentVersion: "v1.0.0",
+			LatestVersion:  "v1.0.0",
+			Comparable:     true,
+		}, nil
+	}
+
+	command := NewRootCommand()
+	command.SetArgs([]string{"version"})
+	if err := command.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
+	}
+	if called {
+		t.Fatal("expected silent update check to be skipped for version command")
+	}
+}
+
 func TestSanitizeVersionForTerminal(t *testing.T) {
 	dirty := "\x1b[31mv0.2.1\x1b[0m\t\n\r\x00"
 	if got := sanitizeVersionForTerminal(dirty); got != "v0.2.1" {
@@ -1472,9 +1504,10 @@ func TestDefaultSilentUpdateCheckSetsSanitizedNotice(t *testing.T) {
 	checkLatestRelease = func(context.Context, updater.CheckOptions) (updater.CheckResult, error) {
 		close(done)
 		return updater.CheckResult{
-			CurrentVersion: "v0.1.0",
-			LatestVersion:  "\x1b[31mv0.2.1\x1b[0m\t\n\r",
-			HasUpdate:      true,
+			CurrentVersion:     "v0.1.0",
+			LatestVersion:      "\x1b[31mv9.9.9\x1b[0m\t\n\r",
+			InstallableVersion: "\x1b[31mv0.2.1\x1b[0m\t\n\r",
+			HasUpdate:          true,
 		}, nil
 	}
 
@@ -1621,6 +1654,32 @@ func (stubRuntimePort) Run(context.Context, gateway.RunInput) error { return nil
 
 func (stubRuntimePort) Compact(context.Context, gateway.CompactInput) (gateway.CompactResult, error) {
 	return gateway.CompactResult{}, nil
+}
+
+func (stubRuntimePort) ExecuteSystemTool(context.Context, gateway.ExecuteSystemToolInput) (tools.ToolResult, error) {
+	return tools.ToolResult{}, nil
+}
+
+func (stubRuntimePort) ActivateSessionSkill(context.Context, gateway.SessionSkillMutationInput) error {
+	return nil
+}
+
+func (stubRuntimePort) DeactivateSessionSkill(context.Context, gateway.SessionSkillMutationInput) error {
+	return nil
+}
+
+func (stubRuntimePort) ListSessionSkills(
+	context.Context,
+	gateway.ListSessionSkillsInput,
+) ([]gateway.SessionSkillState, error) {
+	return nil, nil
+}
+
+func (stubRuntimePort) ListAvailableSkills(
+	context.Context,
+	gateway.ListAvailableSkillsInput,
+) ([]gateway.AvailableSkillState, error) {
+	return nil, nil
 }
 
 func (stubRuntimePort) ResolvePermission(context.Context, gateway.PermissionResolutionInput) error {

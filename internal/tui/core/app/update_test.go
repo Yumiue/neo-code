@@ -16,6 +16,7 @@ import (
 
 	"neo-code/internal/config"
 	configstate "neo-code/internal/config/state"
+	"neo-code/internal/gateway/protocol"
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 	agentsession "neo-code/internal/session"
@@ -2147,14 +2148,6 @@ func TestRuntimeEventErrorHandler(t *testing.T) {
 	}
 }
 
-func TestRuntimeEventProviderRetryHandler(t *testing.T) {
-	app, _ := newTestApp(t)
-	runtimeEventProviderRetryHandler(&app, agentruntime.RuntimeEvent{Payload: "retry"})
-	if app.state.StatusText != statusThinking {
-		t.Fatalf("expected thinking status")
-	}
-}
-
 func TestRuntimeEventCompactDoneHandler(t *testing.T) {
 	app, _ := newTestApp(t)
 	payload := agentruntime.CompactResult{TriggerMode: "auto", SavedRatio: 0.5, BeforeChars: 10, AfterChars: 5, TranscriptPath: "path"}
@@ -2503,6 +2496,58 @@ func TestHandleMemoCommandsRouteToSystemTools(t *testing.T) {
 	}
 }
 
+func TestHandleMemoCommandMapsUnsupportedActionErrorToUserFriendlyMessage(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{
+			name: "legacy sentinel",
+			err:  agentruntime.ErrUnsupportedActionInGatewayMode,
+		},
+		{
+			name: "gateway rpc unsupported_action",
+			err: &agentruntime.GatewayRPCError{
+				Method:      protocol.MethodGatewayExecuteSystemTool,
+				Code:        protocol.JSONRPCCodeMethodNotFound,
+				GatewayCode: protocol.GatewayCodeUnsupportedAction,
+				Message:     "method not found",
+			},
+		},
+		{
+			name: "gateway rpc method_not_found",
+			err: &agentruntime.GatewayRPCError{
+				Method:  protocol.MethodGatewayExecuteSystemTool,
+				Code:    protocol.JSONRPCCodeMethodNotFound,
+				Message: "method not found",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			app, runtime := newTestApp(t)
+			runtime.systemToolErr = tt.err
+
+			cmd := app.handleMemoCommand()
+			if cmd == nil {
+				t.Fatalf("expected /memo command")
+			}
+			model, _ := app.Update(cmd())
+			app = model.(App)
+
+			status := strings.ToLower(strings.TrimSpace(app.state.StatusText))
+			if strings.Contains(status, "unsupported_action_in_gateway_mode") {
+				t.Fatalf("expected sentinel to be hidden from UI, got %q", app.state.StatusText)
+			}
+			if !strings.Contains(status, "gateway") {
+				t.Fatalf("expected gateway upgrade hint, got %q", app.state.StatusText)
+			}
+		})
+	}
+}
+
 func TestHandleRememberAndForgetValidation(t *testing.T) {
 	app, _ := newTestApp(t)
 
@@ -2615,7 +2660,12 @@ func TestHandleSkillCommandValidationAndGatewayErrors(t *testing.T) {
 		t.Fatalf("expected /skills usage error, got %q", app.state.StatusText)
 	}
 
-	runtime.activateSkillErr = agentruntime.ErrUnsupportedActionInGatewayMode
+	runtime.activateSkillErr = &agentruntime.GatewayRPCError{
+		Method:      protocol.MethodGatewayActivateSessionSkill,
+		Code:        protocol.JSONRPCCodeMethodNotFound,
+		GatewayCode: protocol.GatewayCodeUnsupportedAction,
+		Message:     "method not found",
+	}
 	handled, cmd = app.handleImmediateSlashCommand("/skill use go-review")
 	if !handled || cmd == nil {
 		t.Fatalf("expected /skill use to produce cmd on gateway error")
@@ -3190,6 +3240,28 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		}
 		if req.ChatEndpointPath != "/responses" {
 			t.Fatalf("expected responses endpoint path, got %q", req.ChatEndpointPath)
+		}
+	})
+
+	t.Run("openai compat keeps explicit custom endpoint path", func(t *testing.T) {
+		req, err := buildProviderAddRequest(providerAddFormState{
+			Name:                  "openai-compat-custom-endpoint",
+			Driver:                provider.DriverOpenAICompat,
+			ModelSource:           config.ModelSourceDiscover,
+			ChatAPIMode:           provider.ChatAPIModeChatCompletions,
+			ChatEndpointPath:      "/v1/text/chatcompletion_v2",
+			APIKey:                "k",
+			APIKeyEnv:             "OPENAI_COMPAT_CUSTOM_ENDPOINT_API_KEY",
+			DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+		})
+		if err != "" {
+			t.Fatalf("unexpected error: %s", err)
+		}
+		if req.ChatEndpointPath != "/v1/text/chatcompletion_v2" {
+			t.Fatalf("expected custom endpoint path preserved, got %q", req.ChatEndpointPath)
+		}
+		if req.ChatAPIMode != provider.ChatAPIModeChatCompletions {
+			t.Fatalf("expected chat api mode completions, got %q", req.ChatAPIMode)
 		}
 	})
 
@@ -3797,7 +3869,7 @@ func TestResolveModelScopeGuidePathRejectsDirectory(t *testing.T) {
 func TestResolveModelScopeGuidePathReturnsEmptyWhenBaseDirMissing(t *testing.T) {
 	cfg := newDefaultAppConfig()
 	cfg.Workdir = t.TempDir()
-	manager := config.NewManager(config.NewLoader("", cfg))
+	manager := config.NewManager(config.NewLoader(filepath.Join(t.TempDir(), "missing-config-root"), cfg))
 	if _, err := manager.Load(context.Background()); err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}

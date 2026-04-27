@@ -42,6 +42,11 @@ type permissionPromptState struct {
 	Submitting bool
 }
 
+// autoPermissionApprovalState 记录 Full Access 自动审批中的请求，用于回执失败后的状态恢复。
+type autoPermissionApprovalState struct {
+	Request tuiservices.PermissionRequestPayload
+}
+
 // normalizePermissionPromptSelection 保证选项下标始终落在有效范围。
 func normalizePermissionPromptSelection(selected int) int {
 	if len(permissionPromptOptions) == 0 {

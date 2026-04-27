@@ -124,6 +124,9 @@ type appRuntimeState struct {
 	lastUserMessageRunID    string
 	pendingPermission       *permissionPromptState
 	queuedIntervention      *queuedInterventionInput
+	pendingAutoPermission   *autoPermissionApprovalState
+	pendingFullAccessPrompt *fullAccessPromptState
+	fullAccessModeEnabled   bool
 	pendingImageAttachments []pendingImageAttachment
 	pendingPasteBuffers     []pendingPasteBuffer
 	providerAddForm         *providerAddFormState

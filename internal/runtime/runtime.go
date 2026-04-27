@@ -24,10 +24,7 @@ import (
 )
 
 const (
-	defaultProviderRetryMax = 2
-	providerRetryBaseWait   = 1 * time.Second
-	providerRetryMaxWait    = 5 * time.Second
-	defaultToolParallelism  = 4
+	defaultToolParallelism = 4
 
 	terminationEventEmitTimeout = 500 * time.Millisecond
 )
@@ -178,7 +175,10 @@ func NewWithFactory(
 		toolManager = tools.NewRegistry()
 	}
 	if contextBuilder == nil {
-		contextBuilder = agentcontext.NewBuilderWithToolPolicies(toolManager)
+		contextBuilder = agentcontext.NewConfiguredBuilder(agentcontext.MicroCompactConfig{
+			Policies:    toolManager,
+			Summarizers: toolManager,
+		})
 	}
 
 	return &Service{
@@ -318,6 +318,7 @@ func (s *Service) CreateSession(ctx context.Context, id string) (agentsession.Se
 
 	newSession := agentsession.NewWithWorkdir("New Session", sessionWorkdir)
 	newSession.ID = sessionID
+	establishSessionVerificationProfile(&newSession)
 	created, createErr := s.sessionStore.CreateSession(ctx, createSessionInputFromSession(newSession))
 	if createErr == nil {
 		return created, nil

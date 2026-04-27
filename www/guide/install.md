@@ -1,99 +1,118 @@
 ---
-title: 安装与运行
-description: 安装脚本、源码运行、环境要求以及第一次启动前的准备项。
+title: 安装与首次运行
+description: 从安装到第一条对话的完整路径，3 分钟跑起来。
 ---
 
-# 安装与运行
+# 安装与首次运行
 
-## 环境要求
+## 1. 环境要求
 
-- Go `1.25+`
-- 至少一个可用的 Provider API Key，例如 OpenAI、Gemini、OpenLL 或 Qiniu
+- 操作系统：macOS、Linux 或 Windows
+- 终端环境：系统默认终端、PowerShell 或其他兼容终端
+- 至少一个可用的 API Key（OpenAI、Gemini、OpenLL、Qiniu 或 ModelScope）
 
-## 一键安装
+## 2. 安装
 
-### macOS / Linux
+### 一键安装（推荐）
+
+macOS / Linux：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/1024XEngineer/neo-code/main/scripts/install.sh | bash
 ```
 
-### Windows PowerShell
+Windows PowerShell：
 
 ```powershell
 irm https://raw.githubusercontent.com/1024XEngineer/neo-code/main/scripts/install.ps1 | iex
 ```
 
-安装脚本会自动从 GitHub Releases 下载最新稳定版二进制文件：
+## 3. 设置 API Key
 
-- macOS / Linux：下载并解压到 `/usr/local/bin/`（可能需要 `sudo` 权限）
-- Windows：下载并解压到 `%LOCALAPPDATA%\NeoCode`，同时更新用户 `PATH`
+NeoCode 只从环境变量读取 API Key，不会写入配置文件。
 
-安装完成后，在终端直接运行：
+macOS / Linux：
+
+```bash
+export OPENAI_API_KEY="your_key_here"
+```
+
+Windows PowerShell：
+
+```powershell
+$env:OPENAI_API_KEY = "your_key_here"
+```
+
+其他 Provider 的环境变量名：
+
+| Provider | 环境变量 |
+|---|---|
+| OpenAI | `OPENAI_API_KEY` |
+| Gemini | `GEMINI_API_KEY` |
+| OpenLL | `AI_API_KEY` |
+| Qiniu | `QINIU_API_KEY` |
+| ModelScope | `MODELSCOPE_API_KEY` |
+
+## 4. 启动
 
 ```bash
 neocode
 ```
 
-## 从源码运行
+如果要直接打开指定项目：
+
+```bash
+neocode --workdir /path/to/your/project
+```
+
+启动后会进入终端界面，底部是输入框。直接输入自然语言即可开始对话；输入 `/` 可以打开本地控制命令建议。
+
+## 5. 第一次对话
+
+可以先让 NeoCode 读项目结构：
+
+```text
+请阅读当前项目目录结构，给出模块职责摘要，并指出我应该从哪些文件开始了解主流程。
+```
+
+再让它找测试入口：
+
+```text
+请根据刚才的项目结构，帮我找出测试入口和主要业务入口。
+```
+
+Agent 会自动调用文件读取和搜索工具。当它需要写入文件或执行命令时，界面会先弹出权限确认。
+
+## 6. 建议补一个 AGENTS.md
+
+如果这是一个长期维护的项目，建议在仓库根目录放 `AGENTS.md`，告诉 NeoCode 项目规则：
+
+```md
+# Project Rules
+
+- 修改 Go 代码后运行 `go test ./...`
+- 中文文档继续使用中文
+- 不要把 API Key 写入配置文件
+```
+
+详见 [AGENTS.md 项目规则](./agents-md)。
+
+## 开发者：从源码构建
+
+如果你要阅读代码、调试功能或参与开发，可以从源码构建运行。需要 Go 1.25+ 环境。
 
 ```bash
 git clone https://github.com/1024XEngineer/neo-code.git
 cd neo-code
+go build ./...
 go run ./cmd/neocode
 ```
 
-如果你只想启动 Gateway：
+如果你只想稳定使用，优先使用一键安装方式。源码构建更适合阅读代码、调试功能或参与开发。
 
-```bash
-go run ./cmd/neocode gateway
-```
+## 下一步
 
-指定网络访问面监听地址时，可以显式传入 `--http-listen`：
-
-```bash
-go run ./cmd/neocode gateway --http-listen 127.0.0.1:8080
-```
-
-## 第一次启动前要准备什么
-
-NeoCode 不会把 API Key 写进 `config.yaml`，而是直接读取环境变量。
-
-### Shell
-
-```bash
-export OPENAI_API_KEY="your_key_here"
-export GEMINI_API_KEY="your_key_here"
-export AI_API_KEY="your_key_here"
-export QINIU_API_KEY="your_key_here"
-```
-
-### Windows PowerShell
-
-```powershell
-$env:OPENAI_API_KEY = "your_key_here"
-$env:GEMINI_API_KEY = "your_key_here"
-$env:AI_API_KEY = "your_key_here"
-$env:QINIU_API_KEY = "your_key_here"
-```
-
-## 工作区启动
-
-只影响当前进程、不回写配置文件：
-
-```bash
-go run ./cmd/neocode --workdir /path/to/workspace
-```
-
-这个参数会影响当前运行使用的工作区根目录，也会影响工具访问范围和 session 隔离。
-
-## Gateway 自动拉起
-
-当前实现里：
-
-- `neocode` 默认优先通过本地 Gateway 转发 runtime 请求与事件流
-- 启动时会先探测本地网关
-- 如果本地网关未运行，会自动尝试后台拉起并等待就绪
-- 如果拉起后仍不可达或握手失败，会直接报错退出
-
-接下来建议阅读 [首次上手](./quick-start)。
+- 想学会本地控制命令：[Slash 指令](./slash-commands)
+- 想理解工作区和会话：[会话、上下文与工作区](./context-session-workspace)
+- 想看更多任务写法：[使用示例](./examples)
+- 安装有问题：[排障与常见问题](./troubleshooting)

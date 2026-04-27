@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	providerpkg "neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
@@ -104,6 +105,29 @@ func TestResolveSelectedProviderIncludesRuntimeAssetPolicyAndBudget(t *testing.T
 			maxTotal,
 			resolved.RequestAssetBudget.MaxSessionAssetsTotalBytes,
 		)
+	}
+}
+
+func TestResolveSelectedProviderPrefersRootGenerateStartTimeout(t *testing.T) {
+	t.Parallel()
+
+	cfg := testDefaultConfig().Clone()
+	cfg.GenerateStartTimeoutSec = 90
+
+	resolved, err := ResolveSelectedProvider(cfg)
+	if err != nil {
+		t.Fatalf("ResolveSelectedProvider() error = %v", err)
+	}
+	if resolved.GenerateStartTimeoutSec != 90 {
+		t.Fatalf("expected resolved GenerateStartTimeoutSec=90, got %d", resolved.GenerateStartTimeoutSec)
+	}
+
+	runtimeCfg, err := resolved.ToRuntimeConfig()
+	if err != nil {
+		t.Fatalf("ToRuntimeConfig() error = %v", err)
+	}
+	if runtimeCfg.GenerateStartTimeout != 90*time.Second {
+		t.Fatalf("expected runtime GenerateStartTimeout=90s, got %s", runtimeCfg.GenerateStartTimeout)
 	}
 }
 
@@ -364,6 +388,59 @@ func TestProviderConfigValidateRejectsBaseURLWithUserinfo(t *testing.T) {
 	}
 }
 
+func TestProviderConfigValidateRejectsNegativeGenerateControls(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		mutate     func(*ProviderConfig)
+		errContain string
+	}{
+		{
+			name: "negative retries",
+			mutate: func(cfg *ProviderConfig) {
+				cfg.GenerateMaxRetries = -1
+			},
+			errContain: "generate_max_retries",
+		},
+		{
+			name: "retries exceed upper bound",
+			mutate: func(cfg *ProviderConfig) {
+				cfg.GenerateMaxRetries = providerpkg.MaxGenerateMaxRetries + 1
+			},
+			errContain: "generate_max_retries",
+		},
+		{
+			name: "negative idle timeout",
+			mutate: func(cfg *ProviderConfig) {
+				cfg.GenerateIdleTimeoutSec = -1
+			},
+			errContain: "generate_idle_timeout_sec",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := ProviderConfig{
+				Name:                  "company-gateway",
+				Driver:                providerpkg.DriverOpenAICompat,
+				BaseURL:               "https://llm.example.com/v1",
+				APIKeyEnv:             "TEST_KEY",
+				ModelSource:           ModelSourceDiscover,
+				DiscoveryEndpointPath: providerpkg.DiscoveryEndpointPathModels,
+				Source:                ProviderSourceCustom,
+			}
+			tt.mutate(&cfg)
+			if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), tt.errContain) {
+				t.Fatalf("expected %q validation error, got %v", tt.errContain, err)
+			}
+		})
+	}
+}
+
 func TestCloneProviderConfigModelDescriptorsIndependence(t *testing.T) {
 	t.Parallel()
 
@@ -547,11 +624,11 @@ func TestDefaultProvidersReturnsAllBuiltins(t *testing.T) {
 	t.Parallel()
 
 	providers := DefaultProviders()
-	if len(providers) != 5 {
-		t.Fatalf("expected 5 builtin providers, got %d", len(providers))
+	if len(providers) != 4 {
+		t.Fatalf("expected 4 builtin providers, got %d", len(providers))
 	}
 
-	expectedNames := []string{OpenAIName, GeminiName, OpenLLName, QiniuName, ModelScopeName}
+	expectedNames := []string{OpenAIName, GeminiName, QiniuName, ModelScopeName}
 	for i, provider := range providers {
 		if provider.Name != expectedNames[i] {
 			t.Fatalf("expected provider[%d] name %q, got %q", i, expectedNames[i], provider.Name)
@@ -600,28 +677,6 @@ func TestGeminiProviderConfig(t *testing.T) {
 	}
 	if provider.APIKeyEnv != GeminiDefaultAPIKeyEnv {
 		t.Fatalf("expected API key env %q, got %q", GeminiDefaultAPIKeyEnv, provider.APIKeyEnv)
-	}
-}
-
-func TestOpenLLProviderConfig(t *testing.T) {
-	t.Parallel()
-
-	provider := OpenLLProvider()
-
-	if provider.Name != OpenLLName {
-		t.Fatalf("expected name %q, got %q", OpenLLName, provider.Name)
-	}
-	if provider.Driver != "openaicompat" {
-		t.Fatalf("expected driver %q, got %q", "openaicompat", provider.Driver)
-	}
-	if provider.BaseURL != OpenLLDefaultBaseURL {
-		t.Fatalf("expected base URL %q, got %q", OpenLLDefaultBaseURL, provider.BaseURL)
-	}
-	if provider.Model != OpenLLDefaultModel {
-		t.Fatalf("expected default model %q, got %q", OpenLLDefaultModel, provider.Model)
-	}
-	if provider.APIKeyEnv != OpenLLDefaultAPIKeyEnv {
-		t.Fatalf("expected API key env %q, got %q", OpenLLDefaultAPIKeyEnv, provider.APIKeyEnv)
 	}
 }
 
@@ -721,6 +776,9 @@ func TestResolvedProviderConfigToRuntimeConfig(t *testing.T) {
 		ChatAPIMode:           "",
 		ChatEndpointPath:      "",
 		DiscoveryEndpointPath: providerpkg.DiscoveryEndpointPathModels,
+		GenerateMaxRetries:    0,
+		GenerateStartTimeout:  providerpkg.DefaultGenerateStartTimeout,
+		GenerateIdleTimeout:   providerpkg.DefaultGenerateIdleTimeout,
 	}
 
 	if got.APIKeyResolver == nil {
@@ -736,8 +794,42 @@ func TestResolvedProviderConfigToRuntimeConfig(t *testing.T) {
 		got.RequestAssetBudget != want.RequestAssetBudget ||
 		got.ChatAPIMode != want.ChatAPIMode ||
 		got.ChatEndpointPath != want.ChatEndpointPath ||
-		got.DiscoveryEndpointPath != want.DiscoveryEndpointPath {
+		got.DiscoveryEndpointPath != want.DiscoveryEndpointPath ||
+		got.GenerateMaxRetries != want.GenerateMaxRetries ||
+		got.GenerateStartTimeout != want.GenerateStartTimeout ||
+		got.GenerateIdleTimeout != want.GenerateIdleTimeout {
 		t.Fatalf("ToRuntimeConfig() = %+v, want %+v", got, want)
+	}
+}
+
+func TestResolvedProviderConfigToRuntimeConfigMapsGenerateControls(t *testing.T) {
+	t.Parallel()
+
+	resolved := ResolvedProviderConfig{
+		ProviderConfig: ProviderConfig{
+			Name:                   "company-gateway",
+			Driver:                 "openaicompat",
+			BaseURL:                "https://llm.example.com/v1",
+			Model:                  "server-default",
+			APIKeyEnv:              "COMPANY_GATEWAY_KEY",
+			GenerateMaxRetries:     7,
+			GenerateIdleTimeoutSec: 420,
+		},
+		GenerateStartTimeoutSec: 75,
+	}
+
+	got, err := resolved.ToRuntimeConfig()
+	if err != nil {
+		t.Fatalf("ToRuntimeConfig() error = %v", err)
+	}
+	if got.GenerateMaxRetries != 7 {
+		t.Fatalf("expected GenerateMaxRetries=7, got %d", got.GenerateMaxRetries)
+	}
+	if got.GenerateStartTimeout != 75*time.Second {
+		t.Fatalf("expected GenerateStartTimeout=75s, got %s", got.GenerateStartTimeout)
+	}
+	if got.GenerateIdleTimeout != 420*time.Second {
+		t.Fatalf("expected GenerateIdleTimeout=420s, got %s", got.GenerateIdleTimeout)
 	}
 }
 

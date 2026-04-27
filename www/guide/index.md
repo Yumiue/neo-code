@@ -1,32 +1,49 @@
 ---
 title: 开始使用
-description: NeoCode 用户指南总览，帮助你按安装、首次上手、配置和 Gateway 使用顺序阅读。
+description: NeoCode 用户指南——从安装、核心概念到日常工作流的导航。
 ---
 
 # 开始使用
 
-这套文档只覆盖 NeoCode 当前代码里已经存在的能力，重点是让你在终端里把主链路跑通：
+NeoCode 是一个在终端里运行的本地 AI 编码助手。它不是云端 SaaS，也不是 IDE 插件；它围绕你的本地工作区、会话上下文、项目规则和工具权限来帮助你读代码、改代码、补测试和写文档。
 
-`TUI -> Gateway -> Runtime -> Provider / Tool Manager`
+## 新用户路径
 
-## 先读什么
+1. [安装与首次运行](./install) — 安装、设 Key、启动、第一条对话
+2. [会话、上下文与工作区](./context-session-workspace) — 理解 NeoCode 如何围绕项目和任务工作
+3. [Slash 指令](./slash-commands) — 学会本地控制命令
+4. [使用示例](./examples) — 复制可用的任务写法
 
-如果你准备第一次运行 NeoCode，按下面顺序即可：
+## 核心概念
 
-1. [NeoCode 是什么](./getting-started)
-2. [安装与运行](./install)
-3. [首次上手](./quick-start)
-4. [配置入口](./configuration)
+| 你想了解 | 阅读 |
+|---|---|
+| `/compact`、`/model` 等命令怎么用 | [Slash 指令](./slash-commands) |
+| 工作区、会话和上下文的区别 | [会话、上下文与工作区](./context-session-workspace) |
+| 如何让 Agent 遵守项目规则 | [AGENTS.md 项目规则](./agents-md) |
+| 记忆、Skills、AGENTS.md、MCP 怎么选 | [能力选择指南](./capability-choice) |
 
-如果你已经在使用 CLI，可以直接跳到场景化页面：
+## 仓库 README（快速总览）
 
-- [工作区与会话](./workspace-session)
-- [记忆与 Skills](./memo-skills)
-- [Gateway 与 URL Dispatch](./gateway)
+- [README（中文）](https://github.com/1024XEngineer/neo-code/blob/main/README.md)
+- [README (English)](https://github.com/1024XEngineer/neo-code/blob/main/README.en.md)
+
+## 日常使用
+
+- [日常使用](./daily-use) — 从打开项目到完成任务的工作流
+- [工具与权限](./tools-permissions) — Agent 能做什么，审批怎么选
+- [配置指南](./configuration) — Provider、模型、Shell、MCP 配置
+
+## 扩展能力
+
+- [Skills 使用](./skills) — 用 `SKILL.md` 固化当前任务的工作方式
+- [MCP 工具接入](./mcp) — 把外部工具接入 NeoCode
+
+## 遇到问题
+
+- [排障与常见问题](./troubleshooting)
 - [升级与版本检查](./update)
 
-## 文档边界
+## 进阶与设计
 
-- 用户指导页优先讲怎么用，不展开所有设计细节。
-- 需要看实现背景时，请到 [深入阅读](/reference/) 查看仓库内设计文档的摘要和跳转入口。
-- 英文页面目前只保留简版入口，不与中文站同步扩写。
+如果你要做外部集成、修改实现或查架构边界，再看 [深入阅读](/reference/)。

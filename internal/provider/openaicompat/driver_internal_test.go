@@ -42,7 +42,7 @@ func TestDriverClosuresAndSupportedProtocol(t *testing.T) {
 		t.Fatalf("Build() error = %v", err)
 	}
 	typed, ok := built.(*Provider)
-	if !ok || typed.client == nil || typed.client.Transport == nil {
+	if !ok || typed.generateClient == nil || typed.discoveryClient == nil || typed.generateClient.Transport == nil {
 		t.Fatalf("unexpected built provider: %T %+v", built, typed)
 	}
 
@@ -65,6 +65,13 @@ func TestDriverClosuresAndSupportedProtocol(t *testing.T) {
 	}
 	if got, err := resolveExecutionMode(provider.RuntimeConfig{
 		Driver:           DriverName,
+		ChatAPIMode:      provider.ChatAPIModeChatCompletions,
+		ChatEndpointPath: "/v1/text/chatcompletion_v2",
+	}); err != nil || got != executionModeCompletions {
+		t.Fatalf("expected explicit completions mode with custom path, got mode=%q err=%v", got, err)
+	}
+	if got, err := resolveExecutionMode(provider.RuntimeConfig{
+		Driver:           DriverName,
 		ChatAPIMode:      provider.ChatAPIModeResponses,
 		ChatEndpointPath: "/chat/completions",
 	}); err != nil || got != executionModeResponses {
@@ -82,6 +89,12 @@ func TestDriverClosuresAndSupportedProtocol(t *testing.T) {
 	}); err != nil || got != executionModeResponses {
 		t.Fatalf("expected endpoint inferred responses mode, got mode=%q err=%v", got, err)
 	}
+	if _, err := resolveExecutionMode(provider.RuntimeConfig{
+		Driver:           DriverName,
+		ChatEndpointPath: "/v1/text/chatcompletion_v2",
+	}); err == nil || !strings.Contains(err.Error(), "set chat_api_mode") {
+		t.Fatalf("expected custom path to require explicit chat_api_mode, got %v", err)
+	}
 	if _, err := resolveExecutionMode(provider.RuntimeConfig{Driver: provider.DriverAnthropic}); err == nil ||
 		!strings.Contains(err.Error(), "unsupported") {
 		t.Fatalf("expected unsupported anthropic driver error, got %v", err)
@@ -97,35 +110,31 @@ func TestDriverClosuresAndSupportedProtocol(t *testing.T) {
 func TestFetchModelsAndGenerateExtraBranches(t *testing.T) {
 	t.Parallel()
 
-	p := &Provider{
-		cfg: provider.RuntimeConfig{
-			Name:                  DriverName,
-			Driver:                DriverName,
-			BaseURL:               "://bad",
-			APIKeyEnv:             "OPENAI_TEST_KEY",
-			APIKeyResolver:        provider.StaticAPIKeyResolver("test-key"),
-			DiscoveryEndpointPath: "/models",
-		},
-		client: &http.Client{},
+	cfg := provider.RuntimeConfig{
+		Name:                  DriverName,
+		Driver:                DriverName,
+		BaseURL:               "://bad",
+		APIKeyEnv:             "OPENAI_TEST_KEY",
+		APIKeyResolver:        provider.StaticAPIKeyResolver("test-key"),
+		DiscoveryEndpointPath: "/models",
 	}
-	cfg, _ := RequestConfigFromRuntime(p.cfg)
-	if _, err := DiscoverRawModels(context.Background(), p.client, cfg); err == nil || !strings.Contains(err.Error(), "build models request") {
+	requestCfg, _ := RequestConfigFromRuntime(cfg)
+	if _, err := DiscoverRawModels(context.Background(), &http.Client{}, requestCfg); err == nil ||
+		!strings.Contains(err.Error(), "build models request") {
 		t.Fatalf("expected build models request error, got %v", err)
 	}
 
-	p = &Provider{
-		cfg: provider.RuntimeConfig{
-			Name:                  DriverName,
-			Driver:                DriverName,
-			BaseURL:               "https://api.example.com/v1",
-			APIKeyEnv:             "OPENAI_TEST_KEY",
-			APIKeyResolver:        provider.StaticAPIKeyResolver("test-key"),
-			DiscoveryEndpointPath: "https://api.example.com/models",
-		},
-		client: &http.Client{},
+	cfg = provider.RuntimeConfig{
+		Name:                  DriverName,
+		Driver:                DriverName,
+		BaseURL:               "https://api.example.com/v1",
+		APIKeyEnv:             "OPENAI_TEST_KEY",
+		APIKeyResolver:        provider.StaticAPIKeyResolver("test-key"),
+		DiscoveryEndpointPath: "https://api.example.com/models",
 	}
-	cfg, _ = RequestConfigFromRuntime(p.cfg)
-	if _, err := DiscoverRawModels(context.Background(), p.client, cfg); err == nil || !provider.IsDiscoveryConfigError(err) {
+	requestCfg, _ = RequestConfigFromRuntime(cfg)
+	if _, err := DiscoverRawModels(context.Background(), &http.Client{}, requestCfg); err == nil ||
+		!provider.IsDiscoveryConfigError(err) {
 		t.Fatalf("expected discovery config error, got %v", err)
 	}
 
@@ -137,20 +146,17 @@ func TestFetchModelsAndGenerateExtraBranches(t *testing.T) {
 	}))
 	defer server.Close()
 
-	p = &Provider{
-		cfg: provider.RuntimeConfig{
-			Name:                  DriverName,
-			Driver:                DriverName,
-			BaseURL:               server.URL,
-			APIKeyEnv:             "OPENAI_TEST_KEY",
-			APIKeyResolver:        provider.StaticAPIKeyResolver("test-key"),
-			DiscoveryEndpointPath: "/models",
-		},
-		client: server.Client(),
+	cfg = provider.RuntimeConfig{
+		Name:                  DriverName,
+		Driver:                DriverName,
+		BaseURL:               server.URL,
+		APIKeyEnv:             "OPENAI_TEST_KEY",
+		APIKeyResolver:        provider.StaticAPIKeyResolver("test-key"),
+		DiscoveryEndpointPath: "/models",
 	}
 
-	cfg, _ = RequestConfigFromRuntime(p.cfg)
-	if _, err := DiscoverRawModels(context.Background(), p.client, cfg); err != nil {
+	requestCfg, _ = RequestConfigFromRuntime(cfg)
+	if _, err := DiscoverRawModels(context.Background(), server.Client(), requestCfg); err != nil {
 		t.Fatalf("DiscoverRawModels() error = %v", err)
 	}
 	if auth != "Bearer test-key" {

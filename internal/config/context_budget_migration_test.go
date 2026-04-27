@@ -37,6 +37,7 @@ context:
 		t.Fatalf("expected auto_compact removed, got:\n%s", text)
 	}
 	for _, want := range []string{
+		"generate_start_timeout_sec: 90",
 		"budget:",
 		"prompt_budget: 120000",
 		"reserve_tokens: 13000",
@@ -45,6 +46,52 @@ context:
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected migrated YAML to contain %q, got:\n%s", want, text)
 		}
+	}
+}
+
+func TestMigrateContextBudgetConfigContentAddsGenerateStartTimeoutWhenMissing(t *testing.T) {
+	t.Parallel()
+
+	input := []byte(strings.TrimSpace(`
+selected_provider: openai
+current_model: gpt-5.4
+shell: powershell
+`) + "\n")
+
+	out, changed, notes, err := MigrateContextBudgetConfigContent(input)
+	if err != nil {
+		t.Fatalf("MigrateContextBudgetConfigContent() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("expected migration change")
+	}
+	if len(notes) != 0 {
+		t.Fatalf("expected no migration notes, got %v", notes)
+	}
+	if !strings.Contains(string(out), "generate_start_timeout_sec: 90") {
+		t.Fatalf("expected generate_start_timeout_sec to be added, got:\n%s", out)
+	}
+}
+
+func TestMigrateContextBudgetConfigContentKeepsExistingGenerateStartTimeout(t *testing.T) {
+	t.Parallel()
+
+	input := []byte(strings.TrimSpace(`
+selected_provider: openai
+current_model: gpt-5.4
+shell: powershell
+generate_start_timeout_sec: 120
+`) + "\n")
+
+	out, changed, notes, err := MigrateContextBudgetConfigContent(input)
+	if err != nil {
+		t.Fatalf("MigrateContextBudgetConfigContent() error = %v", err)
+	}
+	if changed {
+		t.Fatalf("expected no migration change, got:\n%s", out)
+	}
+	if len(notes) != 0 {
+		t.Fatalf("expected no migration notes, got %v", notes)
 	}
 }
 
@@ -118,6 +165,47 @@ context:
 	}
 }
 
+func TestMigrateContextBudgetConfigContentMigratesSafeVerifierCommandString(t *testing.T) {
+	t.Parallel()
+
+	input := []byte(strings.TrimSpace(`
+runtime:
+  verification:
+    verifiers:
+      test:
+        command: go test ./...
+`) + "\n")
+
+	out, changed, _, err := MigrateContextBudgetConfigContent(input)
+	if err != nil {
+		t.Fatalf("MigrateContextBudgetConfigContent() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("expected migration change")
+	}
+	text := string(out)
+	if !strings.Contains(text, "- go") || !strings.Contains(text, "- test") || !strings.Contains(text, "- ./...") {
+		t.Fatalf("expected argv migration, got:\n%s", text)
+	}
+}
+
+func TestMigrateContextBudgetConfigContentRejectsUnsafeVerifierCommandString(t *testing.T) {
+	t.Parallel()
+
+	input := []byte(strings.TrimSpace(`
+runtime:
+  verification:
+    verifiers:
+      test:
+        command: sh -c 'go test ./...'
+`) + "\n")
+
+	_, _, _, err := MigrateContextBudgetConfigContent(input)
+	if err == nil || !strings.Contains(err.Error(), "rewrite it as argv") {
+		t.Fatalf("expected unsupported shell syntax error, got %v", err)
+	}
+}
+
 func TestMigrateContextBudgetConfigFileCreatesBackup(t *testing.T) {
 	t.Parallel()
 
@@ -145,6 +233,44 @@ context:
 	if result.Backup == "" {
 		t.Fatal("expected backup path")
 	}
+	backup, err := os.ReadFile(result.Backup)
+	if err != nil {
+		t.Fatalf("read backup: %v", err)
+	}
+	if string(backup) != original {
+		t.Fatalf("expected backup to keep original content, got:\n%s", backup)
+	}
+}
+
+func TestMigrateContextBudgetConfigFileCreatesBackupWhenAddingGenerateStartTimeout(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	target := filepath.Join(dir, configName)
+	original := "selected_provider: openai\nshell: powershell\n"
+	if err := os.WriteFile(target, []byte(original), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	result, err := MigrateContextBudgetConfigFile(target, false)
+	if err != nil {
+		t.Fatalf("MigrateContextBudgetConfigFile() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected changed result")
+	}
+	if result.Backup == "" {
+		t.Fatal("expected backup path")
+	}
+
+	migrated, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read migrated: %v", err)
+	}
+	if !strings.Contains(string(migrated), "generate_start_timeout_sec: 90") {
+		t.Fatalf("expected generate_start_timeout_sec to be persisted, got:\n%s", migrated)
+	}
+
 	backup, err := os.ReadFile(result.Backup)
 	if err != nil {
 		t.Fatalf("read backup: %v", err)

@@ -121,6 +121,45 @@ context:
 	}
 }
 
+func TestBuildSharedConfigDepsPersistsGenerateStartTimeoutDefault(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
+	configDir := filepath.Join(home, ".neocode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	configPath := filepath.Join(configDir, "config.yaml")
+	raw := "selected_provider: openai\ncurrent_model: gpt-5.4\nshell: powershell\n"
+	if err := os.WriteFile(configPath, []byte(raw), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	shared, _, _, err := BuildSharedConfigDeps(context.Background(), BootstrapOptions{})
+	if err != nil {
+		t.Fatalf("BuildSharedConfigDeps() error = %v", err)
+	}
+	if shared.Config.GenerateStartTimeoutSec != config.DefaultGenerateStartTimeoutSec {
+		t.Fatalf(
+			"expected generate_start_timeout_sec=%d, got %d",
+			config.DefaultGenerateStartTimeoutSec,
+			shared.Config.GenerateStartTimeoutSec,
+		)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if !strings.Contains(string(data), "generate_start_timeout_sec: 90") {
+		t.Fatalf("expected config to persist generate_start_timeout_sec, got:\n%s", string(data))
+	}
+}
+
 func TestBuildSharedConfigDepsReturnsPreflightError(t *testing.T) {
 	disableBuiltinProviderAPIKeys(t)
 
@@ -981,6 +1020,79 @@ func TestBuildRuntimeInjectsSkillsRegistryWhenRootExists(t *testing.T) {
 	}
 }
 
+func TestBuildRuntimeFallsBackToCodexSkillsRootWhenNeoCodeRootMissing(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	skillsRoot := filepath.Join(home, ".codex", "skills", "go-review")
+	if err := os.MkdirAll(skillsRoot, 0o755); err != nil {
+		t.Fatalf("mkdir skills root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillsRoot, "SKILL.md"), []byte(strings.Join([]string{
+		"---",
+		"id: go-review",
+		"name: go-review",
+		"---",
+		"",
+		"# Go Review",
+		"",
+		"Review code carefully.",
+	}, "\n")), 0o644); err != nil {
+		t.Fatalf("write SKILL.md: %v", err)
+	}
+
+	bundle, err := BuildGatewayServerDeps(context.Background(), BootstrapOptions{})
+	if err != nil {
+		t.Fatalf("BuildGatewayServerDeps() error = %v", err)
+	}
+	if bundle.Close != nil {
+		t.Cleanup(func() {
+			if err := bundle.Close(); err != nil {
+				t.Fatalf("bundle.Close() error = %v", err)
+			}
+		})
+	}
+
+	store := agentsession.NewSQLiteStore(bundle.ConfigManager.BaseDir(), bundle.Config.Workdir)
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("store.Close() error = %v", err)
+		}
+	})
+	session := agentsession.New("fallback skill session")
+	session, err = store.CreateSession(context.Background(), agentsession.CreateSessionInput{
+		ID:        session.ID,
+		Title:     session.Title,
+		CreatedAt: session.CreatedAt,
+		UpdatedAt: session.UpdatedAt,
+		Head:      session.HeadSnapshot(),
+	})
+	if err != nil {
+		t.Fatalf("save session: %v", err)
+	}
+
+	runtimeWithSkills, ok := bundle.Runtime.(interface {
+		ActivateSessionSkill(ctx context.Context, sessionID string, skillID string) error
+	})
+	if !ok {
+		t.Fatalf("expected runtime to expose ActivateSessionSkill")
+	}
+	if err := runtimeWithSkills.ActivateSessionSkill(context.Background(), session.ID, "go-review"); err != nil {
+		t.Fatalf("ActivateSessionSkill() error = %v", err)
+	}
+
+	loaded, err := store.LoadSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("load session: %v", err)
+	}
+	if got := loaded.ActiveSkillIDs(); len(got) != 1 || got[0] != "go-review" {
+		t.Fatalf("expected codex fallback skill to be activated, got %+v", got)
+	}
+}
+
 func TestBuildSkillsRegistryKeepsInstanceWhenRefreshFails(t *testing.T) {
 	t.Parallel()
 
@@ -988,13 +1100,63 @@ func TestBuildSkillsRegistryKeepsInstanceWhenRefreshFails(t *testing.T) {
 	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	registry := buildSkillsRegistry(canceledCtx, baseDir)
+	registry := buildSkillsRegistry(canceledCtx, baseDir, "")
 	if registry == nil {
 		t.Fatalf("expected non-nil registry even when refresh fails")
 	}
 	_, _, err := registry.Get(context.Background(), "missing")
 	if !errors.Is(err, skills.ErrSkillNotFound) {
 		t.Fatalf("expected empty catalog behavior, got %v", err)
+	}
+}
+
+func TestBuildSkillsRegistryPrefersWorkspaceSkillsOverGlobal(t *testing.T) {
+	t.Parallel()
+
+	baseDir := filepath.Join(t.TempDir(), ".neocode")
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		t.Fatalf("mkdir base dir: %v", err)
+	}
+	workspace := t.TempDir()
+	globalSkillsRoot := filepath.Join(baseDir, "skills")
+	projectSkillsRoot := filepath.Join(workspace, ".neocode", "skills")
+
+	writeBootstrapSkillFile(t, globalSkillsRoot, "go-review", "global instruction")
+	writeBootstrapSkillFile(t, projectSkillsRoot, "go-review", "project instruction")
+
+	registry := buildSkillsRegistry(context.Background(), baseDir, workspace)
+	descriptor, content, err := registry.Get(context.Background(), "go-review")
+	if err != nil {
+		t.Fatalf("registry.Get() error = %v", err)
+	}
+	if got := descriptor.Source.Layer; got != skills.SourceLayerProject {
+		t.Fatalf("source layer = %q, want %q", got, skills.SourceLayerProject)
+	}
+	if got := strings.TrimSpace(content.Instruction); got != "project instruction" {
+		t.Fatalf("instruction = %q, want %q", got, "project instruction")
+	}
+}
+
+func TestBuildSkillsRegistryUsesGlobalSkillsWhenWorkspaceMissing(t *testing.T) {
+	t.Parallel()
+
+	baseDir := filepath.Join(t.TempDir(), ".neocode")
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		t.Fatalf("mkdir base dir: %v", err)
+	}
+	globalSkillsRoot := filepath.Join(baseDir, "skills")
+	writeBootstrapSkillFile(t, globalSkillsRoot, "go-review", "global instruction")
+
+	registry := buildSkillsRegistry(context.Background(), baseDir, filepath.Join(t.TempDir(), "missing-workspace"))
+	descriptor, content, err := registry.Get(context.Background(), "go-review")
+	if err != nil {
+		t.Fatalf("registry.Get() error = %v", err)
+	}
+	if got := descriptor.Source.Layer; got != skills.SourceLayerGlobal {
+		t.Fatalf("source layer = %q, want %q", got, skills.SourceLayerGlobal)
+	}
+	if got := strings.TrimSpace(content.Instruction); got != "global instruction" {
+		t.Fatalf("instruction = %q, want %q", got, "global instruction")
 	}
 }
 
@@ -1817,7 +1979,6 @@ func disableBuiltinProviderAPIKeys(t *testing.T) {
 	t.Helper()
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "")
 	t.Setenv(config.GeminiDefaultAPIKeyEnv, "")
-	t.Setenv(config.OpenLLDefaultAPIKeyEnv, "")
 	t.Setenv(config.QiniuDefaultAPIKeyEnv, "")
 }
 
@@ -2030,6 +2191,25 @@ func TestHelperProcessAppMCPStdioServer(t *testing.T) {
 		if err := writeFramedForAppTest(os.Stdout, rawResponse); err != nil {
 			os.Exit(5)
 		}
+	}
+}
+
+func writeBootstrapSkillFile(t *testing.T, root string, id string, instruction string) {
+	t.Helper()
+	skillRoot := filepath.Join(root, id)
+	if err := os.MkdirAll(skillRoot, 0o755); err != nil {
+		t.Fatalf("mkdir skill root: %v", err)
+	}
+	raw := strings.Join([]string{
+		"---",
+		"id: " + id,
+		"name: " + id,
+		"---",
+		"## Instruction",
+		instruction,
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(skillRoot, "SKILL.md"), []byte(raw), 0o644); err != nil {
+		t.Fatalf("write skill file: %v", err)
 	}
 }
 

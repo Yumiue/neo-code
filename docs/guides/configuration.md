@@ -23,11 +23,12 @@ selected_provider: openai
 current_model: gpt-5.4
 shell: bash
 tool_timeout_sec: 20
+generate_start_timeout_sec: 90
 
 runtime:
   max_no_progress_streak: 5
   max_repeat_cycle_streak: 3
-  max_turns: 40
+  max_turns: 90
   assets:
     max_session_asset_bytes: 20971520
     max_session_assets_total_bytes: 20971520
@@ -156,7 +157,6 @@ internal/config/provider.go
 
 - `openai`
 - `gemini`
-- `openll`
 - `qiniu`
 - `modelscope`
 
@@ -173,7 +173,17 @@ base_url: https://llm.example.com/v1
 chat_api_mode: chat_completions
 chat_endpoint_path: /chat/completions
 discovery_endpoint_path: /models
+generate_max_retries: 5
+generate_idle_timeout_sec: 300
 ```
+
+新增的生成链路控制字段含义如下：
+
+- `generate_max_retries`：额外重试次数，不含首次尝试；`<= 0` 时回退默认值 `5`，且必须 `<= 20`。
+- `generate_start_timeout_sec`：写在 `config.yaml` 顶层，从发请求到收到首个有效流 payload 的最长等待窗口；`<= 0` 时回退默认值 `90`。
+- `generate_idle_timeout_sec`：首包后连续没有任何新 payload 的最长空闲窗口；`<= 0` 时回退默认值 `300`。
+
+启动时会自动把缺失的 `generate_start_timeout_sec` 规范化写回 `config.yaml`，避免磁盘配置与运行时默认值不一致。
 
 ## 不写入 `config.yaml` 的字段
 
@@ -199,7 +209,6 @@ API Key 只从系统环境变量读取。
 |----------|----------|
 | `openai` | `OPENAI_API_KEY` |
 | `gemini` | `GEMINI_API_KEY` |
-| `openll` | `AI_API_KEY` |
 | `qiniu` | `QINIU_API_KEY` |
 | `modelscope` | `MODELSCOPE_API_KEY` |
 
