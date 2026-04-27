@@ -237,6 +237,13 @@ func TestRuntimeLoadOrCreateAndEmitBranches(t *testing.T) {
 		t.Fatalf("expected same workdir path to skip save, got workdir=%q saves=%d", got.Workdir, store.saves)
 	}
 
+	service.sessionStore = newMemoryStore()
+	if created, err := service.loadOrCreateSession(context.Background(), "", "title", t.TempDir(), ""); err != nil {
+		t.Fatalf("loadOrCreateSession create error = %v", err)
+	} else if created.TaskState.VerificationProfile != agentsession.VerificationProfileTaskOnly {
+		t.Fatalf("created verification profile = %q, want %q", created.TaskState.VerificationProfile, agentsession.VerificationProfileTaskOnly)
+	}
+
 	fStore := &failingStore{Store: store, saveErr: errors.New("save failed"), failOnSave: 1, ignoreContextErr: true}
 	service.sessionStore = fStore
 	if _, err := service.loadOrCreateSession(context.Background(), session.ID, "title", t.TempDir(), ".."); err == nil {

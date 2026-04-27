@@ -24,6 +24,7 @@ func (s *Service) loadOrCreateSession(
 			return agentsession.Session{}, err
 		}
 		session := agentsession.NewWithWorkdir(title, sessionWorkdir)
+		establishSessionVerificationProfile(&session)
 		session, err = s.sessionStore.CreateSession(ctx, createSessionInputFromSession(session))
 		if err != nil {
 			return agentsession.Session{}, err
@@ -53,6 +54,17 @@ func (s *Service) loadOrCreateSession(
 		return agentsession.Session{}, err
 	}
 	return session, nil
+}
+
+// establishSessionVerificationProfile 在创建新会话的边界显式写入验收 profile，避免运行时依赖隐式零值。
+func establishSessionVerificationProfile(session *agentsession.Session) {
+	if session == nil {
+		return
+	}
+	if session.TaskState.VerificationProfile.Valid() {
+		return
+	}
+	session.TaskState.VerificationProfile = agentsession.VerificationProfileTaskOnly
 }
 
 // startRun 记录当前激活的运行取消句柄，并分配一个新的运行令牌。
