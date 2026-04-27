@@ -835,7 +835,7 @@ type logPersistFlushMsg struct {
 	Version int
 }
 
-// scheduleLogPersistFlush 鍦ㄧ煭鏆傞潤榛樺悗瑙﹀彂鏃ュ織钀界洏锛岄伩鍏嶆瘡鏉℃椿鍔ㄩ兘鍚屾鍒风洏銆?
+// scheduleLogPersistFlush 在短暂静默后触发日志落盘，避免每条活动都同步刷盘。
 func scheduleLogPersistFlush(version int) tea.Cmd {
 	return tea.Tick(logViewerPersistDebounce, func(time.Time) tea.Msg {
 		return logPersistFlushMsg{Version: version}
