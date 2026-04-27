@@ -690,6 +690,96 @@ func TestDefaultNewGatewayNetworkServer(t *testing.T) {
 	}
 }
 
+func TestURLRegisterSubcommandUsesExecutableFlag(t *testing.T) {
+	originalRunner := runURLRegisterCommand
+	originalPreload := runGlobalPreload
+	t.Cleanup(func() { runURLRegisterCommand = originalRunner })
+	t.Cleanup(func() { runGlobalPreload = originalPreload })
+	runGlobalPreload = func(context.Context) error { return nil }
+
+	var captured urlRegisterCommandOptions
+	runURLRegisterCommand = func(ctx context.Context, options urlRegisterCommandOptions) error {
+		captured = options
+		return nil
+	}
+
+	command := NewRootCommand()
+	command.SetArgs([]string{
+		"url-register",
+		"--executable", "  /tmp/neocode-bin  ",
+	})
+	if err := command.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
+	}
+
+	if captured.Executable != "/tmp/neocode-bin" {
+		t.Fatalf("executable = %q, want %q", captured.Executable, "/tmp/neocode-bin")
+	}
+}
+
+func TestURLRegisterSubcommandDefaultRunnerUsesCurrentExecutable(t *testing.T) {
+	originalRunner := runURLRegisterCommand
+	originalResolveExecutablePath := resolveExecutablePath
+	originalRegisterURLScheme := registerURLScheme
+	originalWriteRegisterSuccess := writeRegisterSuccess
+	originalPreload := runGlobalPreload
+	t.Cleanup(func() { runURLRegisterCommand = originalRunner })
+	t.Cleanup(func() { resolveExecutablePath = originalResolveExecutablePath })
+	t.Cleanup(func() { registerURLScheme = originalRegisterURLScheme })
+	t.Cleanup(func() { writeRegisterSuccess = originalWriteRegisterSuccess })
+	t.Cleanup(func() { runGlobalPreload = originalPreload })
+	runGlobalPreload = func(context.Context) error { return nil }
+
+	runURLRegisterCommand = defaultURLRegisterCommandRunner
+	resolveExecutablePath = func() (string, error) {
+		return "/tmp/neocode-current", nil
+	}
+	var receivedExecutable string
+	registerURLScheme = func(executablePath string) error {
+		receivedExecutable = executablePath
+		return nil
+	}
+	writeRegisterSuccess = func(io.Writer, string) error { return nil }
+
+	command := NewRootCommand()
+	command.SetArgs([]string{"url-register"})
+	if err := command.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
+	}
+	if receivedExecutable != "/tmp/neocode-current" {
+		t.Fatalf("registered executable = %q, want %q", receivedExecutable, "/tmp/neocode-current")
+	}
+}
+
+func TestURLRegisterSubcommandDefaultRunnerReturnsRegistrarError(t *testing.T) {
+	originalRunner := runURLRegisterCommand
+	originalResolveExecutablePath := resolveExecutablePath
+	originalRegisterURLScheme := registerURLScheme
+	originalWriteRegisterSuccess := writeRegisterSuccess
+	originalPreload := runGlobalPreload
+	t.Cleanup(func() { runURLRegisterCommand = originalRunner })
+	t.Cleanup(func() { resolveExecutablePath = originalResolveExecutablePath })
+	t.Cleanup(func() { registerURLScheme = originalRegisterURLScheme })
+	t.Cleanup(func() { writeRegisterSuccess = originalWriteRegisterSuccess })
+	t.Cleanup(func() { runGlobalPreload = originalPreload })
+	runGlobalPreload = func(context.Context) error { return nil }
+
+	runURLRegisterCommand = defaultURLRegisterCommandRunner
+	resolveExecutablePath = func() (string, error) {
+		return "/tmp/neocode-current", nil
+	}
+	expected := &urlscheme.DispatchError{Code: "internal_error", Message: "register failed"}
+	registerURLScheme = func(string) error { return expected }
+	writeRegisterSuccess = func(io.Writer, string) error { return nil }
+
+	command := NewRootCommand()
+	command.SetArgs([]string{"url-register"})
+	err := command.ExecuteContext(context.Background())
+	if !errors.Is(err, expected) {
+		t.Fatalf("expected registrar error %v, got %v", expected, err)
+	}
+}
+
 func TestURLDispatchSubcommandUsesURLFlag(t *testing.T) {
 	originalRunner := runURLDispatchCommand
 	originalPreload := runGlobalPreload
@@ -1362,6 +1452,31 @@ func TestURLDispatchSkipsGlobalPreload(t *testing.T) {
 	}
 }
 
+func TestURLRegisterSkipsGlobalPreload(t *testing.T) {
+	originalPreload := runGlobalPreload
+	originalRunner := runURLRegisterCommand
+	t.Cleanup(func() { runGlobalPreload = originalPreload })
+	t.Cleanup(func() { runURLRegisterCommand = originalRunner })
+
+	var called bool
+	runGlobalPreload = func(context.Context) error {
+		called = true
+		return errors.New("should be skipped")
+	}
+	runURLRegisterCommand = func(context.Context, urlRegisterCommandOptions) error {
+		return nil
+	}
+
+	command := NewRootCommand()
+	command.SetArgs([]string{"url-register"})
+	if err := command.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
+	}
+	if called {
+		t.Fatal("expected global preload to be skipped for url-register")
+	}
+}
+
 func TestGatewayRunsGlobalPreload(t *testing.T) {
 	originalPreload := runGlobalPreload
 	t.Cleanup(func() { runGlobalPreload = originalPreload })
@@ -1476,6 +1591,30 @@ func TestURLDispatchSkipsSilentUpdateCheck(t *testing.T) {
 	}
 	if called {
 		t.Fatal("expected silent update check to be skipped for url-dispatch")
+	}
+}
+
+func TestURLRegisterSkipsSilentUpdateCheck(t *testing.T) {
+	originalSilentCheck := runSilentUpdateCheck
+	originalRunner := runURLRegisterCommand
+	t.Cleanup(func() { runSilentUpdateCheck = originalSilentCheck })
+	t.Cleanup(func() { runURLRegisterCommand = originalRunner })
+
+	var called bool
+	runSilentUpdateCheck = func(context.Context) {
+		called = true
+	}
+	runURLRegisterCommand = func(context.Context, urlRegisterCommandOptions) error {
+		return nil
+	}
+
+	command := NewRootCommand()
+	command.SetArgs([]string{"url-register"})
+	if err := command.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
+	}
+	if called {
+		t.Fatal("expected silent update check to be skipped for url-register")
 	}
 }
 
@@ -1652,6 +1791,28 @@ func TestWriteURLDispatchSuccessOutput(t *testing.T) {
 	}
 	if output["status"] != "ok" {
 		t.Fatalf("status = %v, want %q", output["status"], "ok")
+	}
+}
+
+func TestWriteURLRegisterSuccessOutput(t *testing.T) {
+	var buffer bytes.Buffer
+	err := writeURLRegisterSuccessOutput(&buffer, "/tmp/neocode")
+	if err != nil {
+		t.Fatalf("write register success output: %v", err)
+	}
+
+	var output map[string]any
+	if err := json.Unmarshal(buffer.Bytes(), &output); err != nil {
+		t.Fatalf("unmarshal register success output: %v", err)
+	}
+	if output["status"] != "ok" {
+		t.Fatalf("status = %v, want %q", output["status"], "ok")
+	}
+	if output["scheme"] != "neocode" {
+		t.Fatalf("scheme = %v, want %q", output["scheme"], "neocode")
+	}
+	if output["executable"] != "/tmp/neocode" {
+		t.Fatalf("executable = %v, want %q", output["executable"], "/tmp/neocode")
 	}
 }
 

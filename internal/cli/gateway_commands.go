@@ -31,14 +31,18 @@ const (
 var (
 	runGatewayCommand       = defaultGatewayCommandRunner
 	runURLDispatchCommand   = defaultURLDispatchCommandRunner
+	runURLRegisterCommand   = defaultURLRegisterCommandRunner
 	newGatewayServer        = defaultNewGatewayServer
 	newGatewayNetwork       = defaultNewGatewayNetworkServer
 	dispatchURLThroughIPC   = urlscheme.Dispatch
+	registerURLScheme       = urlscheme.RegisterURLScheme
+	resolveExecutablePath   = os.Executable
 	newAuthManager          = defaultNewAuthManager
 	loadAuthToken           = loadGatewayAuthToken
 	exitProcess             = os.Exit
 	writeDispatchError      = writeURLDispatchErrorOutput
 	writeDispatchSuccess    = writeURLDispatchSuccessOutput
+	writeRegisterSuccess    = writeURLRegisterSuccessOutput
 	buildGatewayRuntimePort = defaultBuildGatewayRuntimePort
 )
 
@@ -69,6 +73,10 @@ type urlDispatchCommandOptions struct {
 	URL           string
 	ListenAddress string
 	TokenFile     string
+}
+
+type urlRegisterCommandOptions struct {
+	Executable string
 }
 
 type urlDispatchSuccessOutput struct {
@@ -472,6 +480,64 @@ func defaultNewGatewayNetworkServer(options gateway.NetworkServerOptions) (gatew
 	return gateway.NewNetworkServer(options)
 }
 
+// newURLRegisterCommand 创建 URL Scheme 系统注册命令，将 neocode:// 关联到当前可执行文件。
+func newURLRegisterCommand() *cobra.Command {
+	options := &urlRegisterCommandOptions{}
+
+	cmd := &cobra.Command{
+		Use:           "url-register",
+		Short:         "Register neocode:// URL scheme on this system",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		Args:          cobra.NoArgs,
+		Annotations: map[string]string{
+			commandAnnotationSkipGlobalPreload:     "true",
+			commandAnnotationSkipSilentUpdateCheck: "true",
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runURLRegisterCommand(cmd.Context(), urlRegisterCommandOptions{
+				Executable: strings.TrimSpace(options.Executable),
+			})
+		},
+	}
+	cmd.Flags().StringVar(&options.Executable, "executable", "", "absolute neocode executable path override")
+	return cmd
+}
+
+// defaultURLRegisterCommandRunner 执行 URL Scheme 注册并输出结构化结果，便于脚本场景读取。
+func defaultURLRegisterCommandRunner(ctx context.Context, options urlRegisterCommandOptions) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	executablePath := strings.TrimSpace(options.Executable)
+	if executablePath == "" {
+		if resolveExecutablePath == nil {
+			return errors.New("resolve current executable is unavailable")
+		}
+		resolvedPath, resolveErr := resolveExecutablePath()
+		if resolveErr != nil {
+			return fmt.Errorf("resolve current executable: %w", resolveErr)
+		}
+		executablePath = strings.TrimSpace(resolvedPath)
+	}
+	if executablePath == "" {
+		return errors.New("resolve current executable: empty path")
+	}
+
+	if registerURLScheme == nil {
+		return errors.New("url scheme registrar is unavailable")
+	}
+	if registerErr := registerURLScheme(executablePath); registerErr != nil {
+		return registerErr
+	}
+
+	if writeRegisterSuccess == nil {
+		return nil
+	}
+	return writeRegisterSuccess(os.Stdout, executablePath)
+}
+
 // newURLDispatchCommand 创建 URL Scheme 派发子命令骨架，仅做参数收敛与调用转发。
 func newURLDispatchCommand() *cobra.Command {
 	options := &urlDispatchCommandOptions{}
@@ -587,6 +653,15 @@ func writeURLDispatchSuccessOutput(writer io.Writer, result urlscheme.DispatchRe
 		Action:        string(result.Response.Action),
 		RequestID:     result.Response.RequestID,
 		Payload:       result.Response.Payload,
+	})
+}
+
+// writeURLRegisterSuccessOutput 输出 URL Scheme 注册成功结果，供安装脚本与人工排障复用。
+func writeURLRegisterSuccessOutput(writer io.Writer, executablePath string) error {
+	return encodeJSONLine(writer, map[string]string{
+		"status":     "ok",
+		"scheme":     "neocode",
+		"executable": strings.TrimSpace(executablePath),
 	})
 }
 

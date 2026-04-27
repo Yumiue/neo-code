@@ -92,6 +92,7 @@ func NewRootCommand() *cobra.Command {
 	cmd.AddCommand(
 		newGatewayCommand(),
 		newMigrateCommand(),
+		newURLRegisterCommand(),
 		newURLDispatchCommand(),
 		newVersionCommand(),
 		newUpdateCommand(),
