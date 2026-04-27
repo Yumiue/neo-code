@@ -40,6 +40,7 @@ var (
 // GlobalFlags 描述根命令共享的全局启动参数。
 type GlobalFlags struct {
 	Workdir string
+	Session string
 }
 
 // Execute 执行 NeoCode 根命令入口，并在退出前等待静默更新检查收尾。
@@ -77,13 +78,17 @@ func NewRootCommand() *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags.Workdir = strings.TrimSpace(settings.GetString("workdir"))
+			flags.Session = strings.TrimSpace(settings.GetString("session"))
 			return launchRootProgram(cmd.Context(), app.BootstrapOptions{
-				Workdir: flags.Workdir,
+				Workdir:   flags.Workdir,
+				SessionID: flags.Session,
 			})
 		},
 	}
 	cmd.PersistentFlags().String("workdir", "", "workdir override for current run")
+	cmd.PersistentFlags().String("session", "", "session id to hydrate on startup")
 	_ = settings.BindPFlag("workdir", cmd.PersistentFlags().Lookup("workdir"))
+	_ = settings.BindPFlag("session", cmd.PersistentFlags().Lookup("session"))
 	cmd.AddCommand(
 		newGatewayCommand(),
 		newMigrateCommand(),

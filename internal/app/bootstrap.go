@@ -55,7 +55,8 @@ var (
 
 // BootstrapOptions 描述应用启动时可注入的运行时选项。
 type BootstrapOptions struct {
-	Workdir string
+	Workdir   string
+	SessionID string
 }
 
 type memoExtractorScheduler interface {
@@ -261,6 +262,14 @@ func NewProgram(ctx context.Context, opts BootstrapOptions) (*tea.Program, func(
 			_ = cleanup()
 		}
 		return nil, nil, err
+	}
+	if sessionID := strings.TrimSpace(opts.SessionID); sessionID != "" {
+		if err := tuiApp.HydrateSession(ctx, sessionID); err != nil {
+			if cleanup != nil {
+				_ = cleanup()
+			}
+			return nil, nil, err
+		}
 	}
 	return tea.NewProgram(
 		tuiApp,

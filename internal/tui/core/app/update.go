@@ -59,6 +59,7 @@ const sessionSwitchBusyMessage = "cannot switch sessions while run or compact is
 const logViewerEntryLimit = 500
 const logViewerPersistDebounce = 300 * time.Millisecond
 const footerErrorFlashDuration = 8 * time.Second
+const sessionWorkdirMissingWarning = "Session workspace not found, keeping current workspace."
 
 type sessionLogPersistenceRuntime interface {
 	LoadSessionLogEntries(ctx context.Context, sessionID string) ([]tuiservices.SessionLogEntry, error)
@@ -1726,14 +1727,48 @@ func (a *App) refreshMessages() error {
 		return err
 	}
 
+	a.applySessionSnapshot(session, false)
+	return nil
+}
+
+// HydrateSession 在 TUI 启动阶段加载并接管既有会话状态，用于 URL 唤醒后的无感接续。
+func (a *App) HydrateSession(ctx context.Context, sessionID string) error {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return fmt.Errorf("session id is empty")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	session, err := a.runtime.LoadSession(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(session.ID) == "" {
+		session.ID = sessionID
+	}
+
+	a.setActiveSessionID(session.ID)
+	a.state.ExecutionError = ""
+	a.state.CurrentTool = ""
+	a.resetSessionRuntimeState()
+	a.applySessionSnapshot(session, true)
+	a.rebuildTranscript()
+	a.transcript.GotoBottom()
+	a.applyComponentLayout(false)
+	return nil
+}
+
+// applySessionSnapshot 将会话快照同步到前端状态，统一复用于普通刷新与启动水化路径。
+func (a *App) applySessionSnapshot(session agentsession.Session, warnOnMissingWorkdir bool) {
 	a.activeMessages = session.Messages
 	a.clearActivities()
 	a.syncTodos(session.Todos)
 	a.state.ActiveSessionTitle = session.Title
-	a.setCurrentWorkdir(agentsession.EffectiveWorkdir(session.Workdir, a.configManager.Get().Workdir))
+	a.syncSessionWorkdir(session.Workdir, warnOnMissingWorkdir)
 	a.loadLogEntriesForSession(session.ID)
 	a.refreshRuntimeSourceSnapshot()
-	return nil
 }
 
 func (a *App) resetSessionRuntimeState() {
@@ -4167,6 +4202,28 @@ func normalizeMemoCommandErrorMessage(err error) string {
 		return "memo command failed"
 	}
 	return message
+}
+
+// syncSessionWorkdir 依据会话快照更新当前工作区；若路径失效可选择展示告警并保留现有目录。
+func (a *App) syncSessionWorkdir(sessionWorkdir string, warnOnMissing bool) {
+	resolved := strings.TrimSpace(agentsession.EffectiveWorkdir(sessionWorkdir, a.configManager.Get().Workdir))
+	if resolved == "" || !filepath.IsAbs(resolved) {
+		return
+	}
+	if !warnOnMissing {
+		a.setCurrentWorkdir(resolved)
+		return
+	}
+
+	info, err := os.Stat(resolved)
+	if err != nil || !info.IsDir() {
+		if warnOnMissing {
+			a.showFooterError(sessionWorkdirMissingWarning)
+		}
+		return
+	}
+
+	a.setCurrentWorkdir(resolved)
 }
 
 // setCurrentWorkdir updates the current workdir only when the value is non-empty and absolute.
