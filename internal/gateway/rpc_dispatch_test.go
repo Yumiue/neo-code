@@ -747,6 +747,22 @@ func TestAuthorizeRPCRequestBranches(t *testing.T) {
 	if err == nil || protocol.GatewayCodeFromJSONRPCError(err) != ErrorCodeUnauthorized.String() {
 		t.Fatalf("unauthenticated request error = %#v, want unauthorized", err)
 	}
+
+	wakeCtx := WithRequestSource(context.Background(), RequestSourceIPC)
+	wakeCtx = WithRequestACL(wakeCtx, NewStrictControlPlaneACL())
+	wakeCtx = WithTokenAuthenticator(wakeCtx, staticTokenAuthenticator{token: "token-2"})
+	err = authorizeRPCRequest(wakeCtx, protocol.MethodWakeOpenURL, string(FrameActionWakeOpenURL))
+	if err != nil {
+		t.Fatalf("ipc wake.openUrl should bypass authentication, got %#v", err)
+	}
+
+	wakeDeniedCtx := WithRequestSource(context.Background(), RequestSourceIPC)
+	wakeDeniedCtx = WithRequestACL(wakeDeniedCtx, denyACL)
+	wakeDeniedCtx = WithTokenAuthenticator(wakeDeniedCtx, staticTokenAuthenticator{token: "token-3"})
+	err = authorizeRPCRequest(wakeDeniedCtx, protocol.MethodWakeOpenURL, string(FrameActionWakeOpenURL))
+	if err == nil || protocol.GatewayCodeFromJSONRPCError(err) != ErrorCodeAccessDenied.String() {
+		t.Fatalf("wake.openUrl acl error = %#v, want access_denied", err)
+	}
 }
 
 func TestDispatchRPCRequestMetricsBranches(t *testing.T) {

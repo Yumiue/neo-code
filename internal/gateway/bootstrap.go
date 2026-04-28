@@ -135,7 +135,7 @@ func handleWakeOpenURLFrame(ctx context.Context, frame MessageFrame, runtimePort
 		if runtimePort == nil {
 			return runtimePortUnavailableFrame(frame)
 		}
-		subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+		subjectID, subjectErr := resolveWakeRunSubjectID(ctx)
 		if subjectErr != nil {
 			return errorFrame(frame, subjectErr)
 		}
@@ -147,14 +147,14 @@ func handleWakeOpenURLFrame(ctx context.Context, frame MessageFrame, runtimePort
 			return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "failed to create wake session"))
 		}
 		sessionID = strings.TrimSpace(createdSessionID)
-		runResponse := handleRunFrame(detachWakeRunContext(ctx), MessageFrame{
+		runResponse := dispatchRunFrameWithSubjectID(detachWakeRunContext(ctx), MessageFrame{
 			Type:      FrameTypeRequest,
 			Action:    FrameActionRun,
 			RequestID: strings.TrimSpace(frame.RequestID),
 			SessionID: sessionID,
 			Workdir:   strings.TrimSpace(intent.Workdir),
 			InputText: strings.TrimSpace(intent.Params["prompt"]),
-		}, runtimePort)
+		}, runtimePort, subjectID)
 		if runResponse.Type == FrameTypeError {
 			if runResponse.Error != nil {
 				return errorFrame(frame, runResponse.Error)
@@ -189,10 +189,19 @@ func handleRunFrame(ctx context.Context, frame MessageFrame, runtimePort Runtime
 	if subjectErr != nil {
 		return errorFrame(frame, subjectErr)
 	}
+	return dispatchRunFrameWithSubjectID(ctx, frame, runtimePort, subjectID)
+}
 
+// dispatchRunFrameWithSubjectID 使用已解析主体执行 run 受理逻辑，避免同一请求链路重复鉴权。
+func dispatchRunFrameWithSubjectID(
+	ctx context.Context,
+	frame MessageFrame,
+	runtimePort RuntimePort,
+	subjectID string,
+) MessageFrame {
 	effectiveRunID := normalizeRunID(strings.TrimSpace(frame.RunID), strings.TrimSpace(frame.RequestID))
 	input := RunInput{
-		SubjectID:  subjectID,
+		SubjectID:  strings.TrimSpace(subjectID),
 		RequestID:  strings.TrimSpace(frame.RequestID),
 		SessionID:  strings.TrimSpace(frame.SessionID),
 		RunID:      effectiveRunID,
@@ -643,6 +652,18 @@ func deriveRuntimeExecutionContext(ctx context.Context) context.Context {
 		return context.WithoutCancel(ctx)
 	}
 	return ctx
+}
+
+// resolveWakeRunSubjectID 为 wake.run 提供主体解析，并在 IPC 免鉴权路径回退到 local_admin。
+func resolveWakeRunSubjectID(ctx context.Context) (string, *FrameError) {
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr == nil {
+		return subjectID, nil
+	}
+	if RequestSourceFromContext(ctx) == RequestSourceIPC && subjectErr.Code == ErrorCodeUnauthorized.String() {
+		return defaultLocalSubjectID, nil
+	}
+	return "", subjectErr
 }
 
 // requireAuthenticatedSubjectID 从上下文中提取已认证主体。

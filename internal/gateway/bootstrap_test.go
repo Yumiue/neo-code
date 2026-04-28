@@ -305,6 +305,61 @@ func TestDispatchRequestFrameWakeOpenURLRunDetachesCanceledParentContext(t *test
 	}
 }
 
+func TestDispatchRequestFrameWakeOpenURLRunAllowsIPCUnauthenticatedFallback(t *testing.T) {
+	runInputs := make(chan RunInput, 1)
+	createInputs := make(chan CreateSessionInput, 1)
+	stub := &bootstrapRuntimeStub{
+		createSessionFn: func(_ context.Context, input CreateSessionInput) (string, error) {
+			createInputs <- input
+			return "session-ipc-fallback", nil
+		},
+		runFn: func(_ context.Context, input RunInput) error {
+			runInputs <- input
+			return nil
+		},
+	}
+
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithTokenAuthenticator(ctx, stubTokenAuthenticator{token: "token-1"})
+
+	response := dispatchRequestFrame(ctx, MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionWakeOpenURL,
+		RequestID: "req-wake-run-ipc-fallback",
+		Payload: map[string]any{
+			"action": "run",
+			"params": map[string]string{
+				"prompt": "hello",
+			},
+		},
+	}, stub)
+
+	if response.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+	}
+	if response.SessionID != "session-ipc-fallback" {
+		t.Fatalf("response session_id = %q, want %q", response.SessionID, "session-ipc-fallback")
+	}
+
+	select {
+	case createInput := <-createInputs:
+		if createInput.SubjectID != defaultLocalSubjectID {
+			t.Fatalf("create session subject_id = %q, want %q", createInput.SubjectID, defaultLocalSubjectID)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected wake.run to create session in ipc fallback path")
+	}
+
+	select {
+	case runInput := <-runInputs:
+		if runInput.SubjectID != defaultLocalSubjectID {
+			t.Fatalf("runtime run subject_id = %q, want %q", runInput.SubjectID, defaultLocalSubjectID)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected wake.run to invoke runtime.Run in ipc fallback path")
+	}
+}
+
 func TestDispatchRequestFrameWakeOpenURLRunCreateSessionFailed(t *testing.T) {
 	stub := &bootstrapRuntimeStub{
 		createSessionFn: func(_ context.Context, _ CreateSessionInput) (string, error) {
@@ -652,6 +707,22 @@ func TestHandleRunFrameBranches(t *testing.T) {
 		}
 		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
 			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("requires authenticated subject when authenticator exists", func(t *testing.T) {
+		ctx := WithTokenAuthenticator(context.Background(), stubTokenAuthenticator{token: "token-1"})
+		response := handleRunFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionRun,
+			RequestID: "req-run-unauthorized",
+			InputText: "hello",
+		}, &bootstrapRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeUnauthorized.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeUnauthorized.String())
 		}
 	})
 
@@ -1586,6 +1657,31 @@ func TestRequireAuthenticatedSubjectIDBranches(t *testing.T) {
 		}
 		if !authState.IsAuthenticated() || authState.SubjectID() != "local_admin" {
 			t.Fatalf("auth state = authenticated:%v subject:%q", authState.IsAuthenticated(), authState.SubjectID())
+		}
+	})
+}
+
+func TestResolveWakeRunSubjectIDBranches(t *testing.T) {
+	t.Run("ipc unauthorized fallback to local admin", func(t *testing.T) {
+		ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+		ctx = WithTokenAuthenticator(ctx, stubTokenAuthenticator{token: "token-1"})
+
+		subjectID, frameErr := resolveWakeRunSubjectID(ctx)
+		if frameErr != nil {
+			t.Fatalf("unexpected frame error: %#v", frameErr)
+		}
+		if subjectID != defaultLocalSubjectID {
+			t.Fatalf("subject_id = %q, want %q", subjectID, defaultLocalSubjectID)
+		}
+	})
+
+	t.Run("http unauthorized keeps error", func(t *testing.T) {
+		ctx := WithRequestSource(context.Background(), RequestSourceHTTP)
+		ctx = WithTokenAuthenticator(ctx, stubTokenAuthenticator{token: "token-1"})
+
+		_, frameErr := resolveWakeRunSubjectID(ctx)
+		if frameErr == nil || frameErr.Code != ErrorCodeUnauthorized.String() {
+			t.Fatalf("frame error = %#v, want %q", frameErr, ErrorCodeUnauthorized.String())
 		}
 	})
 }
