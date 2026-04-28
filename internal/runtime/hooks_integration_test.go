@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -151,6 +152,9 @@ func TestExecuteOneToolCallTriggersAfterToolResultHookWithoutMutatingResult(t *t
 	if got := metadata["result_content_preview"]; got != "ok" {
 		t.Fatalf("result_content_preview = %#v, want %q", got, "ok")
 	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", metadata["workdir"])); got == "" {
+		t.Fatalf("expected workdir metadata in after_tool_result hook, got %#v", metadata["workdir"])
+	}
 }
 
 func TestExecuteOneToolCallCanceledStillTriggersAfterToolResultHook(t *testing.T) {
@@ -273,6 +277,9 @@ func TestRunBeforeCompletionDecisionHookBlockIsObservedOnly(t *testing.T) {
 		if payload.Point != string(runtimehooks.HookPointBeforeCompletionDecision) {
 			t.Fatalf("payload.Point = %q, want %q", payload.Point, runtimehooks.HookPointBeforeCompletionDecision)
 		}
+		if payload.Source != string(runtimehooks.HookSourceInternal) {
+			t.Fatalf("payload.Source = %q, want %q", payload.Source, runtimehooks.HookSourceInternal)
+		}
 	}
 	if capturedWorkdir == "" {
 		t.Fatalf("expected before_completion_decision hook metadata to include workdir")
@@ -336,6 +343,9 @@ func TestUserHookEventCarriesScopeAndMessage(t *testing.T) {
 	}
 	if payload.Scope != string(runtimehooks.HookScopeUser) {
 		t.Fatalf("payload.Scope = %q, want %q", payload.Scope, runtimehooks.HookScopeUser)
+	}
+	if payload.Source != string(runtimehooks.HookSourceUser) {
+		t.Fatalf("payload.Source = %q, want %q", payload.Source, runtimehooks.HookSourceUser)
 	}
 	if payload.Message != "user warning note" {
 		t.Fatalf("payload.Message = %q, want %q", payload.Message, "user warning note")

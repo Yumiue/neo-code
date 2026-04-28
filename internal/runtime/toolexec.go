@@ -121,14 +121,17 @@ func (s *Service) executeOneToolCall(
 	})
 	if beforeToolHookOutput.Blocked {
 		reason := findHookBlockMessage(beforeToolHookOutput)
+		blockSource := findHookBlockSource(beforeToolHookOutput)
 		result := tools.NewErrorResult(call.Name, hookErrorClassBlocked, reason, map[string]any{
-			"hook_id": beforeToolHookOutput.BlockedBy,
-			"point":   string(runtimehooks.HookPointBeforeToolCall),
+			"hook_id":     beforeToolHookOutput.BlockedBy,
+			"hook_source": string(blockSource),
+			"point":       string(runtimehooks.HookPointBeforeToolCall),
 		})
 		result.ToolCallID = call.ID
 		result.ErrorClass = hookErrorClassBlocked
 		s.emitRunScoped(ctx, EventHookBlocked, state, HookBlockedPayload{
 			HookID:     strings.TrimSpace(beforeToolHookOutput.BlockedBy),
+			Source:     string(blockSource),
 			Point:      string(runtimehooks.HookPointBeforeToolCall),
 			ToolCallID: strings.TrimSpace(call.ID),
 			ToolName:   strings.TrimSpace(call.Name),
@@ -157,13 +160,13 @@ func (s *Service) executeOneToolCall(
 	})
 
 	if errors.Is(execErr, context.Canceled) {
-		s.emitAfterToolResultHook(ctx, state, call, result, execErr)
+		s.emitAfterToolResultHook(ctx, state, call, result, execErr, snapshot.Workdir)
 		return result, false, execErr
 	}
 	if execErr != nil && strings.TrimSpace(result.Content) == "" {
 		result.Content = execErr.Error()
 	}
-	s.emitAfterToolResultHook(ctx, state, call, result, execErr)
+	s.emitAfterToolResultHook(ctx, state, call, result, execErr, snapshot.Workdir)
 
 	if err := s.appendToolMessageAndSave(ctx, state, call, result); err != nil {
 		if execErr != nil && errors.Is(err, context.Canceled) {
@@ -296,6 +299,7 @@ func (s *Service) emitAfterToolResultHook(
 	call providertypes.ToolCall,
 	result tools.ToolResult,
 	execErr error,
+	workdir string,
 ) {
 	afterToolHookMetadata := map[string]any{
 		"tool_call_id":            strings.TrimSpace(call.ID),
@@ -304,6 +308,7 @@ func (s *Service) emitAfterToolResultHook(
 		"error_class":             strings.TrimSpace(result.ErrorClass),
 		"result_content_preview":  summarizeHookResultContent(result.Content),
 		"result_metadata_present": len(result.Metadata) > 0,
+		"workdir":                 strings.TrimSpace(workdir),
 	}
 	if execErr != nil {
 		afterToolHookMetadata["execution_error"] = strings.TrimSpace(execErr.Error())
