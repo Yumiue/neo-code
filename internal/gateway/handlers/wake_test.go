@@ -86,6 +86,17 @@ func TestWakeOpenURLHandlerHandleReviewAllowsSessionIDWithoutWorkdir(t *testing.
 	}
 }
 
+func TestWakeOpenURLHandlerHandleReviewAllowsSessionIDWithoutPath(t *testing.T) {
+	handler := NewWakeOpenURLHandler()
+	_, err := handler.Handle(protocol.WakeIntent{
+		Action:    protocol.WakeActionReview,
+		SessionID: "session-review-1",
+	})
+	if err != nil {
+		t.Fatalf("review resume without path should pass, got error: %v", err)
+	}
+}
+
 func TestWakeOpenURLHandlerHandleRunSuccess(t *testing.T) {
 	handler := NewWakeOpenURLHandler()
 	result, err := handler.Handle(protocol.WakeIntent{
@@ -113,6 +124,17 @@ func TestWakeOpenURLHandlerHandleRunMissingPrompt(t *testing.T) {
 	}
 	if err.Code != WakeErrorCodeMissingRequiredField {
 		t.Fatalf("error code = %q, want %q", err.Code, WakeErrorCodeMissingRequiredField)
+	}
+}
+
+func TestWakeOpenURLHandlerHandleRunAllowsSessionIDWithoutPrompt(t *testing.T) {
+	handler := NewWakeOpenURLHandler()
+	_, err := handler.Handle(protocol.WakeIntent{
+		Action:    protocol.WakeActionRun,
+		SessionID: "session-run-1",
+	})
+	if err != nil {
+		t.Fatalf("run resume without prompt should pass, got error: %v", err)
 	}
 }
 

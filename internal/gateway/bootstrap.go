@@ -141,33 +141,23 @@ func handleWakeOpenURLFrame(ctx context.Context, frame MessageFrame, runtimePort
 		if subjectErr != nil {
 			return errorFrame(frame, subjectErr)
 		}
-		createdSessionID, createErr := runtimePort.CreateSession(ctx, CreateSessionInput{
-			SubjectID: subjectID,
-			SessionID: sessionID,
-		})
-		if createErr != nil {
-			return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "failed to create wake session"))
-		}
-		sessionID = strings.TrimSpace(createdSessionID)
-		runInputText := strings.TrimSpace(intent.Params["prompt"])
-		runFailureMessage := "wake run failed"
-		if normalizedAction == protocol.WakeActionReview {
-			runInputText = buildWakeReviewPrompt(intent.Params["path"])
-			runFailureMessage = "wake review failed"
-		}
-		runResponse := dispatchRunFrameWithSubjectID(detachWakeRunContext(ctx), MessageFrame{
-			Type:      FrameTypeRequest,
-			Action:    FrameActionRun,
-			RequestID: strings.TrimSpace(frame.RequestID),
-			SessionID: sessionID,
-			Workdir:   strings.TrimSpace(intent.Workdir),
-			InputText: runInputText,
-		}, runtimePort, subjectID)
-		if runResponse.Type == FrameTypeError {
-			if runResponse.Error != nil {
-				return errorFrame(frame, runResponse.Error)
+		if sessionID != "" {
+			exists, existsErr := wakeSessionExists(ctx, runtimePort, sessionID)
+			if existsErr != nil {
+				return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "failed to validate wake session"))
 			}
-			return errorFrame(frame, NewFrameError(ErrorCodeInternalError, runFailureMessage))
+			if !exists {
+				return errorFrame(frame, NewFrameError(ErrorCodeResourceNotFound, "wake session not found"))
+			}
+		} else {
+			createdSessionID, createErr := runtimePort.CreateSession(ctx, CreateSessionInput{
+				SubjectID: subjectID,
+				SessionID: sessionID,
+			})
+			if createErr != nil {
+				return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "failed to create wake session"))
+			}
+			sessionID = strings.TrimSpace(createdSessionID)
 		}
 	}
 
@@ -178,6 +168,24 @@ func handleWakeOpenURLFrame(ctx context.Context, frame MessageFrame, runtimePort
 		SessionID: sessionID,
 		Payload:   result,
 	}
+}
+
+// wakeSessionExists 通过只读会话摘要查询判断目标会话是否存在，避免触发加载路径中的隐式创建逻辑。
+func wakeSessionExists(ctx context.Context, runtimePort RuntimePort, sessionID string) (bool, error) {
+	targetID := strings.TrimSpace(sessionID)
+	if targetID == "" {
+		return false, nil
+	}
+	summaries, err := runtimePort.ListSessions(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, summary := range summaries {
+		if strings.EqualFold(strings.TrimSpace(summary.ID), targetID) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // detachWakeRunContext 为 wake.run 创建脱离连接取消信号的上下文，避免短连接提前中断后台 run。

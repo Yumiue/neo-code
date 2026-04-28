@@ -146,16 +146,11 @@ func TestDispatchRequestFramePing(t *testing.T) {
 }
 
 func TestDispatchRequestFrameWakeOpenURLReviewSuccess(t *testing.T) {
-	runInputs := make(chan RunInput, 1)
 	createInputs := make(chan CreateSessionInput, 1)
 	stub := &bootstrapRuntimeStub{
 		createSessionFn: func(_ context.Context, input CreateSessionInput) (string, error) {
 			createInputs <- input
 			return "session-review-created", nil
-		},
-		runFn: func(_ context.Context, input RunInput) error {
-			runInputs <- input
-			return nil
 		},
 	}
 
@@ -191,36 +186,19 @@ func TestDispatchRequestFrameWakeOpenURLReviewSuccess(t *testing.T) {
 			t.Fatalf("create session input session_id = %q, want empty", createInput.SessionID)
 		}
 	case <-time.After(500 * time.Millisecond):
-		t.Fatal("expected wake.review to create session before run")
-	}
-
-	select {
-	case input := <-runInputs:
-		if input.SessionID != "session-review-created" {
-			t.Fatalf("runtime session_id = %q, want %q", input.SessionID, "session-review-created")
-		}
-		if input.InputText != "请审查文件 README.md" {
-			t.Fatalf("runtime input_text = %q, want %q", input.InputText, "请审查文件 README.md")
-		}
-		if input.Workdir != "/workspace/repo" {
-			t.Fatalf("runtime workdir = %q, want %q", input.Workdir, "/workspace/repo")
-		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("expected wake.review to dispatch runtime.Run asynchronously")
+		t.Fatal("expected wake.review to create session")
 	}
 }
 
 func TestDispatchRequestFrameWakeOpenURLReviewAllowsSessionIDWithoutWorkdir(t *testing.T) {
-	runInputs := make(chan RunInput, 1)
-	createInputs := make(chan CreateSessionInput, 1)
+	var createCalled bool
 	stub := &bootstrapRuntimeStub{
-		createSessionFn: func(_ context.Context, input CreateSessionInput) (string, error) {
-			createInputs <- input
-			return input.SessionID, nil
+		createSessionFn: func(_ context.Context, _ CreateSessionInput) (string, error) {
+			createCalled = true
+			return "", nil
 		},
-		runFn: func(_ context.Context, input RunInput) error {
-			runInputs <- input
-			return nil
+		listSessionsFn: func(_ context.Context) ([]SessionSummary, error) {
+			return []SessionSummary{{ID: "session-review-keep"}}, nil
 		},
 	}
 
@@ -243,23 +221,66 @@ func TestDispatchRequestFrameWakeOpenURLReviewAllowsSessionIDWithoutWorkdir(t *t
 	if response.SessionID != "session-review-keep" {
 		t.Fatalf("response session_id = %q, want %q", response.SessionID, "session-review-keep")
 	}
+	if createCalled {
+		t.Fatal("expected wake.review with session_id not to create session")
+	}
+}
 
-	select {
-	case createInput := <-createInputs:
-		if createInput.SessionID != "session-review-keep" {
-			t.Fatalf("create session input session_id = %q, want %q", createInput.SessionID, "session-review-keep")
-		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("expected wake.review with session_id to create/load session")
+func TestDispatchRequestFrameWakeOpenURLRunWithSessionIDResumesWithoutCreate(t *testing.T) {
+	var createCalled bool
+	stub := &bootstrapRuntimeStub{
+		createSessionFn: func(_ context.Context, _ CreateSessionInput) (string, error) {
+			createCalled = true
+			return "", nil
+		},
+		listSessionsFn: func(_ context.Context) ([]SessionSummary, error) {
+			return []SessionSummary{{ID: "session-run-resume"}}, nil
+		},
 	}
 
-	select {
-	case input := <-runInputs:
-		if input.SessionID != "session-review-keep" {
-			t.Fatalf("runtime session_id = %q, want %q", input.SessionID, "session-review-keep")
-		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("expected wake.review with session_id to invoke runtime.Run")
+	response := dispatchRequestFrame(context.Background(), MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionWakeOpenURL,
+		RequestID: "req-wake-run-session",
+		Payload: map[string]any{
+			"action":     "run",
+			"session_id": "session-run-resume",
+		},
+	}, stub)
+
+	if response.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+	}
+	if response.SessionID != "session-run-resume" {
+		t.Fatalf("response session_id = %q, want %q", response.SessionID, "session-run-resume")
+	}
+	if createCalled {
+		t.Fatal("expected wake.run with session_id not to create session")
+	}
+}
+
+func TestDispatchRequestFrameWakeOpenURLRunSessionNotFound(t *testing.T) {
+	stub := &bootstrapRuntimeStub{
+		listSessionsFn: func(_ context.Context) ([]SessionSummary, error) {
+			return []SessionSummary{{ID: "session-other"}}, nil
+		},
+	}
+
+	response := dispatchRequestFrame(context.Background(), MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionWakeOpenURL,
+		RequestID: "req-wake-run-session-missing",
+		Payload: map[string]any{
+			"action":     "run",
+			"session_id": "session-missing",
+		},
+	}, stub)
+
+	if response.Type != FrameTypeError {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+	}
+	if response.Error == nil || response.Error.Code != ErrorCodeResourceNotFound.String() {
+		t.Fatalf("error = %#v, want code %q", response.Error, ErrorCodeResourceNotFound.String())
 	}
 }
 
@@ -324,16 +345,11 @@ func TestDispatchRequestFrameWakeOpenURLReviewMissingWorkdirAndSessionID(t *test
 }
 
 func TestDispatchRequestFrameWakeOpenURLRunSuccess(t *testing.T) {
-	runInputs := make(chan RunInput, 1)
 	createInputs := make(chan CreateSessionInput, 1)
 	stub := &bootstrapRuntimeStub{
 		createSessionFn: func(_ context.Context, input CreateSessionInput) (string, error) {
 			createInputs <- input
 			return "session-created-by-runtime", nil
-		},
-		runFn: func(_ context.Context, input RunInput) error {
-			runInputs <- input
-			return nil
 		},
 	}
 
@@ -368,31 +384,16 @@ func TestDispatchRequestFrameWakeOpenURLRunSuccess(t *testing.T) {
 			t.Fatalf("create session input session_id = %q, want empty", createInput.SessionID)
 		}
 	case <-time.After(500 * time.Millisecond):
-		t.Fatal("expected wake.run to create session before run")
-	}
-
-	select {
-	case input := <-runInputs:
-		if input.SessionID != "session-created-by-runtime" {
-			t.Fatalf("runtime session_id = %q, want %q", input.SessionID, "session-created-by-runtime")
-		}
-		if input.InputText != "写一个简单的HTTP服务器" {
-			t.Fatalf("runtime input_text = %q, want %q", input.InputText, "写一个简单的HTTP服务器")
-		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("expected wake.run to dispatch runtime.Run asynchronously")
+		t.Fatal("expected wake.run to create session")
 	}
 }
 
-func TestDispatchRequestFrameWakeOpenURLRunDetachesCanceledParentContext(t *testing.T) {
-	runContextErrors := make(chan error, 1)
+func TestDispatchRequestFrameWakeOpenURLRunCanceledParentStillCreatesSession(t *testing.T) {
+	createInputs := make(chan CreateSessionInput, 1)
 	stub := &bootstrapRuntimeStub{
-		createSessionFn: func(_ context.Context, _ CreateSessionInput) (string, error) {
+		createSessionFn: func(_ context.Context, input CreateSessionInput) (string, error) {
+			createInputs <- input
 			return "session-detached-run", nil
-		},
-		runFn: func(ctx context.Context, _ RunInput) error {
-			runContextErrors <- ctx.Err()
-			return nil
 		},
 	}
 
@@ -416,26 +417,21 @@ func TestDispatchRequestFrameWakeOpenURLRunDetachesCanceledParentContext(t *test
 	}
 
 	select {
-	case runErr := <-runContextErrors:
-		if runErr != nil {
-			t.Fatalf("runtime run context should stay active, got %v", runErr)
+	case createInput := <-createInputs:
+		if createInput.SubjectID != defaultLocalSubjectID {
+			t.Fatalf("create session subject_id = %q, want %q", createInput.SubjectID, defaultLocalSubjectID)
 		}
 	case <-time.After(500 * time.Millisecond):
-		t.Fatal("expected wake.run to invoke runtime.Run")
+		t.Fatal("expected wake.run to create session")
 	}
 }
 
 func TestDispatchRequestFrameWakeOpenURLRunAllowsIPCUnauthenticatedFallback(t *testing.T) {
-	runInputs := make(chan RunInput, 1)
 	createInputs := make(chan CreateSessionInput, 1)
 	stub := &bootstrapRuntimeStub{
 		createSessionFn: func(_ context.Context, input CreateSessionInput) (string, error) {
 			createInputs <- input
 			return "session-ipc-fallback", nil
-		},
-		runFn: func(_ context.Context, input RunInput) error {
-			runInputs <- input
-			return nil
 		},
 	}
 
@@ -468,15 +464,6 @@ func TestDispatchRequestFrameWakeOpenURLRunAllowsIPCUnauthenticatedFallback(t *t
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("expected wake.run to create session in ipc fallback path")
-	}
-
-	select {
-	case runInput := <-runInputs:
-		if runInput.SubjectID != defaultLocalSubjectID {
-			t.Fatalf("runtime run subject_id = %q, want %q", runInput.SubjectID, defaultLocalSubjectID)
-		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("expected wake.run to invoke runtime.Run in ipc fallback path")
 	}
 }
 
