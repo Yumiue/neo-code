@@ -160,13 +160,13 @@ func (s *Service) executeOneToolCall(
 	})
 
 	if errors.Is(execErr, context.Canceled) {
-		s.emitAfterToolResultHook(ctx, state, call, result, execErr)
+		s.emitAfterToolResultHook(ctx, state, call, result, execErr, snapshot.Workdir)
 		return result, false, execErr
 	}
 	if execErr != nil && strings.TrimSpace(result.Content) == "" {
 		result.Content = execErr.Error()
 	}
-	s.emitAfterToolResultHook(ctx, state, call, result, execErr)
+	s.emitAfterToolResultHook(ctx, state, call, result, execErr, snapshot.Workdir)
 
 	if err := s.appendToolMessageAndSave(ctx, state, call, result); err != nil {
 		if execErr != nil && errors.Is(err, context.Canceled) {
@@ -299,6 +299,7 @@ func (s *Service) emitAfterToolResultHook(
 	call providertypes.ToolCall,
 	result tools.ToolResult,
 	execErr error,
+	workdir string,
 ) {
 	afterToolHookMetadata := map[string]any{
 		"tool_call_id":            strings.TrimSpace(call.ID),
@@ -307,6 +308,7 @@ func (s *Service) emitAfterToolResultHook(
 		"error_class":             strings.TrimSpace(result.ErrorClass),
 		"result_content_preview":  summarizeHookResultContent(result.Content),
 		"result_metadata_present": len(result.Metadata) > 0,
+		"workdir":                 strings.TrimSpace(workdir),
 	}
 	if execErr != nil {
 		afterToolHookMetadata["execution_error"] = strings.TrimSpace(execErr.Error())

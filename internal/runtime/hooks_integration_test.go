@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -150,6 +151,9 @@ func TestExecuteOneToolCallTriggersAfterToolResultHookWithoutMutatingResult(t *t
 	}
 	if got := metadata["result_content_preview"]; got != "ok" {
 		t.Fatalf("result_content_preview = %#v, want %q", got, "ok")
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", metadata["workdir"])); got == "" {
+		t.Fatalf("expected workdir metadata in after_tool_result hook, got %#v", metadata["workdir"])
 	}
 }
 

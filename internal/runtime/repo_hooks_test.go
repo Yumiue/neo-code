@@ -243,12 +243,10 @@ hooks:
 		t.Fatalf("write trust store: %v", err)
 	}
 
-	cfg := *config.StaticDefaults()
-	cfg.Workdir = workspace
 	service := &Service{events: make(chan RuntimeEvent, 64)}
-	exec, err := buildRepoHookExecutor(service, cfg, config.StaticDefaults().Runtime.Hooks)
+	exec, err := buildRepoHookExecutorForWorkspace(service, workspace, config.StaticDefaults().Runtime.Hooks)
 	if err != nil {
-		t.Fatalf("buildRepoHookExecutor() error = %v", err)
+		t.Fatalf("buildRepoHookExecutorForWorkspace() error = %v", err)
 	}
 	if exec != nil {
 		t.Fatal("expected nil repo executor for untrusted workspace")
@@ -287,12 +285,10 @@ hooks:
 		t.Fatalf("write hooks: %v", err)
 	}
 
-	cfg := *config.StaticDefaults()
-	cfg.Workdir = workspace
 	service := &Service{events: make(chan RuntimeEvent, 64)}
-	exec, err := buildRepoHookExecutor(service, cfg, config.StaticDefaults().Runtime.Hooks)
+	exec, err := buildRepoHookExecutorForWorkspace(service, workspace, config.StaticDefaults().Runtime.Hooks)
 	if err != nil {
-		t.Fatalf("buildRepoHookExecutor() error = %v", err)
+		t.Fatalf("buildRepoHookExecutorForWorkspace() error = %v", err)
 	}
 	if exec != nil {
 		t.Fatal("expected nil repo executor when trust store is missing")
@@ -307,6 +303,91 @@ hooks:
 	}
 }
 
+func TestDynamicRepoHookExecutorResolvesByRunWorkdir(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	workspaceA := filepath.Join(homeDir, "workspace-a")
+	workspaceB := filepath.Join(homeDir, "workspace-b")
+	if err := os.MkdirAll(filepath.Join(workspaceA, ".neocode"), 0o755); err != nil {
+		t.Fatalf("mkdir workspaceA hooks dir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(workspaceB, ".neocode"), 0o755); err != nil {
+		t.Fatalf("mkdir workspaceB hooks dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceA, ".neocode", "hooks.yaml"), []byte(`
+hooks:
+  items:
+    - id: repo-a
+      point: before_tool_call
+      scope: repo
+      kind: builtin
+      mode: sync
+      handler: add_context_note
+      params:
+        note: repo-note-a
+`), 0o644); err != nil {
+		t.Fatalf("write workspaceA hooks: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceB, ".neocode", "hooks.yaml"), []byte(`
+hooks:
+  items:
+    - id: repo-b
+      point: before_tool_call
+      scope: repo
+      kind: builtin
+      mode: sync
+      handler: add_context_note
+      params:
+        note: repo-note-b
+`), 0o644); err != nil {
+		t.Fatalf("write workspaceB hooks: %v", err)
+	}
+
+	storePath := resolveTrustedWorkspacesPath()
+	if err := os.MkdirAll(filepath.Dir(storePath), 0o755); err != nil {
+		t.Fatalf("mkdir trust store dir: %v", err)
+	}
+	rawStore, err := json.Marshal(trustedWorkspaceStore{
+		Version:    repoHooksTrustStoreVersion,
+		Workspaces: []string{workspaceA, workspaceB},
+	})
+	if err != nil {
+		t.Fatalf("marshal trust store: %v", err)
+	}
+	if err := os.WriteFile(storePath, rawStore, 0o644); err != nil {
+		t.Fatalf("write trust store: %v", err)
+	}
+
+	cfg := *config.StaticDefaults()
+	cfg.Workdir = workspaceA
+	service := &Service{events: make(chan RuntimeEvent, 64)}
+	repoExecutor, err := buildRepoHookExecutor(service, cfg, config.StaticDefaults().Runtime.Hooks)
+	if err != nil {
+		t.Fatalf("buildRepoHookExecutor() error = %v", err)
+	}
+	if repoExecutor == nil {
+		t.Fatal("expected dynamic repo executor")
+	}
+
+	run := func(workdir string) runtimehooks.RunOutput {
+		return repoExecutor.Run(context.Background(), runtimehooks.HookPointBeforeToolCall, runtimehooks.HookContext{
+			Metadata: map[string]any{
+				"tool_name": "bash",
+				"workdir":   workdir,
+			},
+		})
+	}
+
+	first := run(workspaceA)
+	if len(first.Results) != 1 || first.Results[0].Message != "repo-note-a" {
+		t.Fatalf("workspaceA output = %+v, want repo-note-a", first.Results)
+	}
+	second := run(workspaceB)
+	if len(second.Results) != 1 || second.Results[0].Message != "repo-note-b" {
+		t.Fatalf("workspaceB output = %+v, want repo-note-b", second.Results)
+	}
+}
+
 func containsRuntimeEventType(events []RuntimeEvent, target EventType) bool {
 	for _, event := range events {
 		if event.Type == target {
@@ -314,4 +395,176 @@ func containsRuntimeEventType(events []RuntimeEvent, target EventType) bool {
 		}
 	}
 	return false
+}
+
+func TestValidateRepoHookItemBranches(t *testing.T) {
+	base := config.RuntimeHookItemConfig{
+		ID:            "repo-hook",
+		Point:         "before_tool_call",
+		Scope:         "repo",
+		Kind:          "builtin",
+		Mode:          "sync",
+		Handler:       "add_context_note",
+		TimeoutSec:    2,
+		FailurePolicy: "warn_only",
+		Params:        map[string]any{"note": "x"},
+	}
+
+	if err := validateRepoHookItem(base); err != nil {
+		t.Fatalf("validateRepoHookItem(valid) error = %v", err)
+	}
+
+	cases := []struct {
+		name string
+		edit func(*config.RuntimeHookItemConfig)
+	}{
+		{name: "missing id", edit: func(item *config.RuntimeHookItemConfig) { item.ID = "" }},
+		{name: "bad point", edit: func(item *config.RuntimeHookItemConfig) { item.Point = "session_start" }},
+		{name: "bad scope", edit: func(item *config.RuntimeHookItemConfig) { item.Scope = "user" }},
+		{name: "bad kind", edit: func(item *config.RuntimeHookItemConfig) { item.Kind = "command" }},
+		{name: "bad mode", edit: func(item *config.RuntimeHookItemConfig) { item.Mode = "async" }},
+		{name: "bad timeout", edit: func(item *config.RuntimeHookItemConfig) { item.TimeoutSec = 0 }},
+		{name: "bad policy", edit: func(item *config.RuntimeHookItemConfig) { item.FailurePolicy = "deny" }},
+		{name: "bad handler", edit: func(item *config.RuntimeHookItemConfig) { item.Handler = "unknown" }},
+		{
+			name: "warn_on_tool_call missing target",
+			edit: func(item *config.RuntimeHookItemConfig) {
+				item.Handler = "warn_on_tool_call"
+				item.Params = map[string]any{}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			item := base.Clone()
+			tc.edit(&item)
+			if err := validateRepoHookItem(item); err == nil {
+				t.Fatalf("validateRepoHookItem(%s) expected error", tc.name)
+			}
+		})
+	}
+}
+
+func TestRuntimeHasWarnOnToolCallTargetsBranches(t *testing.T) {
+	cases := []struct {
+		name   string
+		params map[string]any
+		want   bool
+	}{
+		{name: "nil", params: nil, want: false},
+		{name: "tool_name", params: map[string]any{"tool_name": "bash"}, want: true},
+		{name: "tool_name blank", params: map[string]any{"tool_name": " "}, want: false},
+		{name: "tool_names", params: map[string]any{"tool_names": []any{"bash"}}, want: true},
+		{name: "tool_names blank", params: map[string]any{"tool_names": []any{" "}}, want: false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if got := runtimeHasWarnOnToolCallTargets(tc.params); got != tc.want {
+				t.Fatalf("runtimeHasWarnOnToolCallTargets() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestResolveRepoHooksPathBranches(t *testing.T) {
+	workspace := t.TempDir()
+	hooksPath := filepath.Join(workspace, ".neocode", "hooks.yaml")
+
+	path, found, err := resolveRepoHooksPath(workspace)
+	if err != nil || found || path != hooksPath {
+		t.Fatalf("resolveRepoHooksPath(missing) = (%q,%v,%v), want (%q,false,nil)", path, found, err, hooksPath)
+	}
+
+	if err := os.MkdirAll(hooksPath, 0o755); err != nil {
+		t.Fatalf("mkdir hooks dir: %v", err)
+	}
+	_, _, err = resolveRepoHooksPath(workspace)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "directory") {
+		t.Fatalf("resolveRepoHooksPath(directory) error = %v, want directory error", err)
+	}
+}
+
+func TestNormalizeTrustedWorkspacePathBranches(t *testing.T) {
+	if _, err := normalizeTrustedWorkspacePath(""); err == nil {
+		t.Fatal("expected empty path error")
+	}
+	if _, err := normalizeTrustedWorkspacePath("relative/path"); err == nil {
+		t.Fatal("expected relative path error")
+	}
+	workspace := t.TempDir()
+	got, err := normalizeTrustedWorkspacePath(workspace)
+	if err != nil {
+		t.Fatalf("normalizeTrustedWorkspacePath(abs) error = %v", err)
+	}
+	if strings.TrimSpace(got) == "" {
+		t.Fatal("normalized workspace path should not be empty")
+	}
+}
+
+func TestDynamicRepoHookExecutorCachesWorkspaceResult(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	workspace := filepath.Join(homeDir, "workspace")
+	if err := os.MkdirAll(filepath.Join(workspace, ".neocode"), 0o755); err != nil {
+		t.Fatalf("mkdir hooks dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, ".neocode", "hooks.yaml"), []byte(`
+hooks:
+  items:
+    - id: repo-cache
+      point: before_tool_call
+      scope: repo
+      kind: builtin
+      mode: sync
+      handler: add_context_note
+      params:
+        note: repo-note-cache
+`), 0o644); err != nil {
+		t.Fatalf("write hooks file: %v", err)
+	}
+	storePath := resolveTrustedWorkspacesPath()
+	if err := os.MkdirAll(filepath.Dir(storePath), 0o755); err != nil {
+		t.Fatalf("mkdir trust store dir: %v", err)
+	}
+	rawStore, err := json.Marshal(trustedWorkspaceStore{
+		Version:    repoHooksTrustStoreVersion,
+		Workspaces: []string{workspace},
+	})
+	if err != nil {
+		t.Fatalf("marshal trust store: %v", err)
+	}
+	if err := os.WriteFile(storePath, rawStore, 0o644); err != nil {
+		t.Fatalf("write trust store: %v", err)
+	}
+
+	cfg := *config.StaticDefaults()
+	cfg.Workdir = workspace
+	service := &Service{events: make(chan RuntimeEvent, 64)}
+	exec, err := buildRepoHookExecutor(service, cfg, config.StaticDefaults().Runtime.Hooks)
+	if err != nil {
+		t.Fatalf("buildRepoHookExecutor() error = %v", err)
+	}
+	dynamic, ok := exec.(*dynamicRepoHookExecutor)
+	if !ok {
+		t.Fatalf("expected dynamicRepoHookExecutor, got %T", exec)
+	}
+
+	input := runtimehooks.HookContext{Metadata: map[string]any{"workdir": workspace}}
+	first := dynamic.Run(context.Background(), runtimehooks.HookPointBeforeToolCall, input)
+	second := dynamic.Run(context.Background(), runtimehooks.HookPointBeforeToolCall, input)
+	if len(first.Results) != 1 || len(second.Results) != 1 {
+		t.Fatalf("unexpected cached run outputs: first=%+v second=%+v", first.Results, second.Results)
+	}
+	if first.Results[0].Message != "repo-note-cache" || second.Results[0].Message != "repo-note-cache" {
+		t.Fatalf("unexpected note messages: first=%+v second=%+v", first.Results, second.Results)
+	}
+	dynamic.mu.RLock()
+	cacheSize := len(dynamic.cache)
+	dynamic.mu.RUnlock()
+	if cacheSize != 1 {
+		t.Fatalf("cache size = %d, want 1", cacheSize)
+	}
 }

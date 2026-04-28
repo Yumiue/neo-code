@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -51,6 +52,16 @@ type trustDecision struct {
 	InvalidReason  string
 }
 
+// dynamicRepoHookExecutor 按运行时 workdir 惰性解析 repo hooks，避免绑定启动时 cfg.Workdir。
+type dynamicRepoHookExecutor struct {
+	service         *Service
+	hooksCfg        config.RuntimeHooksConfig
+	fallbackWorkdir string
+
+	mu    sync.RWMutex
+	cache map[string]HookExecutor
+}
+
 // buildUserHookExecutor 根据 runtime.hooks.items 构建 user hooks 执行器。
 func buildUserHookExecutor(
 	service *Service,
@@ -91,10 +102,56 @@ func buildRepoHookExecutor(
 	cfg config.Config,
 	hooksCfg config.RuntimeHooksConfig,
 ) (HookExecutor, error) {
-	workspace := strings.TrimSpace(cfg.Workdir)
-	if workspace == "" {
-		return nil, nil
+	return &dynamicRepoHookExecutor{
+		service:         service,
+		hooksCfg:        hooksCfg,
+		fallbackWorkdir: strings.TrimSpace(cfg.Workdir),
+		cache:           make(map[string]HookExecutor),
+	}, nil
+}
+
+// Run 在每个 hook point 调用时按输入 workdir 解析对应 workspace 的 repo hooks 执行器。
+func (e *dynamicRepoHookExecutor) Run(
+	ctx context.Context,
+	point runtimehooks.HookPoint,
+	input runtimehooks.HookContext,
+) runtimehooks.RunOutput {
+	if e == nil {
+		return runtimehooks.RunOutput{}
 	}
+	workspace := resolveHookWorkdir(input, e.fallbackWorkdir)
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" {
+		return runtimehooks.RunOutput{}
+	}
+	normalizedWorkspace, err := normalizeTrustedWorkspacePath(workspace)
+	if err != nil {
+		return runtimehooks.RunOutput{}
+	}
+
+	e.mu.RLock()
+	executor, ok := e.cache[normalizedWorkspace]
+	e.mu.RUnlock()
+	if ok {
+		return runHookExecutorSafely(executor, ctx, point, input)
+	}
+
+	loaded, loadErr := buildRepoHookExecutorForWorkspace(e.service, workspace, e.hooksCfg)
+	if loadErr != nil {
+		return runtimehooks.RunOutput{}
+	}
+	e.mu.Lock()
+	e.cache[normalizedWorkspace] = loaded
+	e.mu.Unlock()
+	return runHookExecutorSafely(loaded, ctx, point, input)
+}
+
+// buildRepoHookExecutorForWorkspace 在指定 workspace 受信任时构建 repo hooks 执行器。
+func buildRepoHookExecutorForWorkspace(
+	service *Service,
+	workspace string,
+	hooksCfg config.RuntimeHooksConfig,
+) (HookExecutor, error) {
 	hooksPath, found, err := resolveRepoHooksPath(workspace)
 	if err != nil {
 		return nil, err

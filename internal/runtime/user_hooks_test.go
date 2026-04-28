@@ -187,8 +187,8 @@ func TestConfigureRuntimeHooksFromConfig(t *testing.T) {
 	if err := configureRuntimeHooksFromConfig(service, cfg); err != nil {
 		t.Fatalf("disable user hooks error = %v", err)
 	}
-	if service.hookExecutor != nil {
-		t.Fatal("expected nil hook executor when base executor is nil and user hooks are disabled")
+	if service.hookExecutor == nil {
+		t.Fatal("expected repo-capable hook executor when runtime hooks are enabled")
 	}
 
 	cfg.Runtime.Hooks.Enabled = runtimeBoolPtr(false)
@@ -255,8 +255,8 @@ func TestConfigureRuntimeHooksFromConfigKeepsBaseExecutorAndComposes(t *testing.
 	if err := configureRuntimeHooksFromConfig(service, cfg); err != nil {
 		t.Fatalf("reconfigure disable user hooks error = %v", err)
 	}
-	if service.hookExecutor != base {
-		t.Fatalf("expected base executor to be restored, got %T", service.hookExecutor)
+	if service.hookExecutor == nil {
+		t.Fatal("expected hook executor to remain available for repo hooks when runtime hooks are enabled")
 	}
 
 	cfg.Runtime.Hooks.Enabled = runtimeBoolPtr(false)
@@ -456,7 +456,7 @@ func TestUserHookHelpersAndErrorBranches(t *testing.T) {
 	}
 }
 
-func TestConfigureRuntimeHooksFromConfigNoEnabledUserItemsRestoresBase(t *testing.T) {
+func TestConfigureRuntimeHooksFromConfigNoEnabledUserItemsKeepsRepoCapableExecutor(t *testing.T) {
 	t.Parallel()
 
 	base := &countingHookExecutor{}
@@ -479,8 +479,8 @@ func TestConfigureRuntimeHooksFromConfigNoEnabledUserItemsRestoresBase(t *testin
 	if err := configureRuntimeHooksFromConfig(service, cfg); err != nil {
 		t.Fatalf("configureRuntimeHooksFromConfig() error = %v", err)
 	}
-	if service.hookExecutor != base {
-		t.Fatalf("expected base executor restored, got %T", service.hookExecutor)
+	if service.hookExecutor == nil {
+		t.Fatal("expected hook executor to remain available for repo hooks")
 	}
 }
 
@@ -591,8 +591,8 @@ func TestConfigureRuntimeHooksAndHelpers(t *testing.T) {
 	if err := configureRuntimeHooksFromConfig(service, cfg); err != nil {
 		t.Fatalf("configureRuntimeHooksFromConfig() error = %v", err)
 	}
-	if service.hookExecutor != nil {
-		t.Fatalf("expected no executor when no enabled items")
+	if service.hookExecutor == nil {
+		t.Fatalf("expected hook executor for repo hooks even when no user item is enabled")
 	}
 
 	cfg.Runtime.Hooks.Items[0].Enabled = runtimeBoolPtr(true)
