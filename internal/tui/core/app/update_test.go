@@ -466,8 +466,8 @@ func TestStartupCtrlNStartsDraftSession(t *testing.T) {
 
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
 	next := model.(App)
-	if next.startupScreenLocked {
-		t.Fatalf("expected Ctrl+N to unlock startup")
+	if !next.startupScreenLocked {
+		t.Fatalf("expected Ctrl+N to return to startup screen")
 	}
 	if next.state.ActiveSessionID != "" {
 		t.Fatalf("expected draft session id to be empty")
@@ -477,6 +477,30 @@ func TestStartupCtrlNStartsDraftSession(t *testing.T) {
 	}
 	if got := next.input.Value(); got != "" {
 		t.Fatalf("expected composer reset, got %q", got)
+	}
+}
+
+func TestCtrlNRelocksStartupFromActiveDraft(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupScreenLocked = false
+	app.state.ActiveSessionID = "session-2"
+	app.state.ActiveSessionTitle = "Session 2"
+	app.input.SetValue("keep me?")
+	app.state.InputText = "keep me?"
+	app.activeMessages = []providertypes.Message{
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("history")}},
+	}
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	next := model.(App)
+	if !next.startupScreenLocked {
+		t.Fatalf("expected Ctrl+N to relock startup screen from active draft")
+	}
+	if next.state.ActiveSessionID != "" {
+		t.Fatalf("expected active session cleared, got %q", next.state.ActiveSessionID)
+	}
+	if len(next.activeMessages) != 0 {
+		t.Fatalf("expected transcript history cleared for startup draft")
 	}
 }
 
@@ -1408,6 +1432,16 @@ func TestRuntimeEventRunContextHandler(t *testing.T) {
 
 func TestUpdatePasteImageShortcutFailure(t *testing.T) {
 	app, _ := newTestApp(t)
+
+	originalReadImage := readClipboardImage
+	originalReadText := readClipboardText
+	defer func() {
+		readClipboardImage = originalReadImage
+		readClipboardText = originalReadText
+	}()
+	readClipboardImage = func() ([]byte, error) { return nil, errors.New("clipboard image unavailable") }
+	readClipboardText = func() (string, error) { return "", errors.New("clipboard text unavailable") }
+
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
 	if cmd != nil {
 		_ = cmd()
@@ -1415,6 +1449,204 @@ func TestUpdatePasteImageShortcutFailure(t *testing.T) {
 	app = model.(App)
 	if !strings.Contains(strings.ToLower(app.state.StatusText), "clipboard") {
 		t.Fatalf("expected clipboard failure status, got %q", app.state.StatusText)
+	}
+}
+
+func TestUpdateCtrlVPastesClipboardTextAsInput(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	originalReadImage := readClipboardImage
+	originalReadText := readClipboardText
+	defer func() {
+		readClipboardImage = originalReadImage
+		readClipboardText = originalReadText
+	}()
+	readClipboardImage = func() ([]byte, error) { return nil, errors.New("no image") }
+
+	lineCount := pastePlaceholderMinLines + 1
+	lines := make([]string, 0, lineCount)
+	for i := 0; i < lineCount; i++ {
+		lines = append(lines, fmt.Sprintf("line-%d", i+1))
+	}
+	readClipboardText = func() (string, error) { return strings.Join(lines, "\n"), nil }
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	expected := formatPastePlaceholder(lineCount)
+	if app.input.Value() != expected {
+		t.Fatalf("expected pasted clipboard text to collapse into %q, got %q", expected, app.input.Value())
+	}
+}
+
+func TestUpdateCtrlVPastesClipboardFilesAsReferences(t *testing.T) {
+	app, _ := newTestApp(t)
+	root := t.TempDir()
+	app.state.CurrentWorkdir = root
+
+	first := filepath.Join(root, "docs", "a.txt")
+	second := filepath.Join(root, "README.md")
+	if err := os.MkdirAll(filepath.Dir(first), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(first, []byte("a"), 0o644); err != nil {
+		t.Fatalf("write first: %v", err)
+	}
+	if err := os.WriteFile(second, []byte("b"), 0o644); err != nil {
+		t.Fatalf("write second: %v", err)
+	}
+
+	originalReadImage := readClipboardImage
+	originalReadText := readClipboardText
+	defer func() {
+		readClipboardImage = originalReadImage
+		readClipboardText = originalReadText
+	}()
+	readClipboardImage = func() ([]byte, error) { return nil, errors.New("no image") }
+	readClipboardText = func() (string, error) { return first + "\n" + second, nil }
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	input := app.input.Value()
+	if !strings.Contains(input, "@docs/a.txt") || !strings.Contains(input, "@README.md") {
+		t.Fatalf("expected pasted files to become references, got %q", input)
+	}
+}
+
+func TestUpdateLongPasteUsesPlaceholderAndExpandsOnSend(t *testing.T) {
+	app, runtime := newTestApp(t)
+
+	lineCount := pastePlaceholderMinLines + 2
+	lines := make([]string, 0, lineCount)
+	for i := 0; i < lineCount; i++ {
+		lines = append(lines, fmt.Sprintf("line-%d", i+1))
+	}
+	pasted := strings.Join(lines, "\n")
+
+	model, cmd := app.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune(pasted),
+		Paste: true,
+	})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	placeholder := formatPastePlaceholder(lineCount)
+	if app.input.Value() != placeholder {
+		t.Fatalf("expected placeholder %q, got %q", placeholder, app.input.Value())
+	}
+	if len(app.pendingPasteBuffers) != 1 {
+		t.Fatalf("expected one buffered paste payload, got %d", len(app.pendingPasteBuffers))
+	}
+
+	model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	if len(runtime.prepareInputs) != 1 {
+		t.Fatalf("expected one prepare input after send, got %d", len(runtime.prepareInputs))
+	}
+	if runtime.prepareInputs[0].Text != pasted {
+		t.Fatalf("expected expanded pasted text in prepare input")
+	}
+	if len(app.pendingPasteBuffers) != 0 {
+		t.Fatalf("expected paste placeholders to reset after send")
+	}
+}
+
+func TestMaybeCollapseLongPasteAfterInputFallback(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.pasteMode = true
+
+	before := "prefix "
+	inserted := strings.Repeat("A", 120) + "\n" + strings.Repeat("B", 120) + "\n" + strings.Repeat("C", 120)
+	after := before + inserted
+	app.input.SetValue(after)
+	app.state.InputText = after
+
+	app.maybeCollapseLongPasteAfterInput(before, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+
+	if app.input.Value() == after {
+		t.Fatalf("expected fallback collapse to replace long multiline paste")
+	}
+	if len(app.pendingPasteBuffers) != 1 {
+		t.Fatalf("expected one pending paste buffer, got %d", len(app.pendingPasteBuffers))
+	}
+	if !strings.Contains(app.input.Value(), "[paste ") {
+		t.Fatalf("expected collapsed placeholder in input, got %q", app.input.Value())
+	}
+}
+
+func TestUpdateSendWhileBusyQueuesInterventionAndDispatchesAfterCancel(t *testing.T) {
+	app, runtime := newTestApp(t)
+	app.state.IsAgentRunning = true
+	app.state.ActiveSessionID = "s-1"
+	app.state.ActiveRunID = "run-old"
+	app.input.SetValue("follow up request")
+	app.state.InputText = "follow up request"
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	if !runtime.cancelInvoked {
+		t.Fatalf("expected busy send to invoke runtime cancellation")
+	}
+	if app.queuedIntervention == nil || app.queuedIntervention.Text != "follow up request" {
+		t.Fatalf("expected queued intervention payload, got %+v", app.queuedIntervention)
+	}
+	if app.state.StatusText != statusInterventionCanceling {
+		t.Fatalf("expected intervention canceling status, got %q", app.state.StatusText)
+	}
+
+	model, cmd = app.Update(RuntimeMsg{Event: agentruntime.RuntimeEvent{
+		Type:      agentruntime.EventRunCanceled,
+		SessionID: "s-1",
+		RunID:     "run-old",
+	}})
+	if cmd != nil {
+		if msg := cmd(); msg != nil {
+			if batch, ok := msg.(tea.BatchMsg); ok {
+				for _, child := range batch {
+					if child != nil {
+						_ = child()
+						if len(runtime.prepareInputs) > 0 {
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+	app = model.(App)
+
+	if app.queuedIntervention != nil {
+		dispatchCmd := app.dispatchQueuedInterventionIfIdle()
+		if dispatchCmd != nil {
+			_ = dispatchCmd()
+		}
+	}
+	if len(runtime.prepareInputs) != 1 {
+		t.Fatalf("expected one queued intervention submit, got %d", len(runtime.prepareInputs))
+	}
+	if runtime.prepareInputs[0].Text != "follow up request" {
+		t.Fatalf("expected queued intervention text to submit, got %q", runtime.prepareInputs[0].Text)
+	}
+	if !app.state.IsAgentRunning {
+		t.Fatalf("expected app to re-enter running state for queued intervention")
 	}
 }
 
@@ -2591,6 +2823,43 @@ func TestActivateSelectedSession(t *testing.T) {
 	}
 }
 
+func TestRefreshMessagesHidesToolCallOnlyEntriesOnSessionReload(t *testing.T) {
+	app, runtime := newTestApp(t)
+	app.width = 120
+	app.height = 32
+	app.applyComponentLayout(true)
+	app.state.ActiveSessionID = "s1"
+
+	runtime.loadSessions = map[string]agentsession.Session{
+		"s1": {
+			ID:      "s1",
+			Title:   "S1",
+			Workdir: app.state.CurrentWorkdir,
+			Messages: []providertypes.Message{
+				{Role: roleAssistant, ToolCalls: []providertypes.ToolCall{{Name: "bash"}}},
+				{Role: roleTool, Parts: []providertypes.ContentPart{providertypes.NewTextPart("tool result payload")}},
+				{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("final answer")}},
+			},
+		},
+	}
+
+	if err := app.refreshMessages(); err != nil {
+		t.Fatalf("refreshMessages() error = %v", err)
+	}
+	app.rebuildTranscript()
+	plain := copyCodeANSIPattern.ReplaceAllString(app.transcriptContent, "")
+
+	if strings.Contains(plain, "Tool calls:") {
+		t.Fatalf("expected tool-call-only helper text hidden on session reload, got %q", plain)
+	}
+	if strings.Contains(plain, "tool result payload") {
+		t.Fatalf("expected tool result payload hidden on session reload, got %q", plain)
+	}
+	if !strings.Contains(plain, "final answer") {
+		t.Fatalf("expected assistant content to remain visible, got %q", plain)
+	}
+}
+
 func TestMouseHandlersAndBounds(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.width = 120
@@ -2624,7 +2893,7 @@ func TestMouseHandlersAndBounds(t *testing.T) {
 	}
 	offsetBeforeDrag := app.transcript.YOffset
 	if !app.handleTranscriptMouse(tea.MouseMsg{
-		X: sx + 1, Y: sy + max(1, sh/2), Button: tea.MouseButtonLeft, Action: tea.MouseActionPress,
+		X: sx + max(0, sw-1), Y: sy + max(1, sh/2), Button: tea.MouseButtonLeft, Action: tea.MouseActionPress,
 	}) {
 		t.Fatalf("expected transcript scrollbar press to be handled")
 	}
@@ -2632,7 +2901,7 @@ func TestMouseHandlersAndBounds(t *testing.T) {
 		t.Fatalf("expected scrollbar drag mode to start after press")
 	}
 	if !app.handleTranscriptMouse(tea.MouseMsg{
-		X: sx + 1, Y: sy + sh - 1, Action: tea.MouseActionMotion,
+		X: sx + max(0, sw-1), Y: sy + sh - 1, Action: tea.MouseActionMotion,
 	}) {
 		t.Fatalf("expected transcript scrollbar drag motion to be handled")
 	}
@@ -2640,7 +2909,7 @@ func TestMouseHandlersAndBounds(t *testing.T) {
 		t.Fatalf("expected drag motion to move transcript offset, got %d <= %d", app.transcript.YOffset, offsetBeforeDrag)
 	}
 	if !app.handleTranscriptMouse(tea.MouseMsg{
-		X: sx + 1, Y: sy + sh - 1, Action: tea.MouseActionRelease,
+		X: sx + max(0, sw-1), Y: sy + sh - 1, Action: tea.MouseActionRelease,
 	}) {
 		t.Fatalf("expected transcript scrollbar release to be handled")
 	}
@@ -3946,7 +4215,7 @@ func TestIsModelScopeAuthOrPermissionError(t *testing.T) {
 	for _, msg := range []string{
 		"401 unauthorized",
 		"forbidden by policy",
-		"需要实名认证",
+		"permission is required",
 		"aliyun binding required",
 	} {
 		if !isModelScopeAuthOrPermissionError(msg) {
@@ -4053,8 +4322,11 @@ func TestUpdateKeyToggleQuitCancelAndPickerClose(t *testing.T) {
 
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyCtrlQ})
 	app = model.(App)
-	if !app.state.ShowHelp {
-		t.Fatalf("expected help to toggle on")
+	if app.state.ActivePicker != pickerHelp {
+		t.Fatalf("expected ctrl+q to open help picker")
+	}
+	if app.state.StatusText != statusChooseHelp {
+		t.Fatalf("expected help status text %q, got %q", statusChooseHelp, app.state.StatusText)
 	}
 
 	app.state.IsAgentRunning = true
@@ -5204,14 +5476,14 @@ func TestUpdateFocusInputNewSessionAndTodoScroll(t *testing.T) {
 	if len(runtime.listSessions) != 0 && strings.TrimSpace(app.state.ActiveSessionID) == "" {
 		t.Fatalf("expected Ctrl+N to create or activate draft session")
 	}
-	if app.startupScreenLocked {
-		t.Fatalf("expected Ctrl+N to keep startup unlocked")
+	if !app.startupScreenLocked {
+		t.Fatalf("expected Ctrl+N to relock startup screen")
 	}
 	if len(app.activeMessages) != 0 {
 		t.Fatalf("expected Ctrl+N to clear transcript messages")
 	}
-	if view := app.renderWaterfall(100, 24); strings.Contains(view, "AI-POWERED CLI WORKSPACE") {
-		t.Fatalf("expected main view after Ctrl+N, got startup content %q", view)
+	if view := app.renderWaterfall(100, 24); !strings.Contains(view, "AI-POWERED CLI WORKSPACE") {
+		t.Fatalf("expected startup content after Ctrl+N, got %q", view)
 	}
 
 	app.focus = panelTodo
