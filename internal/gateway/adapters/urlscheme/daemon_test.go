@@ -38,6 +38,27 @@ func TestBuildHTTPDaemonWakeIntentRun(t *testing.T) {
 	}
 }
 
+func TestBuildHTTPDaemonWakeIntentReviewAllowsSessionIDWithoutWorkdir(t *testing.T) {
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"http://neocode:18921/review?path=README.md&session_id=s-9",
+		http.NoBody,
+	)
+	intent, err := buildHTTPDaemonWakeIntent(request)
+	if err != nil {
+		t.Fatalf("buildHTTPDaemonWakeIntent() error = %v", err)
+	}
+	if intent.Action != protocol.WakeActionReview {
+		t.Fatalf("action = %q, want %q", intent.Action, protocol.WakeActionReview)
+	}
+	if intent.SessionID != "s-9" {
+		t.Fatalf("session_id = %q, want %q", intent.SessionID, "s-9")
+	}
+	if intent.Workdir != "" {
+		t.Fatalf("workdir = %q, want empty", intent.Workdir)
+	}
+}
+
 func TestBuildHTTPDaemonWakeIntentRejectsMissingPathForReview(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "http://neocode:18921/review", http.NoBody)
 	_, err := buildHTTPDaemonWakeIntent(request)
@@ -46,6 +67,17 @@ func TestBuildHTTPDaemonWakeIntentRejectsMissingPathForReview(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "path") {
 		t.Fatalf("error = %v, want contains path", err)
+	}
+}
+
+func TestBuildHTTPDaemonWakeIntentRejectsReviewWithoutWorkdirOrSessionID(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "http://neocode:18921/review?path=README.md", http.NoBody)
+	_, err := buildHTTPDaemonWakeIntent(request)
+	if err == nil {
+		t.Fatal("expected missing workdir/session_id error")
+	}
+	if !strings.Contains(err.Error(), "workdir or session_id") {
+		t.Fatalf("error = %v, want contains workdir or session_id", err)
 	}
 }
 
@@ -87,6 +119,16 @@ func TestHTTPDaemonHandlerDispatchesIntent(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
 	}
+	responseBody := recorder.Body.String()
+	if !strings.Contains(responseBody, "session_id=session-from-runtime") {
+		t.Fatalf("response body = %q, want contains session_id", responseBody)
+	}
+	if !strings.Contains(responseBody, "reusable_url=") {
+		t.Fatalf("response body = %q, want contains reusable_url", responseBody)
+	}
+	if !strings.Contains(responseBody, "tip=") {
+		t.Fatalf("response body = %q, want contains tip", responseBody)
+	}
 	if captured.Intent.Action != protocol.WakeActionRun {
 		t.Fatalf("captured action = %q, want %q", captured.Intent.Action, protocol.WakeActionRun)
 	}
@@ -95,6 +137,23 @@ func TestHTTPDaemonHandlerDispatchesIntent(t *testing.T) {
 	}
 	if captured.ListenAddress != "/tmp/gateway.sock" {
 		t.Fatalf("captured listen address = %q, want %q", captured.ListenAddress, "/tmp/gateway.sock")
+	}
+}
+
+func TestBuildHTTPDaemonReusableURL(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "http://neocode:18921/review?path=README.md&workdir=/repo", http.NoBody)
+	reusableURL := buildHTTPDaemonReusableURL(request, "session-42")
+	if reusableURL == "" {
+		t.Fatal("expected non-empty reusable url")
+	}
+	if !strings.Contains(reusableURL, "session_id=session-42") {
+		t.Fatalf("reusable url = %q, want contains session_id=session-42", reusableURL)
+	}
+	if !strings.Contains(reusableURL, "path=README.md") {
+		t.Fatalf("reusable url = %q, want keep original path query", reusableURL)
+	}
+	if !strings.Contains(reusableURL, "workdir=%2Frepo") {
+		t.Fatalf("reusable url = %q, want keep original workdir query", reusableURL)
 	}
 }
 
@@ -136,6 +195,7 @@ func TestDispatchWakeIntentSuccess(t *testing.T) {
 	dispatcher := newStubDispatcher(func(dispatcher *Dispatcher) {
 		dispatcher.dialFn = func(string) (net.Conn, error) { return clientConn, nil }
 		dispatcher.requestIDFn = func() string { return "wake-intent-1" }
+		dispatcher.launchTerminalFn = func(string) error { return nil }
 	})
 
 	done := make(chan struct{})
@@ -169,6 +229,7 @@ func TestDispatchWakeIntentSuccess(t *testing.T) {
 				Type:      gateway.FrameTypeAck,
 				Action:    gateway.FrameActionWakeOpenURL,
 				RequestID: "wake-intent-1",
+				SessionID: "session-review-test",
 			}),
 		}); err != nil {
 			t.Errorf("encode response rpc: %v", err)

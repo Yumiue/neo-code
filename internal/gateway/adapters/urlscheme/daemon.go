@@ -223,7 +223,7 @@ func newHTTPDaemonHandler(
 			writeHTTPDaemonError(writer, http.StatusInternalServerError, "dispatch failed", err.Error())
 			return
 		}
-		writeHTTPDaemonSuccess(writer, result)
+		writeHTTPDaemonSuccess(writer, request, result)
 	})
 }
 
@@ -246,6 +246,9 @@ func buildHTTPDaemonWakeIntent(request *http.Request) (protocol.WakeIntent, erro
 	case protocol.WakeActionReview:
 		if strings.TrimSpace(params["path"]) == "" {
 			return protocol.WakeIntent{}, errors.New("missing required query: path")
+		}
+		if strings.TrimSpace(sessionID) == "" && strings.TrimSpace(workdir) == "" {
+			return protocol.WakeIntent{}, errors.New("missing required query: workdir or session_id")
 		}
 	}
 	if len(params) == 0 {
@@ -349,15 +352,52 @@ func writeHTTPDaemonError(writer http.ResponseWriter, statusCode int, title stri
 	))
 }
 
-// writeHTTPDaemonSuccess 输出浏览器可读的成功页面。
-func writeHTTPDaemonSuccess(writer http.ResponseWriter, result daemonWakeDispatchResult) {
+// writeHTTPDaemonSuccess 输出浏览器可读的成功页面，并提供可复用的 session 链接。
+func writeHTTPDaemonSuccess(writer http.ResponseWriter, request *http.Request, result daemonWakeDispatchResult) {
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 	writer.WriteHeader(http.StatusOK)
 	action := html.EscapeString(strings.TrimSpace(result.Action))
 	sessionID := html.EscapeString(strings.TrimSpace(result.SessionID))
+	reusableURL := buildHTTPDaemonReusableURL(request, result.SessionID)
+	escapedReusableURL := html.EscapeString(reusableURL)
 	_, _ = writer.Write([]byte(
-		"<html><body><h3>OK</h3><p>action=" + action + "</p><p>session_id=" + sessionID + "</p></body></html>",
+		"<html><body><h3>OK</h3><p>action=" + action + "</p><p>session_id=" + sessionID +
+			"</p><p>reusable_url=<a href=\"" + escapedReusableURL + "\">" + escapedReusableURL +
+			"</a></p><p>tip=后续若要续接同一会话，请使用带 session_id 的链接。</p></body></html>",
 	))
+}
+
+// buildHTTPDaemonReusableURL 基于当前请求地址生成包含 session_id 的可复用链接。
+func buildHTTPDaemonReusableURL(request *http.Request, sessionID string) string {
+	if request == nil || request.URL == nil {
+		return ""
+	}
+	normalizedSessionID := strings.TrimSpace(sessionID)
+	if normalizedSessionID == "" {
+		return ""
+	}
+
+	reusableURL := *request.URL
+	query := reusableURL.Query()
+	query.Set("session_id", normalizedSessionID)
+	reusableURL.RawQuery = query.Encode()
+	if reusableURL.IsAbs() {
+		return reusableURL.String()
+	}
+
+	requestURI := reusableURL.RequestURI()
+	if strings.TrimSpace(requestURI) == "" {
+		requestURI = reusableURL.String()
+	}
+	host := strings.TrimSpace(request.Host)
+	if host == "" {
+		return requestURI
+	}
+	scheme := "http"
+	if request.TLS != nil {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s%s", scheme, host, requestURI)
 }
 
 // defaultHTTPDaemonHTTPClient 构建用于 status 探活的 HTTP 客户端。
