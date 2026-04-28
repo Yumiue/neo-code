@@ -568,3 +568,94 @@ hooks:
 		t.Fatalf("cache size = %d, want 1", cacheSize)
 	}
 }
+
+func TestDynamicRepoHookExecutorEarlyReturnBranches(t *testing.T) {
+	exec := &dynamicRepoHookExecutor{}
+	out := exec.Run(context.Background(), runtimehooks.HookPointBeforeToolCall, runtimehooks.HookContext{})
+	if len(out.Results) != 0 || out.Blocked {
+		t.Fatalf("expected empty output for nil-config executor, got %+v", out)
+	}
+
+	exec = &dynamicRepoHookExecutor{fallbackWorkdir: " "}
+	out = exec.Run(context.Background(), runtimehooks.HookPointBeforeToolCall, runtimehooks.HookContext{})
+	if len(out.Results) != 0 || out.Blocked {
+		t.Fatalf("expected empty output for blank workspace, got %+v", out)
+	}
+
+	exec = &dynamicRepoHookExecutor{fallbackWorkdir: "relative/path"}
+	out = exec.Run(context.Background(), runtimehooks.HookPointBeforeToolCall, runtimehooks.HookContext{})
+	if len(out.Results) != 0 || out.Blocked {
+		t.Fatalf("expected empty output for invalid workspace path, got %+v", out)
+	}
+}
+
+func TestLoadRepoHookItemsAndDefaultsBranches(t *testing.T) {
+	workspace := t.TempDir()
+	hooksPath := filepath.Join(workspace, ".neocode", "hooks.yaml")
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0o755); err != nil {
+		t.Fatalf("mkdir hooks dir: %v", err)
+	}
+
+	if err := os.WriteFile(hooksPath, []byte(" \n\t "), 0o644); err != nil {
+		t.Fatalf("write empty hooks file: %v", err)
+	}
+	if _, err := loadRepoHookItems(hooksPath, config.StaticDefaults().Runtime.Hooks); err == nil {
+		t.Fatal("expected empty hooks file error")
+	}
+
+	content := `
+hooks:
+  items:
+    - id: disabled
+      enabled: false
+      point: before_tool_call
+      handler: add_context_note
+      params:
+        note: skip
+    - id: enabled-defaults
+      point: before_tool_call
+      handler: add_context_note
+      params:
+        note: ok
+`
+	if err := os.WriteFile(hooksPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write hooks file: %v", err)
+	}
+	items, err := loadRepoHookItems(hooksPath, config.StaticDefaults().Runtime.Hooks)
+	if err != nil {
+		t.Fatalf("loadRepoHookItems() error = %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items len = %d, want 1", len(items))
+	}
+	item := items[0]
+	if item.Scope != "repo" || item.Kind != "builtin" || item.Mode != "sync" {
+		t.Fatalf("unexpected defaults: scope=%q kind=%q mode=%q", item.Scope, item.Kind, item.Mode)
+	}
+}
+
+func TestResolveTrustedWorkspacesPathFallbackBranches(t *testing.T) {
+	t.Setenv("HOME", "relative-home")
+	path := resolveTrustedWorkspacesPath()
+	if !strings.Contains(path, filepath.Join(".neocode", repoHooksTrustStoreFileName)) {
+		t.Fatalf("unexpected trust store path: %q", path)
+	}
+
+	t.Setenv("HOME", "")
+	path = resolveTrustedWorkspacesPath()
+	if !strings.Contains(path, filepath.Join(".neocode", repoHooksTrustStoreFileName)) {
+		t.Fatalf("unexpected trust store path with empty HOME: %q", path)
+	}
+}
+
+func TestRepoHookEventEmittersAndHelpers(t *testing.T) {
+	emitRepoHooksLifecycleEvent(nil, EventRepoHooksDiscovered, RepoHooksLifecyclePayload{})
+	emitRepoHooksTrustStoreInvalidEvent(nil, RepoHooksTrustStoreInvalidPayload{})
+
+	if got := coalesceHookMessage(" ", "fallback", "other"); got != "fallback" {
+		t.Fatalf("coalesceHookMessage() = %q, want fallback", got)
+	}
+	if got := coalesceHookMessage(" ", "\t"); got != "" {
+		t.Fatalf("coalesceHookMessage(blank) = %q, want empty", got)
+	}
+}
