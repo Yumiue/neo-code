@@ -2,6 +2,7 @@ package services
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -278,6 +279,39 @@ func TestGatewayStreamClientEmitsDecodeErrorAsRuntimeErrorEvent(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatalf("timed out waiting for decode error event")
+	}
+}
+
+func TestGatewayStreamClientStopsOnPayloadVersionMismatch(t *testing.T) {
+	source := make(chan gatewayRPCNotification, 2)
+	client := NewGatewayStreamClient(source)
+	t.Cleanup(func() { _ = client.Close() })
+
+	source <- gatewayRPCNotification{
+		Method: protocol.MethodGatewayEvent,
+		Params: json.RawMessage(`{"type":"event","action":"run","session_id":"s","run_id":"r","payload":{"runtime_event_type":"error","payload_version":999,"payload":"boom"}}`),
+	}
+	source <- gatewayRPCNotification{
+		Method: protocol.MethodGatewayEvent,
+		Params: json.RawMessage(`{"type":"event","action":"run","session_id":"s","run_id":"r","payload":{"runtime_event_type":"agent_chunk","payload_version":4,"payload":"after"}}`),
+	}
+
+	first := <-client.Events()
+	if first.Type != EventError {
+		t.Fatalf("first.Type = %q, want %q", first.Type, EventError)
+	}
+	msg, ok := first.Payload.(string)
+	if !ok || !strings.Contains(strings.ToLower(msg), "payload_version") {
+		t.Fatalf("first.Payload = %#v, want payload_version error", first.Payload)
+	}
+
+	select {
+	case event, ok := <-client.Events():
+		if ok {
+			t.Fatalf("expected stream to stop after version mismatch, got extra event: %#v", event)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting stream close after version mismatch")
 	}
 }
 
