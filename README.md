@@ -125,6 +125,7 @@ neocode --workdir /path/to/your/project
 ```
 
 ### 5. url scheme使用
+详细指南链接： [HTTP URL 唤醒使用指南（用户故事版）](https://neocode-docs.pages.dev/guide/http-daemon-wake-user-guide)
 
 ```bash
 # 启动本地 HTTP daemon（默认 127.0.0.1:18921）
