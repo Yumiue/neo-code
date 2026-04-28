@@ -40,7 +40,7 @@ func newKeyMap() keyMap {
 		),
 		NewSession: key.NewBinding(
 			key.WithKeys("ctrl+n"),
-			key.WithHelp("Ctrl+N", "New session"),
+			key.WithHelp("Ctrl+N", "New chat"),
 		),
 		OpenWorkspace: key.NewBinding(
 			key.WithKeys("ctrl+o"),
@@ -96,7 +96,7 @@ func newKeyMap() keyMap {
 		),
 		PasteImage: key.NewBinding(
 			key.WithKeys("ctrl+v"),
-			key.WithHelp("Ctrl+V", "Paste image"),
+			key.WithHelp("Ctrl+V", "Paste"),
 		),
 		LogViewer: key.NewBinding(
 			key.WithKeys("ctrl+l"),
@@ -106,7 +106,7 @@ func newKeyMap() keyMap {
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Send, k.Newline, k.CancelAgent, k.LogViewer, k.ToggleHelp, k.Quit}
+	return []key.Binding{k.Send, k.Newline, k.NewSession, k.LogViewer, k.ToggleHelp, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {

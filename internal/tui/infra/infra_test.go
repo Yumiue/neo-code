@@ -24,13 +24,14 @@ func TestCollectWorkspaceFiles(t *testing.T) {
 	mustWrite("internal/tui/update.go")
 	mustWrite(".git/config")
 	mustWrite("node_modules/skip.js")
+	mustWrite(".build/output.log")
 
 	files, err := CollectWorkspaceFiles(root, 10)
 	if err != nil {
 		t.Fatalf("CollectWorkspaceFiles() error = %v", err)
 	}
 	got := strings.Join(files, ",")
-	if strings.Contains(got, ".git") || strings.Contains(got, "node_modules") {
+	if strings.Contains(got, ".git") || strings.Contains(got, "node_modules") || strings.Contains(got, ".build") {
 		t.Fatalf("expected ignored dirs skipped, got %v", files)
 	}
 	if !strings.Contains(got, "README.md") || !strings.Contains(got, "internal/tui/update.go") {
@@ -110,6 +111,22 @@ func TestCachedMarkdownRendererRemovesHeadingHashPrefix(t *testing.T) {
 	}
 	if !strings.Contains(plain, "Heading Example") {
 		t.Fatalf("expected heading text to remain, got %q", plain)
+	}
+}
+
+func TestNormalizeMarkdownForTerminalFencesTables(t *testing.T) {
+	input := strings.Join([]string{
+		"| col1 | col2 |",
+		"| ---- | ---- |",
+		"| a    | b    |",
+	}, "\n")
+
+	normalized := normalizeMarkdownForTerminal(input)
+	if !strings.Contains(normalized, "```text") {
+		t.Fatalf("expected markdown table to be fenced, got %q", normalized)
+	}
+	if !strings.Contains(normalized, "| col1 | col2 |") {
+		t.Fatalf("expected original table rows to remain in fenced block")
 	}
 }
 
