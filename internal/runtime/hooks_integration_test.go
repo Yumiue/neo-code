@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -75,6 +76,7 @@ func TestExecuteOneToolCallBlocksWhenBeforeToolHookReturnsBlock(t *testing.T) {
 	assertEventContains(t, events, EventHookFinished)
 	assertEventContains(t, events, EventHookBlocked)
 	assertEventContains(t, events, EventToolResult)
+	assertNoEventType(t, events, EventToolStart)
 	if eventIndex(events, EventHookBlocked) > eventIndex(events, EventToolResult) {
 		t.Fatalf("hook_blocked should be emitted before tool_result")
 	}
@@ -146,6 +148,67 @@ func TestExecuteOneToolCallTriggersAfterToolResultHookWithoutMutatingResult(t *t
 	}
 	if got := metadata["result_content_preview"]; got != "ok" {
 		t.Fatalf("result_content_preview = %#v, want %q", got, "ok")
+	}
+}
+
+func TestExecuteOneToolCallCanceledStillTriggersAfterToolResultHook(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	session := newRuntimeSession("session-hook-after-tool-result-canceled")
+	store.sessions[session.ID] = cloneSession(session)
+
+	toolManager := &stubToolManager{
+		executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
+			return tools.ToolResult{Name: input.Name}, context.Canceled
+		},
+	}
+	service := &Service{
+		sessionStore:   store,
+		toolManager:    toolManager,
+		approvalBroker: approvalflow.NewBroker(),
+		events:         make(chan RuntimeEvent, 32),
+	}
+	state := newRunState("run-hook-after-tool-result-canceled", session)
+
+	var (
+		called bool
+		errMsg string
+	)
+	registry := runtimehooks.NewRegistry()
+	if err := registry.Register(runtimehooks.HookSpec{
+		ID:    "observe-after-tool-canceled",
+		Point: runtimehooks.HookPointAfterToolResult,
+		Handler: func(ctx context.Context, input runtimehooks.HookContext) runtimehooks.HookResult {
+			called = true
+			if raw, ok := input.Metadata["execution_error"]; ok {
+				if text, ok := raw.(string); ok {
+					errMsg = text
+				}
+			}
+			return runtimehooks.HookResult{Status: runtimehooks.HookResultPass}
+		},
+	}); err != nil {
+		t.Fatalf("register hook: %v", err)
+	}
+	service.SetHookExecutor(runtimehooks.NewExecutor(registry, newHookRuntimeEventEmitter(service), time.Second))
+
+	_, _, err := service.executeOneToolCall(
+		context.Background(),
+		&state,
+		TurnBudgetSnapshot{Workdir: t.TempDir(), ToolTimeout: time.Second},
+		providertypes.ToolCall{ID: "call-3", Name: "filesystem_read_file", Arguments: `{"path":"README.md"}`},
+		&sync.Mutex{},
+		func() bool { return false },
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("executeOneToolCall() error = %v, want context.Canceled", err)
+	}
+	if !called {
+		t.Fatalf("after_tool_result hook should be called when tool execution is canceled")
+	}
+	if errMsg == "" {
+		t.Fatalf("expected execution_error metadata for canceled execution")
 	}
 }
 
