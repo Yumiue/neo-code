@@ -1322,7 +1322,7 @@ func isPickerFilterEditKey(msg tea.KeyMsg) bool {
 	}
 }
 
-// maybeStartModelScopeGuideFromProvider 鍦ㄩ€夋嫨 modelscope 涓旀湭閰嶇疆 token 鏃惰繘鍏ュ崐寮曞娴佺▼銆?
+// maybeStartModelScopeGuideFromProvider 在选择 modelscope 且未配置 token 时进入半引导流程。
 func (a *App) maybeStartModelScopeGuideFromProvider(providerID string) (tea.Cmd, bool) {
 	if !strings.EqualFold(strings.TrimSpace(providerID), config.ModelScopeName) {
 		return nil, false
@@ -1364,7 +1364,7 @@ func (a *App) maybeStartModelScopeGuideFromProvider(providerID string) (tea.Cmd,
 	return a.runModelScopeGuideOpen(guidePath), true
 }
 
-// resolveModelScopeGuidePath 瑙ｆ瀽 ModelScope 鎸囧椤电殑鏈湴璺緞锛涙枃浠朵笉瀛樺湪鏃惰繑鍥炵┖瀛楃涓层€?
+// resolveModelScopeGuidePath 解析 ModelScope 指导页的本地路径；文件不存在时返回空字符串。
 func (a *App) resolveModelScopeGuidePath() string {
 	baseDir := strings.TrimSpace(a.configManager.BaseDir())
 	if baseDir == "" {
@@ -1669,7 +1669,6 @@ func isModelScopeAuthOrPermissionError(raw string) bool {
 		"permission",
 		"access denied",
 		"auth",
-		"闇€瑕佸疄鍚嶈璇?",
 		"实名认证",
 		"权限",
 		"aliyun",
