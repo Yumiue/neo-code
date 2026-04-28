@@ -1,0 +1,165 @@
+import { create } from 'zustand'
+import { type TokenUsage, type PermissionRequestPayload } from '@/api/protocol'
+
+/** 聊天消息 */
+export interface ChatMessage {
+  id: string
+  /** 消息角色：user / assistant / tool */
+  role: 'user' | 'assistant' | 'tool'
+  /** 消息类型：text / thinking / tool_call / code / welcome */
+  type: 'text' | 'thinking' | 'tool_call' | 'code' | 'welcome'
+  /** 文本内容 */
+  content: string
+  /** 工具调用信息 */
+  toolName?: string
+  toolCallId?: string
+  toolArgs?: string
+  toolResult?: string
+  toolStatus?: 'running' | 'done' | 'error'
+  /** 代码语言 */
+  language?: string
+  /** 代码文件名 */
+  filename?: string
+  /** 时间戳 */
+  timestamp: number
+  /** 是否正在流式生成 */
+  streaming?: boolean
+}
+
+/** 聊天状态 */
+interface ChatState {
+  /** 消息列表 */
+  messages: ChatMessage[]
+  /** 是否正在生成 */
+  isGenerating: boolean
+  /** 当前 AI 回复缓冲 ID（流式追加用） */
+  streamingMessageId: string
+  /** 权限请求列表 */
+  permissionRequests: PermissionRequestPayload[]
+  /** Token 用量 */
+  tokenUsage: TokenUsage | null
+  /** 当前运行阶段 */
+  phase: string
+  /** 停止原因 */
+  stopReason: string
+
+  // Actions
+  addMessage: (msg: ChatMessage) => void
+  appendChunk: (text: string) => void
+  finalizeMessage: (id: string, content: string) => void
+  updateToolCall: (toolCallId: string, result: string, status: ChatMessage['toolStatus']) => void
+  appendToolOutput: (toolCallId: string, chunk: string) => void
+  setGenerating: (v: boolean) => void
+  setStreamingMessageId: (id: string) => void
+  addPermissionRequest: (req: PermissionRequestPayload) => void
+  removePermissionRequest: (requestId: string) => void
+  updateTokenUsage: (usage: TokenUsage) => void
+  setPhase: (phase: string) => void
+  setStopReason: (reason: string) => void
+  clearMessages: () => void
+}
+
+let msgIdCounter = 0
+function nextMsgId(): string {
+  return `msg_${++msgIdCounter}_${Date.now()}`
+}
+
+/** 创建用户消息 */
+export function createUserMessage(text: string): ChatMessage {
+  return {
+    id: nextMsgId(),
+    role: 'user',
+    type: 'text',
+    content: text,
+    timestamp: Date.now(),
+  }
+}
+
+/** 创建 AI 流式消息 */
+export function createAssistantMessage(): ChatMessage {
+  return {
+    id: nextMsgId(),
+    role: 'assistant',
+    type: 'text',
+    content: '',
+    timestamp: Date.now(),
+    streaming: true,
+  }
+}
+
+/** 创建工具调用消息 */
+export function createToolCallMessage(toolName: string, toolCallId: string, args: string): ChatMessage {
+  return {
+    id: nextMsgId(),
+    role: 'tool',
+    type: 'tool_call',
+    content: '',
+    toolName,
+    toolCallId,
+    toolArgs: args,
+    toolStatus: 'running',
+    timestamp: Date.now(),
+  }
+}
+
+export const useChatStore = create<ChatState>((set) => ({
+  messages: [],
+  isGenerating: false,
+  streamingMessageId: '',
+  permissionRequests: [],
+  tokenUsage: null,
+  phase: '',
+  stopReason: '',
+
+  addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
+
+  appendChunk: (text) =>
+    set((s) => {
+      if (!s.streamingMessageId) return s
+      return {
+        messages: s.messages.map((m) =>
+          m.id === s.streamingMessageId ? { ...m, content: m.content + text } : m
+        ),
+      }
+    }),
+
+  finalizeMessage: (id, content) =>
+    set((s) => ({
+      messages: s.messages.map((m) =>
+        m.id === id ? { ...m, content, streaming: false } : m
+      ),
+      streamingMessageId: '',
+    })),
+
+  updateToolCall: (toolCallId, result, status) =>
+    set((s) => ({
+      messages: s.messages.map((m) =>
+        m.toolCallId === toolCallId ? { ...m, toolResult: result, toolStatus: status } : m
+      ),
+    })),
+
+  appendToolOutput: (toolCallId, chunk) =>
+    set((s) => ({
+      messages: s.messages.map((m) =>
+        m.toolCallId === toolCallId
+          ? { ...m, toolResult: (m.toolResult ?? '') + chunk }
+          : m
+      ),
+    })),
+
+  setGenerating: (isGenerating) => set({ isGenerating }),
+  setStreamingMessageId: (streamingMessageId) => set({ streamingMessageId }),
+
+  addPermissionRequest: (req) =>
+    set((s) => ({ permissionRequests: [...s.permissionRequests, req] })),
+
+  removePermissionRequest: (requestId) =>
+    set((s) => ({
+      permissionRequests: s.permissionRequests.filter((r) => r.request_id !== requestId),
+    })),
+
+  updateTokenUsage: (tokenUsage) => set({ tokenUsage }),
+  setPhase: (phase) => set({ phase }),
+  setStopReason: (stopReason) => set({ stopReason }),
+  clearMessages: () => set({ messages: [], streamingMessageId: '', isGenerating: false }),
+}))
