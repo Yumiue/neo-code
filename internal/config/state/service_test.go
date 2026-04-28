@@ -1156,6 +1156,10 @@ func (catalogStub) ListProviderModelsCached(_ context.Context, input provider.Ca
 	return defaultModelsForInput(input), nil
 }
 
+func (catalogStub) RefreshProviderModels(_ context.Context, input provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
+	return defaultModelsForInput(input), nil
+}
+
 type catalogMethodsStub struct {
 	listModels     []providertypes.ModelDescriptor
 	snapshotModels []providertypes.ModelDescriptor
@@ -1196,6 +1200,13 @@ func (s catalogMethodsStub) ListProviderModelsCached(_ context.Context, _ provid
 	return providertypes.MergeModelDescriptors(s.cachedModels), nil
 }
 
+func (s catalogMethodsStub) RefreshProviderModels(_ context.Context, _ provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	return providertypes.MergeModelDescriptors(s.listModels), nil
+}
+
 type catalogMethodCalls struct {
 	listCalls     int
 	snapshotCalls int
@@ -1220,6 +1231,10 @@ func (c *cancelAfterFirstCachedCatalog) ListProviderModelsCached(_ context.Conte
 	if c.calls == 1 && c.cancel != nil {
 		c.cancel()
 	}
+	return defaultModelsForInput(input), nil
+}
+
+func (c *cancelAfterFirstCachedCatalog) RefreshProviderModels(_ context.Context, input provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
 	return defaultModelsForInput(input), nil
 }
 
@@ -1254,6 +1269,10 @@ func (m *mutatingCatalog) ListProviderModelsCached(_ context.Context, _ provider
 	return nil, nil
 }
 
+func (m *mutatingCatalog) RefreshProviderModels(_ context.Context, _ provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
+	return providertypes.MergeModelDescriptors(m.listModels), nil
+}
+
 type errorCatalogStub struct {
 	err error
 }
@@ -1267,6 +1286,10 @@ func (s errorCatalogStub) ListProviderModelsSnapshot(_ context.Context, _ provid
 }
 
 func (s errorCatalogStub) ListProviderModelsCached(_ context.Context, _ provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
+	return nil, s.err
+}
+
+func (s errorCatalogStub) RefreshProviderModels(_ context.Context, _ provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
 	return nil, s.err
 }
 
@@ -1295,6 +1318,10 @@ func (c *driftingSnapshotCatalog) ListProviderModelsSnapshot(ctx context.Context
 }
 
 func (c *driftingSnapshotCatalog) ListProviderModelsCached(_ context.Context, input provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
+	return c.modelsFor(input), nil
+}
+
+func (c *driftingSnapshotCatalog) RefreshProviderModels(_ context.Context, input provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
 	return c.modelsFor(input), nil
 }
 
