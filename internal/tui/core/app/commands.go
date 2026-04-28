@@ -26,7 +26,6 @@ const (
 	slashCommandProviderAdd = "/provider add"
 	slashCommandModelPick   = "/model"
 	slashCommandSession     = "/session"
-	slashCommandCWD         = "/cwd"
 	slashCommandMemo        = "/memo"
 	slashCommandRemember    = "/remember"
 	slashCommandForget      = "/forget"
@@ -41,7 +40,6 @@ const (
 	slashUsageProviderAdd = "/provider add"
 	slashUsageModel       = "/model"
 	slashUsageSession     = "/session"
-	slashUsageWorkdir     = "/cwd"
 	slashUsageMemo        = "/memo"
 	slashUsageRemember    = "/remember <text>"
 	slashUsageForget      = "/forget <keyword>"
@@ -132,7 +130,6 @@ var builtinSlashCommands = []slashCommand{
 	{Usage: slashUsageHelp, Description: "Show slash command help"},
 	{Usage: slashUsageClear, Description: "Clear the current draft transcript"},
 	{Usage: slashUsageCompact, Description: "Compact the current session context"},
-	{Usage: slashUsageWorkdir, Description: "Show or set current session workspace root (/cwd [path])"},
 	{Usage: slashUsageMemo, Description: "Show persistent memo index"},
 	{Usage: slashUsageRemember, Description: "Save a persistent memo (/remember <text>)"},
 	{Usage: slashUsageForget, Description: "Remove memos matching keyword (/forget <keyword>)"},
@@ -399,7 +396,7 @@ func runModelCatalogRefresh(providerSvc ProviderController, providerID string) t
 	)
 }
 
-func executeLocalCommand(ctx context.Context, configManager *config.Manager, providerSvc ProviderController, snapshot tuistatus.Snapshot, raw string) (string, error) {
+func executeLocalCommand(ctx context.Context, _ *config.Manager, providerSvc ProviderController, _ tuistatus.Snapshot, raw string) (string, error) {
 	fields := strings.Fields(strings.TrimSpace(raw))
 	if len(fields) == 0 {
 		return "", fmt.Errorf("empty command")

@@ -104,10 +104,18 @@ type appRuntimeState struct {
 	nowFn                   func() time.Time
 	lastInputEditAt         time.Time
 	lastPasteLikeAt         time.Time
+	pendingCtrlVPasteEcho   string
+	pendingCtrlVEchoUntil   time.Time
+	pasteTxnActive          bool
+	pasteTxnBuffer          string
+	pasteTxnVersion         int
 	inputBurstStart         time.Time
 	inputBurstCount         int
 	pasteMode               bool
 	pasteSessionBase        string
+	lastSummarizedPasteText string
+	lastSummarizedPasteAt   time.Time
+	lastSummarizedPasteToken string
 	activeMessages          []providertypes.Message
 	activities              []tuistate.ActivityEntry
 	todoItems               []todoViewItem
@@ -128,7 +136,7 @@ type appRuntimeState struct {
 	pendingFullAccessPrompt *fullAccessPromptState
 	fullAccessModeEnabled   bool
 	pendingImageAttachments []pendingImageAttachment
-	pendingPasteBuffers     []pendingPasteBuffer
+	pendingTextPastes       []pendingTextPaste
 	providerAddForm         *providerAddFormState
 	modelScopeGuide         *modelScopeGuideState
 	layoutCached            bool
@@ -167,9 +175,10 @@ type pendingImageAttachment struct {
 	Name     string
 }
 
-type pendingPasteBuffer struct {
-	Placeholder string
-	Content     string
+type pendingTextPaste struct {
+	Token     string
+	FilePath  string
+	LineCount int
 }
 
 type queuedInterventionInput struct {
