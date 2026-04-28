@@ -59,6 +59,7 @@ const sessionSwitchBusyMessage = "cannot switch sessions while run or compact is
 const logViewerEntryLimit = 500
 const logViewerPersistDebounce = 300 * time.Millisecond
 const footerErrorFlashDuration = 8 * time.Second
+const sessionWorkdirMissingWarning = "Session workspace not found, keeping current workspace."
 
 type sessionLogPersistenceRuntime interface {
 	LoadSessionLogEntries(ctx context.Context, sessionID string) ([]tuiservices.SessionLogEntry, error)
@@ -71,6 +72,17 @@ var persistProviderUserEnvVar = config.PersistUserEnvVar
 var deleteProviderUserEnvVar = config.DeleteUserEnvVar
 var lookupProviderUserEnvVar = config.LookupUserEnvVar
 var openExternalResource = tuiinfra.OpenExternalResource
+
+type startupWakeSubmitMsg struct {
+	Input startupWakeSubmitInput
+}
+
+// emitStartupWakeSubmitCmd 在启动阶段投递一次性自动提交消息，用于复用普通输入提交流程。
+func emitStartupWakeSubmitCmd(input startupWakeSubmitInput) tea.Cmd {
+	return func() tea.Msg {
+		return startupWakeSubmitMsg{Input: input}
+	}
+}
 
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
@@ -112,6 +124,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if needNextTick {
 			cmds = append(cmds, appTickCmd())
+		}
+		return a, batchUpdateCmds()
+	case startupWakeSubmitMsg:
+		if cmd := a.handleStartupWakeSubmitMsg(typed); cmd != nil {
+			cmds = append(cmds, cmd)
 		}
 		return a, batchUpdateCmds()
 	case providerAddResultMsg:
@@ -611,13 +628,9 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 
 			// image capability precheck is intentionally disabled.
 			// Keep CLI behavior consistent and let runtime own capability validation.
-			a.input.Reset()
-			a.state.InputText = ""
-			a.applyComponentLayout(true)
-			a.refreshCommandMenu()
-			a.resetPasteHeuristics()
-
-			cmds = append(cmds, a.beginAgentRun(input, images))
+			if cmd := a.beginAgentRun(input, images); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
 			a.clearImageAttachments()
 			return a, batchUpdateCmds()
 		}
@@ -1168,6 +1181,16 @@ func (a *App) dispatchQueuedInterventionIfIdle() tea.Cmd {
 }
 
 func (a *App) beginAgentRun(input string, images []tuiservices.UserImageInput) tea.Cmd {
+	normalizedInput := strings.TrimSpace(input)
+	if normalizedInput == "" {
+		return nil
+	}
+	a.input.Reset()
+	a.state.InputText = ""
+	a.applyComponentLayout(true)
+	a.refreshCommandMenu()
+	a.resetPasteHeuristics()
+
 	a.clearActivities()
 	a.clearRunProgress()
 	a.startupScreenLocked = false
@@ -1186,7 +1209,7 @@ func (a *App) beginAgentRun(input string, images []tuiservices.UserImageInput) t
 		SessionID: a.state.ActiveSessionID,
 		RunID:     runID,
 		Workdir:   requestedWorkdir,
-		Text:      input,
+		Text:      normalizedInput,
 		Images:    clonedImages,
 	})
 }
@@ -1726,14 +1749,61 @@ func (a *App) refreshMessages() error {
 		return err
 	}
 
+	a.applySessionSnapshot(session, false)
+	return nil
+}
+
+// HydrateSession 在 TUI 启动阶段加载并接管既有会话状态，用于 URL 唤醒后的无感接续。
+func (a *App) HydrateSession(ctx context.Context, sessionID string) error {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return fmt.Errorf("session id is empty")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	session, err := a.runtime.LoadSession(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(session.ID) == "" {
+		session.ID = sessionID
+	}
+
+	a.setActiveSessionID(session.ID)
+	a.state.ExecutionError = ""
+	a.state.CurrentTool = ""
+	a.resetSessionRuntimeState()
+	a.applySessionSnapshot(session, true)
+	a.rebuildTranscript()
+	a.transcript.GotoBottom()
+	a.applyComponentLayout(false)
+	return nil
+}
+
+// ConfigureStartupWakeInput 配置启动阶段的一次性自动提交输入，不会直接触发 runtime 调用。
+func (a *App) ConfigureStartupWakeInput(text string, workdir string) error {
+	normalizedText := strings.TrimSpace(text)
+	if normalizedText == "" {
+		return fmt.Errorf("startup wake input is empty")
+	}
+	a.startupWakeSubmitInput = &startupWakeSubmitInput{
+		Text:    normalizedText,
+		Workdir: strings.TrimSpace(workdir),
+	}
+	return nil
+}
+
+// applySessionSnapshot 将会话快照同步到前端状态，统一复用于普通刷新与启动水化路径。
+func (a *App) applySessionSnapshot(session agentsession.Session, warnOnMissingWorkdir bool) {
 	a.activeMessages = session.Messages
 	a.clearActivities()
 	a.syncTodos(session.Todos)
 	a.state.ActiveSessionTitle = session.Title
-	a.setCurrentWorkdir(agentsession.EffectiveWorkdir(session.Workdir, a.configManager.Get().Workdir))
+	a.syncSessionWorkdir(session.Workdir, warnOnMissingWorkdir)
 	a.loadLogEntriesForSession(session.ID)
 	a.refreshRuntimeSourceSnapshot()
-	return nil
 }
 
 func (a *App) resetSessionRuntimeState() {
@@ -3840,6 +3910,26 @@ func (a *App) requestModelCatalogRefresh(providerID string) tea.Cmd {
 	return runModelCatalogRefresh(a.providerSvc, providerID)
 }
 
+// handleStartupWakeSubmitMsg 处理启动期的一次性唤醒输入，并沿用普通发送链路触发 Submit。
+func (a *App) handleStartupWakeSubmitMsg(msg startupWakeSubmitMsg) tea.Cmd {
+	a.startupWakeSubmitInput = nil
+	text := strings.TrimSpace(msg.Input.Text)
+	if text == "" {
+		return nil
+	}
+	if workdir := strings.TrimSpace(msg.Input.Workdir); workdir != "" {
+		a.setCurrentWorkdir(workdir)
+		if err := a.refreshFileCandidates(); err != nil {
+			a.state.ExecutionError = err.Error()
+			a.state.StatusText = err.Error()
+			return nil
+		}
+	}
+	a.input.SetValue(text)
+	a.state.InputText = text
+	return a.beginAgentRun(text, nil)
+}
+
 func ListenForRuntimeEvent(sub <-chan tuiservices.RuntimeEvent) tea.Cmd {
 	return tuiservices.ListenForRuntimeEventCmd(
 		sub,
@@ -4173,6 +4263,28 @@ func normalizeMemoCommandErrorMessage(err error) string {
 		return "memo command failed"
 	}
 	return message
+}
+
+// syncSessionWorkdir 依据会话快照更新当前工作区；若路径失效可选择展示告警并保留现有目录。
+func (a *App) syncSessionWorkdir(sessionWorkdir string, warnOnMissing bool) {
+	resolved := strings.TrimSpace(agentsession.EffectiveWorkdir(sessionWorkdir, a.configManager.Get().Workdir))
+	if resolved == "" || !filepath.IsAbs(resolved) {
+		return
+	}
+	if !warnOnMissing {
+		a.setCurrentWorkdir(resolved)
+		return
+	}
+
+	info, err := os.Stat(resolved)
+	if err != nil || !info.IsDir() {
+		if warnOnMissing {
+			a.showFooterError(sessionWorkdirMissingWarning)
+		}
+		return
+	}
+
+	a.setCurrentWorkdir(resolved)
 }
 
 // setCurrentWorkdir updates the current workdir only when the value is non-empty and absolute.
