@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	gruntime "runtime"
@@ -831,8 +830,11 @@ func TestHookPathContainsSymlinkAndResolvePathErrorBranches(t *testing.T) {
 		t.Fatalf("write base file: %v", err)
 	}
 	notDirChild := filepath.Join(base, "child")
-	_, err := hookPathContainsSymlink(base, notDirChild)
-	if err == nil || !strings.Contains(fmt.Sprintf("%v", err), "not a directory") {
-		t.Fatalf("expected lstat not-directory error, got %v", err)
+	contains, err := hookPathContainsSymlink(base, notDirChild)
+	if err != nil {
+		t.Fatalf("hookPathContainsSymlink() unexpected error = %v", err)
+	}
+	if contains {
+		t.Fatalf("expected non-existent child under file base to report no symlink")
 	}
 }

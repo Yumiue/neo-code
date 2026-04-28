@@ -3103,8 +3103,6 @@ func TestBuildProviderAddRequest(t *testing.T) {
 }
 
 func TestParseProviderAddManualModelsJSONRejectsNonPositiveNumericFields(t *testing.T) {
-	t.Parallel()
-
 	_, err := parseProviderAddManualModelsJSON(`[{"id":"m1","name":"Model 1","context_window":0}]`)
 	if err == nil || !strings.Contains(err.Error(), "context_window") {
 		t.Fatalf("expected context_window validation error, got %v", err)
@@ -4592,8 +4590,6 @@ func TestSlashSelectionAndProviderAddUtilityBranches(t *testing.T) {
 }
 
 func TestSyncProviderAddOpenAICompatModeDefaults(t *testing.T) {
-	t.Parallel()
-
 	form := &providerAddFormState{
 		Driver:           provider.DriverOpenAICompat,
 		ChatAPIMode:      provider.ChatAPIModeResponses,
@@ -5439,8 +5435,6 @@ func assertIgnoredStaleSkillResultActivity(t *testing.T, app App, beforeActiviti
 }
 
 func TestUpdateIgnoresStaleSkillCommandResultBySession(t *testing.T) {
-	t.Parallel()
-
 	app, _ := newTestApp(t)
 	app.state.ActiveSessionID = "session-current"
 	app.state.StatusText = "before"
@@ -5458,8 +5452,6 @@ func TestUpdateIgnoresStaleSkillCommandResultBySession(t *testing.T) {
 }
 
 func TestUpdateAcceptsSkillCommandResultForCurrentSession(t *testing.T) {
-	t.Parallel()
-
 	app, _ := newTestApp(t)
 	app.state.ActiveSessionID = "session-current"
 
@@ -5474,8 +5466,6 @@ func TestUpdateAcceptsSkillCommandResultForCurrentSession(t *testing.T) {
 }
 
 func TestUpdateLogsStaleSkillCommandErrorBySession(t *testing.T) {
-	t.Parallel()
-
 	app, _ := newTestApp(t)
 	app.state.ActiveSessionID = "session-current"
 	app.state.StatusText = "before"

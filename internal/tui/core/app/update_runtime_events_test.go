@@ -9,8 +9,6 @@ import (
 )
 
 func TestRuntimeEventPhaseChangedHandlerBranches(t *testing.T) {
-	t.Parallel()
-
 	app, _ := newTestApp(t)
 	if handled := runtimeEventPhaseChangedHandler(&app, agentruntime.RuntimeEvent{Payload: "invalid"}); handled {
 		t.Fatalf("expected invalid payload to return false")
@@ -48,8 +46,6 @@ func TestRuntimeEventPhaseChangedHandlerBranches(t *testing.T) {
 }
 
 func TestRuntimeEventStopReasonDecidedHandlerBranches(t *testing.T) {
-	t.Parallel()
-
 	app, _ := newTestApp(t)
 	app.pendingPermission = &permissionPromptState{
 		Request: agentruntime.PermissionRequestPayload{RequestID: "perm-1"},
@@ -148,8 +144,6 @@ func TestRuntimeEventStopReasonDecidedHandlerBranches(t *testing.T) {
 }
 
 func TestRuntimeEventHandlerRegistryContainsRenamedEvents(t *testing.T) {
-	t.Parallel()
-
 	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventPhaseChanged]; !ok {
 		t.Fatalf("expected phase_changed handler to be registered")
 	}
@@ -204,8 +198,6 @@ func TestRuntimeEventHandlerRegistryContainsRenamedEvents(t *testing.T) {
 }
 
 func TestRuntimeEventHookHandlers(t *testing.T) {
-	t.Parallel()
-
 	app, _ := newTestApp(t)
 	if runtimeEventHookStartedHandler(&app, agentruntime.RuntimeEvent{Payload: "bad"}) {
 		t.Fatalf("expected invalid hook_started payload to return false")
@@ -280,8 +272,6 @@ func TestRuntimeEventHookHandlers(t *testing.T) {
 }
 
 func TestShouldHandleRuntimeEventFiltersBySessionAndRun(t *testing.T) {
-	t.Parallel()
-
 	app, _ := newTestApp(t)
 	app.state.ActiveSessionID = "session-active"
 	app.state.ActiveRunID = "run-active"
@@ -310,8 +300,6 @@ func TestShouldHandleRuntimeEventFiltersBySessionAndRun(t *testing.T) {
 }
 
 func TestRuntimeEventMultimodalHandlers(t *testing.T) {
-	t.Parallel()
-
 	app, _ := newTestApp(t)
 
 	if handled := runtimeEventInputNormalizedHandler(&app, agentruntime.RuntimeEvent{Payload: "bad"}); handled {
@@ -375,8 +363,6 @@ func TestRuntimeEventMultimodalHandlers(t *testing.T) {
 }
 
 func TestRuntimeEventVerificationAndAcceptanceHandlers(t *testing.T) {
-	t.Parallel()
-
 	app, _ := newTestApp(t)
 
 	if handled := runtimeEventVerificationStartedHandler(&app, agentruntime.RuntimeEvent{Payload: "bad"}); handled {
@@ -471,8 +457,6 @@ func TestRuntimeEventVerificationAndAcceptanceHandlers(t *testing.T) {
 }
 
 func TestHandleRuntimeEventRoutesByRegistryWithoutBindingTransientSession(t *testing.T) {
-	t.Parallel()
-
 	app, _ := newTestApp(t)
 	handled := app.handleRuntimeEvent(agentruntime.RuntimeEvent{
 		Type:      agentruntime.EventAssetSaved,
@@ -495,8 +479,6 @@ func TestHandleRuntimeEventRoutesByRegistryWithoutBindingTransientSession(t *tes
 }
 
 func TestHandleRuntimeEventBindsSessionFromStableEvents(t *testing.T) {
-	t.Parallel()
-
 	app, _ := newTestApp(t)
 
 	app.handleRuntimeEvent(agentruntime.RuntimeEvent{
@@ -527,8 +509,6 @@ func TestHandleRuntimeEventBindsSessionFromStableEvents(t *testing.T) {
 }
 
 func TestRuntimeSkillEventHandlers(t *testing.T) {
-	t.Parallel()
-
 	app, _ := newTestApp(t)
 
 	if handled := runtimeEventSkillActivatedHandler(&app, agentruntime.RuntimeEvent{Payload: 1}); handled {
@@ -597,8 +577,6 @@ func TestRuntimeSkillEventHandlers(t *testing.T) {
 }
 
 func TestParseSessionSkillEventPayloadBranches(t *testing.T) {
-	t.Parallel()
-
 	if payload, ok := parseSessionSkillEventPayload(map[string]any{"skill_id": 42}); !ok || payload.SkillID != "42" {
 		t.Fatalf("expected snake-case skill_id to be parsed, got payload=%+v ok=%v", payload, ok)
 	}
