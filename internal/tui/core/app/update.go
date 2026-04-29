@@ -852,7 +852,7 @@ func (a *App) submitPermissionDecision(decision tuiservices.PermissionResolution
 	return runResolvePermission(a.runtime, requestID, decision)
 }
 
-// toggleFullAccessMode 处理 Full Access 模式的启停切换；启用前必须经过风险确认�?
+// toggleFullAccessMode 处理 Full Access 模式的启停切换；启用前必须经过风险确认?
 func (a *App) toggleFullAccessMode() {
 	if a.fullAccessModeEnabled {
 		a.disableFullAccessMode()
@@ -862,7 +862,7 @@ func (a *App) toggleFullAccessMode() {
 	a.openFullAccessPrompt()
 }
 
-// updatePendingFullAccessPromptInput 处理 Full Access 风险确认弹窗的键盘交互�?
+// updatePendingFullAccessPromptInput 处理 Full Access 风险确认弹窗的键盘交互?
 func (a *App) updatePendingFullAccessPromptInput(typed tea.KeyMsg) (tea.Cmd, bool) {
 	if a.pendingFullAccessPrompt == nil {
 		return nil, false
@@ -892,7 +892,7 @@ func (a *App) updatePendingFullAccessPromptInput(typed tea.KeyMsg) (tea.Cmd, boo
 	return nil, true
 }
 
-// applyFullAccessPromptSelection 根据风险确认结果更新 Full Access 模式，并按需自动处理待审批请求�?
+// applyFullAccessPromptSelection 根据风险确认结果更新 Full Access 模式，并按需自动处理待审批请求?
 func (a *App) applyFullAccessPromptSelection(enable bool) tea.Cmd {
 	a.pendingFullAccessPrompt = nil
 	if !enable {
@@ -915,7 +915,7 @@ func (a *App) applyFullAccessPromptSelection(enable bool) tea.Cmd {
 	return nil
 }
 
-// openFullAccessPrompt 打开 Full Access 风险确认弹窗，并将输入焦点收敛回输入区�?
+// openFullAccessPrompt 打开 Full Access 风险确认弹窗，并将输入焦点收回输入区。
 func (a *App) openFullAccessPrompt() {
 	a.pendingFullAccessPrompt = &fullAccessPromptState{Selected: 0}
 	a.focus = panelInput
@@ -926,7 +926,7 @@ func (a *App) openFullAccessPrompt() {
 	a.refreshPermissionPromptLayout()
 }
 
-// disableFullAccessMode 关闭 Full Access 模式并刷新提示区布局�?
+// disableFullAccessMode 关闭 Full Access 模式并刷新提示区布局?
 func (a *App) disableFullAccessMode() {
 	a.fullAccessModeEnabled = false
 	a.pendingFullAccessPrompt = nil
@@ -936,7 +936,7 @@ func (a *App) disableFullAccessMode() {
 	a.refreshPermissionPromptLayout()
 }
 
-// handleAutoPermissionResolutionFinished 处理 Full Access 自动审批回执，并在失败时回退到手动审批�?
+// handleAutoPermissionResolutionFinished 处理 Full Access 自动审批回执，并在失败时回退到手动审批?
 func (a *App) handleAutoPermissionResolutionFinished(msg permissionResolutionFinishedMsg) bool {
 	if a.pendingAutoPermission == nil || a.pendingAutoPermission.Request.RequestID != msg.RequestID {
 		return false
@@ -964,7 +964,7 @@ func (a *App) handleAutoPermissionResolutionFinished(msg permissionResolutionFin
 	return true
 }
 
-// handlePermissionResolutionFinished 更新手动审批提交流程的成功或失败状态�?
+// handlePermissionResolutionFinished 更新手动审批提交流程的成功或失败状态?
 func (a *App) handlePermissionResolutionFinished(msg permissionResolutionFinishedMsg) {
 	if a.pendingPermission == nil || a.pendingPermission.Request.RequestID != msg.RequestID {
 		return
@@ -2020,7 +2020,7 @@ func isPickerFilterEditKey(msg tea.KeyMsg) bool {
 	}
 }
 
-// maybeStartModelScopeGuideFromProvider 在选择 modelscope 且未配置 token 时进入半引导流程�?
+// maybeStartModelScopeGuideFromProvider 在选择 modelscope 且未配置 token 时进入半引导流程?
 func (a *App) maybeStartModelScopeGuideFromProvider(providerID string) (tea.Cmd, bool) {
 	if !strings.EqualFold(strings.TrimSpace(providerID), config.ModelScopeName) {
 		return nil, false
@@ -2062,7 +2062,7 @@ func (a *App) maybeStartModelScopeGuideFromProvider(providerID string) (tea.Cmd,
 	return a.runModelScopeGuideOpen(guidePath), true
 }
 
-// resolveModelScopeGuidePath 解析 ModelScope 指导页的本地路径；文件不存在时返回空字符串�?
+// resolveModelScopeGuidePath 解析 ModelScope 指导页的本地路径；文件不存在时返回空字符串?
 func (a *App) resolveModelScopeGuidePath() string {
 	baseDir := strings.TrimSpace(a.configManager.BaseDir())
 	if baseDir == "" {
@@ -2076,7 +2076,7 @@ func (a *App) resolveModelScopeGuidePath() string {
 	return candidate
 }
 
-// handleModelScopeGuideInput 澶勭�?ModelScope 鍗婂紩瀵兼祦绋嬩腑鐨勯敭鐩樹氦浜掋�?
+// handleModelScopeGuideInput 处理 ModelScope 半引导流程中的键盘交互。
 func (a *App) handleModelScopeGuideInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if a.modelScopeGuide == nil {
 		return a, nil
@@ -2115,7 +2115,7 @@ func (a *App) handleModelScopeGuideInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
-// modelScopeGuideOpenTarget 杩斿洖褰撳墠寮曞姝ラ瀵瑰簲鐨勫閮ㄨ祫婧愮洰鏍囥�?
+// modelScopeGuideOpenTarget 返回当前引导步骤对应的外部资源目标。
 func modelScopeGuideOpenTarget(step modelScopeGuideStep, guidePath string) (string, bool) {
 	switch step {
 	case modelScopeGuideStepGuide:
@@ -2133,7 +2133,7 @@ func modelScopeGuideOpenTarget(step modelScopeGuideStep, guidePath string) (stri
 	}
 }
 
-// submitModelScopeGuideToken 鏍￠獙骞舵彁浜ょ敤鎴风矘璐寸�?token�?
+// submitModelScopeGuideToken 校验并提交用户粘贴的 token。
 func (a *App) submitModelScopeGuideToken(guide *modelScopeGuideState) tea.Cmd {
 	token := strings.TrimSpace(guide.Token)
 	if token == "" {
@@ -2146,7 +2146,7 @@ func (a *App) submitModelScopeGuideToken(guide *modelScopeGuideState) tea.Cmd {
 	return a.runModelScopeGuideSubmit(guide.ProviderID, guide.APIKeyEnv, token)
 }
 
-// runModelScopeGuideOpen 寮傛鎵撳紑 ModelScope 寮曞璧勬簮锛堟湰鍦?HTML 鎴栫綉椤?URL锛夈�?
+// runModelScopeGuideOpen 异步打开 ModelScope 引导资源，本地 HTML 和网页 URL 共用这一入口。
 func (a *App) runModelScopeGuideOpen(target string) tea.Cmd {
 	openTarget := strings.TrimSpace(target)
 	if openTarget == "" {
@@ -2163,7 +2163,7 @@ func (a *App) runModelScopeGuideOpen(target string) tea.Cmd {
 	}
 }
 
-// handleModelScopeGuideOpenResultMsg 澶勭悊椤甸潰鎵撳紑缁撴灉锛屽苟鎺ㄨ繘寮曞鐘舵€佹満�?
+// handleModelScopeGuideOpenResultMsg 处理引导资源打开结果，并推进引导步骤。
 func (a *App) handleModelScopeGuideOpenResultMsg(msg modelScopeGuideOpenResultMsg) {
 	if a.modelScopeGuide == nil {
 		return
@@ -2188,7 +2188,7 @@ func (a *App) handleModelScopeGuideOpenResultMsg(msg modelScopeGuideOpenResultMs
 	}
 }
 
-// advanceModelScopeGuideStep 鏍规嵁鎵撳紑缁撴灉鎺ㄨ繘寮曞姝ラ銆?
+// advanceModelScopeGuideStep 根据资源打开结果推进 ModelScope 引导步骤。
 func advanceModelScopeGuideStep(current modelScopeGuideStep, target string) (modelScopeGuideStep, bool) {
 	switch current {
 	case modelScopeGuideStepGuide:
@@ -2203,7 +2203,7 @@ func advanceModelScopeGuideStep(current modelScopeGuideStep, target string) (mod
 	return current, false
 }
 
-// clearModelScopeGuideFeedback 娓呯┖寮曞闈㈡澘涓婄殑閿欒鍜屾彁绀轰俊鎭�?
+// clearModelScopeGuideFeedback 清空引导面板上的错误与提示信息。
 func clearModelScopeGuideFeedback(guide *modelScopeGuideState) {
 	if guide == nil {
 		return
@@ -2212,7 +2212,7 @@ func clearModelScopeGuideFeedback(guide *modelScopeGuideState) {
 	guide.Notice = ""
 }
 
-// runModelScopeGuideSubmit 鍦ㄨ缃?token 鍚庡畬鎴?provider 閫夋嫨涓庢渶灏忓彲鐢ㄦ牎楠屻�?
+// runModelScopeGuideSubmit 设置 token 后完成 provider 选择与最小可用校验。
 func (a *App) runModelScopeGuideSubmit(providerID string, apiKeyEnv string, token string) tea.Cmd {
 	providerSvc := a.providerSvc
 	baseDir := a.configManager.BaseDir()
@@ -2279,7 +2279,7 @@ func (a *App) runModelScopeGuideSubmit(providerID string, apiKeyEnv string, toke
 	}
 }
 
-// rollbackModelScopeGuideSelection 鍦ㄥ紩瀵兼祦绋嬪け璐ユ椂鍥炴粴 provider/model 閫夋嫨锛岄伩鍏嶉厤缃姸鎬佹紓绉汇€?
+// rollbackModelScopeGuideSelection 在引导流程失败时回滚 provider 和 model 选择，避免状态漂移。
 func rollbackModelScopeGuideSelection(providerSvc ProviderController, providerID string, modelID string) error {
 	normalizedProviderID := strings.TrimSpace(providerID)
 	normalizedModelID := strings.TrimSpace(modelID)
@@ -2302,7 +2302,7 @@ func rollbackModelScopeGuideSelection(providerSvc ProviderController, providerID
 	return nil
 }
 
-// handleModelScopeGuideSubmitResultMsg 澶勭�?token 鏍￠獙缁撴灉锛屾垚鍔熷悗鍏抽棴鍚戝锛屽け璐ユ椂鍥為€€骞舵彁绀轰笅涓€姝ャ�?
+// handleModelScopeGuideSubmitResultMsg 处理 token 校验结果；成功后关闭引导，失败时回退并提示下一步。
 func (a *App) handleModelScopeGuideSubmitResultMsg(msg modelScopeGuideSubmitResultMsg) tea.Cmd {
 	if a.modelScopeGuide == nil {
 		return nil
@@ -2353,7 +2353,7 @@ func (a *App) handleModelScopeGuideSubmitResultMsg(msg modelScopeGuideSubmitResu
 	return a.requestModelCatalogRefresh(a.state.CurrentProvider)
 }
 
-// isModelScopeAuthOrPermissionError 鍒ゆ柇閿欒鏄惁鎸囧悜璁よ瘉鎴栨潈闄愭湭瀹屾垚鍦烘櫙�?
+// isModelScopeAuthOrPermissionError 判断错误是否指向认证或权限未完成场景。
 func isModelScopeAuthOrPermissionError(raw string) bool {
 	lowered := strings.ToLower(strings.TrimSpace(raw))
 	if lowered == "" {
@@ -2428,7 +2428,7 @@ func (a *App) refreshMessages() error {
 	return nil
 }
 
-// HydrateSession �?TUI 启动阶段加载并接管既有会话状态，用于 URL 唤醒后的无感接续�?
+// HydrateSession 在 TUI 启动阶段加载并接管既有会话状态，用于 URL 唤醒后的无感续接。
 func (a *App) HydrateSession(ctx context.Context, sessionID string) error {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
@@ -2457,7 +2457,7 @@ func (a *App) HydrateSession(ctx context.Context, sessionID string) error {
 	return nil
 }
 
-// ConfigureStartupWakeInput 配置启动阶段的一次性自动提交输入，不会直接触发 runtime 调用�?
+// ConfigureStartupWakeInput 配置启动阶段的一次性自动提交输入，不会直接触发 runtime 调用?
 func (a *App) ConfigureStartupWakeInput(text string, workdir string) error {
 	normalizedText := strings.TrimSpace(text)
 	if normalizedText == "" {
@@ -2470,7 +2470,7 @@ func (a *App) ConfigureStartupWakeInput(text string, workdir string) error {
 	return nil
 }
 
-// applySessionSnapshot 将会话快照同步到前端状态，统一复用于普通刷新与启动水化路径�?
+// applySessionSnapshot 将会话快照同步到前端状态，统一复用于普通刷新与启动接管路径。
 func (a *App) applySessionSnapshot(session agentsession.Session, warnOnMissingWorkdir bool) {
 	a.activeMessages = session.Messages
 	a.clearActivities()
@@ -2644,7 +2644,7 @@ func (a *App) refreshRuntimeSourceSnapshot() {
 	}
 }
 
-// runtimeSessionContextSource 瀹氫箟璇诲彇浼氳瘽涓婁笅鏂囧揩鐓х殑鏈€灏忔帴鍙ｏ紝渚夸簬�?UI 渚ф寜闇€鍒锋柊杩愯鎬佷俊鎭€?
+// runtimeSessionContextSource 定义读取会话上下文快照的最小接口，便于 UI 侧按需刷新运行态信息。
 type runtimeSessionContextSource interface {
 	GetSessionContext(ctx context.Context, sessionID string) (any, error)
 }
@@ -2695,6 +2695,22 @@ var runtimeEventHandlerRegistry = map[tuiservices.EventType]func(*App, tuiservic
 	tuiservices.EventHookFinished:                             runtimeEventHookFinishedHandler,
 	tuiservices.EventHookFailed:                               runtimeEventHookFailedHandler,
 	tuiservices.EventHookBlocked:                              runtimeEventHookBlockedHandler,
+	tuiservices.EventRepoHooksDiscovered:                      runtimeEventRepoHooksDiscoveredHandler,
+	tuiservices.EventRepoHooksLoaded:                          runtimeEventRepoHooksLoadedHandler,
+	tuiservices.EventRepoHooksSkippedUntrusted:                runtimeEventRepoHooksSkippedUntrustedHandler,
+	tuiservices.EventRepoHooksTrustStoreInvalid:               runtimeEventRepoHooksTrustStoreInvalidHandler,
+}
+
+func hookActivityLabel(source string, hookID string) string {
+	normalizedID := strings.TrimSpace(hookID)
+	if normalizedID == "" {
+		normalizedID = "unknown_hook"
+	}
+	normalizedSource := strings.TrimSpace(source)
+	if normalizedSource == "" {
+		return normalizedID
+	}
+	return normalizedSource + ":" + normalizedID
 }
 
 func runtimeEventHookStartedHandler(a *App, event tuiservices.RuntimeEvent) bool {
@@ -2702,15 +2718,12 @@ func runtimeEventHookStartedHandler(a *App, event tuiservices.RuntimeEvent) bool
 	if !ok {
 		return false
 	}
-	hookID := strings.TrimSpace(payload.HookID)
-	if hookID == "" {
-		hookID = "unknown_hook"
-	}
+	hookLabel := hookActivityLabel(payload.Source, payload.HookID)
 	point := strings.TrimSpace(payload.Point)
 	if point == "" {
 		point = "unknown_point"
 	}
-	a.appendActivity("hook", "Hook started", hookID+" @ "+point, false)
+	a.appendActivity("hook", "Hook started", hookLabel+" @ "+point, false)
 	return false
 }
 
@@ -2719,10 +2732,7 @@ func runtimeEventHookFinishedHandler(a *App, event tuiservices.RuntimeEvent) boo
 	if !ok {
 		return false
 	}
-	hookID := strings.TrimSpace(payload.HookID)
-	if hookID == "" {
-		hookID = "unknown_hook"
-	}
+	hookLabel := hookActivityLabel(payload.Source, payload.HookID)
 	status := strings.TrimSpace(payload.Status)
 	if status == "" {
 		status = "pass"
@@ -2731,7 +2741,7 @@ func runtimeEventHookFinishedHandler(a *App, event tuiservices.RuntimeEvent) boo
 	if message := strings.TrimSpace(payload.Message); message != "" {
 		detail = detail + " · " + message
 	}
-	a.appendActivity("hook", "Hook finished: "+hookID, detail, false)
+	a.appendActivity("hook", "Hook finished: "+hookLabel, detail, false)
 	return false
 }
 
@@ -2740,10 +2750,7 @@ func runtimeEventHookFailedHandler(a *App, event tuiservices.RuntimeEvent) bool 
 	if !ok {
 		return false
 	}
-	hookID := strings.TrimSpace(payload.HookID)
-	if hookID == "" {
-		hookID = "unknown_hook"
-	}
+	hookLabel := hookActivityLabel(payload.Source, payload.HookID)
 	detail := strings.TrimSpace(payload.Error)
 	if detail == "" {
 		detail = "hook execution failed"
@@ -2751,7 +2758,7 @@ func runtimeEventHookFailedHandler(a *App, event tuiservices.RuntimeEvent) bool 
 	if message := strings.TrimSpace(payload.Message); message != "" {
 		detail = message + " · " + detail
 	}
-	a.appendActivity("hook", "Hook failed: "+hookID, detail, true)
+	a.appendActivity("hook", "Hook failed: "+hookLabel, detail, true)
 	return false
 }
 
@@ -2760,10 +2767,7 @@ func runtimeEventHookBlockedHandler(a *App, event tuiservices.RuntimeEvent) bool
 	if !ok {
 		return false
 	}
-	hookID := strings.TrimSpace(payload.HookID)
-	if hookID == "" {
-		hookID = "unknown_hook"
-	}
+	hookLabel := hookActivityLabel(payload.Source, payload.HookID)
 	point := strings.TrimSpace(payload.Point)
 	if point == "" {
 		point = "unknown_point"
@@ -2772,11 +2776,60 @@ func runtimeEventHookBlockedHandler(a *App, event tuiservices.RuntimeEvent) bool
 	if reason == "" {
 		reason = "hook returned block"
 	}
-	title := "Hook blocked: " + hookID + " @ " + point
+	title := "Hook blocked: " + hookLabel + " @ " + point
 	if !payload.Enforced {
-		title = "Hook block observed: " + hookID + " @ " + point
+		title = "Hook block observed: " + hookLabel + " @ " + point
 	}
 	a.appendActivity("hook", title, reason, payload.Enforced)
+	return false
+}
+
+func runtimeEventRepoHooksDiscoveredHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.RepoHooksLifecyclePayload)
+	if !ok {
+		return false
+	}
+	detail := strings.TrimSpace(payload.HooksPath)
+	if detail == "" {
+		detail = strings.TrimSpace(payload.Workspace)
+	}
+	a.appendActivity("hook", "Repo hooks discovered", detail, false)
+	return false
+}
+
+func runtimeEventRepoHooksLoadedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.RepoHooksLifecyclePayload)
+	if !ok {
+		return false
+	}
+	detail := fmt.Sprintf("workspace=%s, hooks=%d", strings.TrimSpace(payload.Workspace), payload.HookCount)
+	a.appendActivity("hook", "Repo hooks loaded", detail, false)
+	return false
+}
+
+func runtimeEventRepoHooksSkippedUntrustedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.RepoHooksLifecyclePayload)
+	if !ok {
+		return false
+	}
+	reason := strings.TrimSpace(payload.Reason)
+	if reason == "" {
+		reason = "workspace is not trusted"
+	}
+	a.appendActivity("hook", "Repo hooks skipped (untrusted)", reason, false)
+	return false
+}
+
+func runtimeEventRepoHooksTrustStoreInvalidHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.RepoHooksTrustStoreInvalidPayload)
+	if !ok {
+		return false
+	}
+	reason := strings.TrimSpace(payload.Reason)
+	if reason == "" {
+		reason = "trust store is invalid"
+	}
+	a.appendActivity("hook", "Repo hooks trust store invalid", reason, false)
 	return false
 }
 
@@ -2796,7 +2849,7 @@ func runtimeEventPhaseChangedHandler(a *App, event tuiservices.RuntimeEvent) boo
 	return false
 }
 
-// runtimeEventVerificationStartedHandler 澶勭悊楠岃瘉娴佺▼寮€濮嬩簨浠跺苟鏇存柊杩愯杩涘害鎻愮ず銆?
+// runtimeEventVerificationStartedHandler 处理验证流程开始事件，并更新运行进度提示。
 func runtimeEventVerificationStartedHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	payload, ok := event.Payload.(tuiservices.VerificationStartedPayload)
 	if !ok {
@@ -2811,7 +2864,7 @@ func runtimeEventVerificationStartedHandler(a *App, event tuiservices.RuntimeEve
 	return false
 }
 
-// runtimeEventVerificationStageFinishedHandler 澶勭悊鍗曚釜 verifier 闃舵瀹屾垚浜嬩欢�?
+// runtimeEventVerificationStageFinishedHandler 处理单个 verifier 阶段完成事件。
 func runtimeEventVerificationStageFinishedHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	payload, ok := event.Payload.(tuiservices.VerificationStageFinishedPayload)
 	if !ok {
@@ -2834,7 +2887,7 @@ func runtimeEventVerificationStageFinishedHandler(a *App, event tuiservices.Runt
 	return false
 }
 
-// runtimeEventVerificationFinishedHandler 澶勭悊楠岃瘉鎬绘祦绋嬬粨鏉熶簨浠躲€?
+// runtimeEventVerificationFinishedHandler 处理验证总流程结束事件。
 func runtimeEventVerificationFinishedHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	payload, ok := event.Payload.(tuiservices.VerificationFinishedPayload)
 	if !ok {
@@ -2846,7 +2899,7 @@ func runtimeEventVerificationFinishedHandler(a *App, event tuiservices.RuntimeEv
 	return false
 }
 
-// runtimeEventVerificationCompletedHandler 澶勭悊楠岃瘉閫氳繃浜嬩欢�?
+// runtimeEventVerificationCompletedHandler 处理验证通过事件。
 func runtimeEventVerificationCompletedHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	payload, ok := event.Payload.(tuiservices.VerificationCompletedPayload)
 	if !ok {
@@ -2860,7 +2913,7 @@ func runtimeEventVerificationCompletedHandler(a *App, event tuiservices.RuntimeE
 	return false
 }
 
-// runtimeEventVerificationFailedHandler 澶勭悊楠岃瘉澶辫触浜嬩欢�?
+// runtimeEventVerificationFailedHandler 处理验证失败事件。
 func runtimeEventVerificationFailedHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	payload, ok := event.Payload.(tuiservices.VerificationFailedPayload)
 	if !ok {
@@ -2877,7 +2930,7 @@ func runtimeEventVerificationFailedHandler(a *App, event tuiservices.RuntimeEven
 	return false
 }
 
-// runtimeEventAcceptanceDecidedHandler 澶勭�?acceptance 鍐崇瓥浜嬩欢骞惰褰曞彲瑙傛祴鏃ュ織�?
+// runtimeEventAcceptanceDecidedHandler 处理 acceptance 决策事件，并记录可观测活动日志。
 func runtimeEventAcceptanceDecidedHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	payload, ok := event.Payload.(tuiservices.AcceptanceDecidedPayload)
 	if !ok {
@@ -2902,7 +2955,7 @@ func runtimeEventAcceptanceDecidedHandler(a *App, event tuiservices.RuntimeEvent
 	return false
 }
 
-// runtimeEventStopReasonDecidedHandler 澶勭悊杩愯缁撴潫鍘熷洜骞剁粺涓€鏇存柊鐘舵€佷笌娲诲姩鏃ュ織銆?
+// runtimeEventStopReasonDecidedHandler 处理运行终止原因事件，统一收尾状态与活动日志。
 func runtimeEventStopReasonDecidedHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	payload, ok := event.Payload.(tuiservices.StopReasonDecidedPayload)
 	if !ok {
@@ -3039,7 +3092,7 @@ func runtimeEventTodoConflictHandler(a *App, event tuiservices.RuntimeEvent) boo
 	return false
 }
 
-// runtimeEventSkillActivatedHandler �?runtime 婵€�?skill 鍚庡悓姝ユ椿鍔ㄦ棩蹇椼€?
+// runtimeEventSkillActivatedHandler 在 runtime 激活 skill 后同步活动日志。
 func runtimeEventSkillActivatedHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	payload, ok := parseSessionSkillEventPayload(event.Payload)
 	if !ok {
@@ -3050,7 +3103,7 @@ func runtimeEventSkillActivatedHandler(a *App, event tuiservices.RuntimeEvent) b
 	return false
 }
 
-// runtimeEventSkillDeactivatedHandler �?runtime 鍋滅�?skill 鍚庡悓姝ユ椿鍔ㄦ棩蹇椼€?
+// runtimeEventSkillDeactivatedHandler 在 runtime 停用 skill 后同步活动日志。
 func runtimeEventSkillDeactivatedHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	payload, ok := parseSessionSkillEventPayload(event.Payload)
 	if !ok {
@@ -3061,7 +3114,7 @@ func runtimeEventSkillDeactivatedHandler(a *App, event tuiservices.RuntimeEvent)
 	return false
 }
 
-// runtimeEventSkillMissingHandler 鍦ㄤ細璇?skill 涓㈠け鏃惰緭鍑烘樉寮忛敊璇弽棣堬紝渚夸簬鎺掓煡鎭㈠闂銆?
+// runtimeEventSkillMissingHandler 在会话 skill 缺失时输出显式错误反馈，便于排查恢复问题。
 func runtimeEventSkillMissingHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	payload, ok := parseSessionSkillEventPayload(event.Payload)
 	if !ok {
@@ -3072,7 +3125,7 @@ func runtimeEventSkillMissingHandler(a *App, event tuiservices.RuntimeEvent) boo
 	return false
 }
 
-// parseSessionSkillEventPayload 瑙ｆ�?runtime skill 浜嬩欢璐熻浇骞跺吋�?map 缁撴瀯銆?
+// parseSessionSkillEventPayload 解析 runtime skill 事件负载，并兼容 map 结构。
 func parseSessionSkillEventPayload(payload any) (tuiservices.SessionSkillEventPayload, bool) {
 	switch typed := payload.(type) {
 	case tuiservices.SessionSkillEventPayload:
@@ -3300,7 +3353,7 @@ func runtimeEventTokenUsageHandler(a *App, event tuiservices.RuntimeEvent) bool 
 	return false
 }
 
-// runtimeEventToolCallThinkingHandler 鍦ㄥ伐鍏疯皟鐢ㄨ繘鍏ユ€濊€冮樁娈垫椂鍚屾褰撳墠宸ュ叿涓庤繘搴︽彁绀恒€?
+// runtimeEventToolCallThinkingHandler 在工具调用进入规划阶段时同步当前工具和进度提示。
 func runtimeEventToolCallThinkingHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	if payload, ok := event.Payload.(string); ok && strings.TrimSpace(payload) != "" {
 		a.state.CurrentTool = payload
@@ -3310,7 +3363,7 @@ func runtimeEventToolCallThinkingHandler(a *App, event tuiservices.RuntimeEvent)
 	return false
 }
 
-// runtimeEventToolStartHandler 鍦ㄥ伐鍏峰疄闄呮墽琛屾椂鏇存柊鐘舵€佹潯鍜屾椿鍔ㄨ褰曘�?
+// runtimeEventToolStartHandler 在工具开始执行时更新状态栏和活动记录。
 func runtimeEventToolStartHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	a.state.StatusText = statusRunningTool
 	a.state.StreamingReply = false
@@ -3346,7 +3399,7 @@ func runtimeEventToolResultHandler(a *App, event tuiservices.RuntimeEvent) bool 
 	return true
 }
 
-// runtimeEventAgentChunkHandler 灏嗘祦寮忓洖澶嶅垎鐗囨寔缁拷鍔犲埌杞綍鍖猴紝骞舵帹杩涜繍琛岃繘搴︺€?
+// runtimeEventAgentChunkHandler 将流式回复分片持续追加到转录区，并推进运行进度。
 func runtimeEventAgentChunkHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	payload, ok := event.Payload.(string)
 	if !ok {
@@ -3367,7 +3420,7 @@ func runtimeEventToolChunkHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	return false
 }
 
-// runtimeEventAgentDoneHandler 鍦ㄤ唬鐞嗗洖澶嶇粨鏉熸椂鏀跺熬鐘舵€佸苟琛ラ綈鏈€�?assistant 娑堟伅銆?
+// runtimeEventAgentDoneHandler 在代理回复结束时收尾状态，并补齐最终 assistant 消息。
 func runtimeEventAgentDoneHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	a.state.IsAgentRunning = false
 	a.state.StreamingReply = false
@@ -3403,7 +3456,7 @@ func runtimeEventRunCanceledHandler(a *App, event tuiservices.RuntimeEvent) bool
 	return false
 }
 
-// runtimeEventErrorHandler 鍦ㄨ繍琛屾姤閿欐椂缁熶竴娓呯悊鐜板満骞跺睍绀洪敊璇俊鎭€?
+// runtimeEventErrorHandler 在运行报错时统一清理现场，并展示错误信息。
 func runtimeEventErrorHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	a.state.StatusText = statusError
 	a.state.IsAgentRunning = false
@@ -3463,7 +3516,7 @@ func runtimeEventPermissionRequestHandler(a *App, event tuiservices.RuntimeEvent
 	return false
 }
 
-// beginAutoPermissionApproval �?Full Access 模式下直接提�?session 级审批，并记录回执所需状态�?
+// beginAutoPermissionApproval Full Access 模式下直接提session 级审批，并记录回执所需状态
 func (a *App) beginAutoPermissionApproval(payload tuiservices.PermissionRequestPayload) bool {
 	if !a.fullAccessModeEnabled {
 		return false
@@ -3484,7 +3537,7 @@ func (a *App) beginAutoPermissionApproval(payload tuiservices.PermissionRequestP
 	return true
 }
 
-// permissionRequestActivityDetail 统一格式化权限请求相关活动明细，避免各分支重复拼接�?
+// permissionRequestActivityDetail 统一格式化权限请求活动详情，避免各分支重复拼接。
 func permissionRequestActivityDetail(payload tuiservices.PermissionRequestPayload) string {
 	return fmt.Sprintf("%s -> %s", fallbackText(payload.ToolName, "tool"), fallbackText(payload.Target, "(empty target)"))
 }
@@ -3512,7 +3565,7 @@ func runtimeEventPermissionResolvedHandler(a *App, event tuiservices.RuntimeEven
 	return false
 }
 
-// refreshPermissionPromptLayout 鍦ㄦ潈闄愭彁绀哄嚭鐜版垨娑堝け鍚庡埛鏂板竷灞€锛岄伩鍏嶉伄鎸¤緭鍏ュ尯銆?
+// refreshPermissionPromptLayout 在权限提示出现或消失后刷新布局，避免遮挡输入区。
 func (a *App) refreshPermissionPromptLayout() {
 	if a.width <= 0 || a.height <= 0 {
 		return
@@ -3577,7 +3630,7 @@ func (a *App) appendInlineMessage(role string, message string) {
 	a.activeMessages = append(a.activeMessages, providertypes.Message{Role: role, Parts: []providertypes.ContentPart{providertypes.NewTextPart(content)}})
 }
 
-// applyInlineCommandError 缁熶竴鍐欏叆鍛戒护閿欒骞跺埛鏂拌浆褰曞尯锛岀‘淇濋敊璇彁绀虹珛鍗冲彲瑙併€?
+// applyInlineCommandError 统一写入内联命令错误，并立即刷新转录区显示。
 func (a *App) applyInlineCommandError(message string) {
 	message = strings.TrimSpace(message)
 	if message == "" {
@@ -3589,7 +3642,7 @@ func (a *App) applyInlineCommandError(message string) {
 	a.rebuildTranscript()
 }
 
-// recordStaleSkillCommandResult 璁板綍鏉ヨ嚜鏃т細璇濈殑鎶€鑳藉懡浠ょ粨鏋滐紝閬垮厤鍦ㄤ細璇濆垏鎹㈠悗閿欒琚潤榛樹涪寮冦€?
+// recordStaleSkillCommandResult 记录来自旧会话的 skill 命令结果，避免切会话后被静默丢弃。
 func (a *App) recordStaleSkillCommandResult(requestSessionID, activeSessionID string, runErr error) {
 	detail := fmt.Sprintf("result from session %q ignored after switching to %q", requestSessionID, activeSessionID)
 	if runErr != nil {
@@ -4636,7 +4689,7 @@ func (a *App) requestModelCatalogRefresh(providerID string) tea.Cmd {
 	return runModelCatalogRefresh(a.providerSvc, providerID)
 }
 
-// handleStartupWakeSubmitMsg 处理启动期的一次性唤醒输入，并沿用普通发送链路触�?Submit�?
+// handleStartupWakeSubmitMsg 处理启动期的一次性唤醒输入，并沿用普通发送链路触Submit
 func (a *App) handleStartupWakeSubmitMsg(msg startupWakeSubmitMsg) tea.Cmd {
 	a.startupWakeSubmitInput = nil
 	text := strings.TrimSpace(msg.Input.Text)
@@ -4789,7 +4842,7 @@ func (a *App) persistLogEntriesForActiveSession() {
 	a.logPersistDirty = false
 }
 
-// sessionLogRuntime 杩斿洖鏀寔浼氳瘽鏃ュ織璇诲啓鐨?runtime 閫傞厤鑳藉姏�?
+// sessionLogRuntime 返回支持会话日志读写的 runtime 适配能力。
 func (a *App) sessionLogRuntime() sessionLogPersistenceRuntime {
 	runtimeWithPersistence, ok := a.runtime.(sessionLogPersistenceRuntime)
 	if !ok {
@@ -4798,7 +4851,7 @@ func (a *App) sessionLogRuntime() sessionLogPersistenceRuntime {
 	return runtimeWithPersistence
 }
 
-// reportLogPersistenceError 缁熶竴澶勭悊鏃ュ織鎸佷箙鍖栧け璐ユ彁绀猴紝閬垮厤閿欒闈欓粯鍚炴帀�?
+// reportLogPersistenceError 统一处理日志持久化失败提示，避免错误被静默吞掉。
 func (a *App) reportLogPersistenceError(action string, err error) {
 	if err == nil {
 		return
@@ -4808,7 +4861,7 @@ func (a *App) reportLogPersistenceError(action string, err error) {
 	a.showFooterError(message)
 }
 
-// restoreStatusAfterLogViewer 鍦ㄥ叧闂棩蹇楄鍥炬椂鎭㈠鍙鐘舵€侊紝閬垮厤瑕嗙洊鐪熷疄杩愯鎬併€?
+// restoreStatusAfterLogViewer 关闭日志视图后恢复可读状态，避免覆盖真实运行态。
 func (a *App) restoreStatusAfterLogViewer() {
 	defer func() { a.logViewerPrevStatus = "" }()
 	if executionError := strings.TrimSpace(a.state.ExecutionError); executionError != "" {
@@ -4834,7 +4887,7 @@ func (a *App) restoreStatusAfterLogViewer() {
 	a.state.StatusText = statusReady
 }
 
-// toRuntimeSessionLogEntries 杞崲鏃ュ織鏉＄洰鍒?runtime 鎸佷箙鍖栨ā鍨嬨€?
+// toRuntimeSessionLogEntries 将日志条目转换为 runtime 持久化模型。
 func toRuntimeSessionLogEntries(entries []logEntry) []tuiservices.SessionLogEntry {
 	converted := make([]tuiservices.SessionLogEntry, 0, len(entries))
 	for _, entry := range entries {
@@ -4848,7 +4901,7 @@ func toRuntimeSessionLogEntries(entries []logEntry) []tuiservices.SessionLogEntr
 	return converted
 }
 
-// fromRuntimeSessionLogEntries �?runtime 鎸佷箙鍖栨ā鍨嬫仮澶嶄�?TUI 灞曠ず妯″瀷銆?
+// fromRuntimeSessionLogEntries 将 runtime 持久化模型还原为 TUI 展示模型。
 func fromRuntimeSessionLogEntries(entries []tuiservices.SessionLogEntry) []logEntry {
 	converted := make([]logEntry, 0, len(entries))
 	for _, entry := range entries {
@@ -4977,7 +5030,7 @@ func (a *App) runMemoSystemTool(toolName string, arguments map[string]any) tea.C
 	)
 }
 
-// normalizeMemoCommandErrorMessage �?memo 命令的底层错误映射为用户可读提示，避免暴露内�?sentinel 文本�?
+// normalizeMemoCommandErrorMessage memo 命令的底层错误映射为用户可读提示，避免暴露内sentinel 文本
 func normalizeMemoCommandErrorMessage(err error) string {
 	if err == nil {
 		return "memo command failed"
@@ -4992,7 +5045,7 @@ func normalizeMemoCommandErrorMessage(err error) string {
 	return message
 }
 
-// syncSessionWorkdir 依据会话快照更新当前工作区；若路径失效可选择展示告警并保留现有目录�?
+// syncSessionWorkdir 依据会话快照更新当前工作区；若路径失效可选择展示告警并保留现有目录
 func (a *App) syncSessionWorkdir(sessionWorkdir string, warnOnMissing bool) {
 	resolved := strings.TrimSpace(agentsession.EffectiveWorkdir(sessionWorkdir, a.configManager.Get().Workdir))
 	if resolved == "" || !filepath.IsAbs(resolved) {
@@ -5087,7 +5140,7 @@ func currentProviderAddField(form *providerAddFormState) providerAddFieldID {
 	return fields[form.Step]
 }
 
-// isProviderAddEnumField 鍒ゆ柇褰撳墠鏂板�?Provider 琛ㄥ崟鐒︾偣鏄惁鍦ㄦ灇涓惧瓧娈碉紙Driver/Model Source锛夈�?
+// isProviderAddEnumField 判断当前新增 Provider 表单焦点是否位于枚举字段（Driver/Model Source）。
 func isProviderAddEnumField(form *providerAddFormState) bool {
 	switch currentProviderAddField(form) {
 	case providerAddFieldDriver, providerAddFieldModelSource, providerAddFieldChatAPIMode:
@@ -5374,7 +5427,7 @@ type modelScopeGuideSubmitResultMsg struct {
 	Warning   string
 }
 
-// providerAddDefaultChatEndpointPath 杩斿�?provider add 琛ㄥ崟鐨勯┍鍔ㄩ粯璁よ亰澶╃鐐硅矾寰勩�?
+// providerAddDefaultChatEndpointPath 返回 provider add 表单按 driver 推导的默认 chat endpoint。
 func providerAddDefaultChatEndpointPath(driver string) string {
 	switch provider.NormalizeProviderDriver(driver) {
 	case provider.DriverGemini:
@@ -5386,7 +5439,7 @@ func providerAddDefaultChatEndpointPath(driver string) string {
 	}
 }
 
-// providerAddDefaultOpenAICompatChatEndpointPath 鏍规�?chat_api_mode 杩斿�?openaicompat 鐨勯粯璁よ亰澶╃鐐硅矾寰勩�?
+// providerAddDefaultOpenAICompatChatEndpointPath 根据 chat_api_mode 返回 openaicompat 的默认 chat endpoint。
 func providerAddDefaultOpenAICompatChatEndpointPath(chatAPIMode string) string {
 	mode, err := provider.NormalizeProviderChatAPIMode(chatAPIMode)
 	if err != nil || mode == "" {
@@ -5398,7 +5451,7 @@ func providerAddDefaultOpenAICompatChatEndpointPath(chatAPIMode string) string {
 	return "/chat/completions"
 }
 
-// syncProviderAddOpenAICompatModeDefaults 鍦ㄥ垏鎹?chat_api_mode 鏃跺悓姝ラ粯�?chat endpoint锛岄伩鍏嶉粯璁ゅ€奸敊閰嶃€?
+// syncProviderAddOpenAICompatModeDefaults 在切换 chat_api_mode 时同步默认 chat endpoint，避免默认值错配。
 func syncProviderAddOpenAICompatModeDefaults(form *providerAddFormState, previousMode string) {
 	if form == nil || provider.NormalizeProviderDriver(form.Driver) != provider.DriverOpenAICompat {
 		return
@@ -5412,7 +5465,7 @@ func syncProviderAddOpenAICompatModeDefaults(form *providerAddFormState, previou
 	form.ChatEndpointPath = providerAddDefaultOpenAICompatChatEndpointPath(form.ChatAPIMode)
 }
 
-// providerAddDefaultBaseURL 杩斿�?provider add 琛ㄥ崟鐨勯┍鍔ㄩ粯璁?base URL�?
+// providerAddDefaultBaseURL 返回 provider add 表单按 driver 推导的默认 base URL。
 func providerAddDefaultBaseURL(driver string) string {
 	switch provider.NormalizeProviderDriver(driver) {
 	case provider.DriverOpenAICompat:
@@ -5426,7 +5479,7 @@ func providerAddDefaultBaseURL(driver string) string {
 	}
 }
 
-// syncProviderAddDriverDefaults 鍦ㄥ垏鎹?driver 鏃舵寜闇€鏇存柊榛樿�?base URL �?chat endpoint�?
+// syncProviderAddDriverDefaults 在切换 driver 时按需同步默认 base URL 与 chat endpoint。
 func syncProviderAddDriverDefaults(form *providerAddFormState, previousDriver string) {
 	if form == nil {
 		return
@@ -5571,13 +5624,11 @@ func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, str
 }
 
 type providerAddManualModelJSON struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	ContextWindow   *int   `json:"context_window,omitempty"`
-	MaxOutputTokens *int   `json:"max_output_tokens,omitempty"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
-// parseProviderAddManualModelsJSON 瑙ｆ�?provider add 琛ㄥ崟涓殑鎵嬪伐妯″�?JSON锛屽苟澶嶇敤 config 褰掍竴鍖栨牎楠岃鍒欍€?
+// parseProviderAddManualModelsJSON 解析 provider add 表单中的手工模型 JSON，并复用 config 归一化校验规则。
 func parseProviderAddManualModelsJSON(raw string) ([]providertypes.ModelDescriptor, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -5603,34 +5654,20 @@ func parseProviderAddManualModelsJSON(raw string) ([]providertypes.ModelDescript
 	seen := make(map[string]struct{}, len(models))
 	for _, model := range models {
 		descriptor := providertypes.ModelDescriptor{
-			ID:              strings.TrimSpace(model.ID),
-			Name:            strings.TrimSpace(model.Name),
-			ContextWindow:   config.ManualModelOptionalIntUnset,
-			MaxOutputTokens: config.ManualModelOptionalIntUnset,
+			ID:   strings.TrimSpace(model.ID),
+			Name: strings.TrimSpace(model.Name),
 		}
 		key := provider.NormalizeKey(descriptor.ID)
 		if _, exists := seen[key]; exists {
 			return nil, fmt.Errorf("parse manual model json: models.id %q is duplicated", descriptor.ID)
 		}
 		seen[key] = struct{}{}
-		if model.ContextWindow != nil {
-			if *model.ContextWindow <= 0 {
-				return nil, fmt.Errorf("parse manual model json: models.context_window must be greater than 0")
-			}
-			descriptor.ContextWindow = *model.ContextWindow
-		}
-		if model.MaxOutputTokens != nil {
-			if *model.MaxOutputTokens <= 0 {
-				return nil, fmt.Errorf("parse manual model json: models.max_output_tokens must be greater than 0")
-			}
-			descriptor.MaxOutputTokens = *model.MaxOutputTokens
-		}
 		descriptors = append(descriptors, descriptor)
 	}
 	return descriptors, nil
 }
 
-// sanitizeProviderAddInputRunes 杩囨�?provider 琛ㄥ崟杈撳叆涓殑鎺у埗瀛楃锛岄伩鍏嶄笉鍙瀛楃姹℃煋閰嶇疆瀛楁銆?
+// sanitizeProviderAddInputRunes 过滤 provider 表单输入中的控制字符，避免不可见字符污染字段。
 func sanitizeProviderAddInputRunes(runes []rune) string {
 	if len(runes) == 0 {
 		return ""
@@ -5647,7 +5684,7 @@ func sanitizeProviderAddInputRunes(runes []rune) string {
 	return builder.String()
 }
 
-// sanitizeProviderAddJSONInputRunes 杩囨护涓嶅彲瑙佹牸寮忔帶鍒跺瓧绗︼紝鍚屾椂淇濈暀 JSON 缂栬緫鎵€闇€鐨勬崲琛屼笌鍒惰〃绗︺€?
+// sanitizeProviderAddJSONInputRunes 过滤 JSON 输入中的不可见格式控制字符，同时保留换行与制表符。
 func sanitizeProviderAddJSONInputRunes(runes []rune) string {
 	if len(runes) == 0 {
 		return ""
@@ -5670,7 +5707,7 @@ func sanitizeProviderAddJSONInputRunes(runes []rune) string {
 	return builder.String()
 }
 
-// normalizeProviderAddFieldValue �?provider 琛ㄥ崟瀛楁鍋氱粺涓€娓呯悊锛屽幓闄ゆ帶鍒跺瓧绗﹀苟瑁佸壀棣栧熬绌虹櫧�?
+// normalizeProviderAddFieldValue 统一清洗 provider 表单字段，去掉控制字符并裁剪首尾空白。
 func normalizeProviderAddFieldValue(value string) string {
 	return strings.TrimSpace(sanitizeProviderAddInputRunes([]rune(value)))
 }
