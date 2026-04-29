@@ -16,9 +16,50 @@ const (
 	HookPointAfterToolResult HookPoint = "after_tool_result"
 	// HookPointBeforeCompletionDecision 表示完成决策前挂点。
 	HookPointBeforeCompletionDecision HookPoint = "before_completion_decision"
+	// HookPointBeforePermissionDecision 表示权限决策前挂点。
+	HookPointBeforePermissionDecision HookPoint = "before_permission_decision"
+	// HookPointAfterToolFailure 表示工具失败后挂点。
+	HookPointAfterToolFailure HookPoint = "after_tool_failure"
+	// HookPointSessionStart 表示会话启动挂点。
+	HookPointSessionStart HookPoint = "session_start"
+	// HookPointSessionEnd 表示会话结束挂点。
+	HookPointSessionEnd HookPoint = "session_end"
+	// HookPointUserPromptSubmit 表示用户输入提交前挂点。
+	HookPointUserPromptSubmit HookPoint = "user_prompt_submit"
+	// HookPointPreCompact 表示 compact 前挂点。
+	HookPointPreCompact HookPoint = "pre_compact"
+	// HookPointPostCompact 表示 compact 后挂点。
+	HookPointPostCompact HookPoint = "post_compact"
+	// HookPointSubAgentStart 表示子代理启动前挂点。
+	HookPointSubAgentStart HookPoint = "subagent_start"
+	// HookPointSubAgentStop 表示子代理结束后挂点。
+	HookPointSubAgentStop HookPoint = "subagent_stop"
 )
 
-// HookScope 描述 hook 的来源作用域。
+// HookPointCapability 描述每个 hook 点位允许的能力。
+type HookPointCapability struct {
+	CanBlock       bool
+	CanAnnotate    bool
+	CanUpdateInput bool
+	UserAllowed    bool
+}
+
+var hookPointCapabilities = map[HookPoint]HookPointCapability{
+	HookPointBeforeToolCall:           {CanBlock: true, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},
+	HookPointAfterToolResult:          {CanBlock: false, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},
+	HookPointBeforeCompletionDecision: {CanBlock: true, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},
+	HookPointBeforePermissionDecision: {CanBlock: true, CanAnnotate: true, CanUpdateInput: false, UserAllowed: false},
+	HookPointAfterToolFailure:         {CanBlock: false, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},
+	HookPointSessionStart:             {CanBlock: false, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},
+	HookPointSessionEnd:               {CanBlock: false, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},
+	HookPointUserPromptSubmit:         {CanBlock: true, CanAnnotate: true, CanUpdateInput: true, UserAllowed: true},
+	HookPointPreCompact:               {CanBlock: true, CanAnnotate: true, CanUpdateInput: false, UserAllowed: false},
+	HookPointPostCompact:              {CanBlock: false, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},
+	HookPointSubAgentStart:            {CanBlock: true, CanAnnotate: true, CanUpdateInput: false, UserAllowed: false},
+	HookPointSubAgentStop:             {CanBlock: false, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},
+}
+
+// HookScope 描述 hook 的权限/上下文裁剪等级。
 type HookScope string
 
 const (
@@ -28,6 +69,18 @@ const (
 	HookScopeUser HookScope = "user"
 	// HookScopeRepo 表示仓库配置 hook（P3 预留）。
 	HookScopeRepo HookScope = "repo"
+)
+
+// HookSource 描述 hook 的配置来源。
+type HookSource string
+
+const (
+	// HookSourceInternal 表示运行时内部注册来源。
+	HookSourceInternal HookSource = "internal"
+	// HookSourceUser 表示全局用户配置来源。
+	HookSourceUser HookSource = "user"
+	// HookSourceRepo 表示仓库级配置来源。
+	HookSourceRepo HookSource = "repo"
 )
 
 // HookKind 描述 hook 处理器类型。
@@ -76,6 +129,7 @@ type HookSpec struct {
 	ID            string
 	Point         HookPoint
 	Scope         HookScope
+	Source        HookSource
 	Kind          HookKind
 	Mode          HookMode
 	Priority      int
@@ -95,7 +149,7 @@ func (s HookSpec) normalizeAndValidate() (HookSpec, error) {
 		return HookSpec{}, wrapInvalidSpec("point is required")
 	}
 	if !isSupportedHookPoint(s.Point) {
-		return HookSpec{}, wrapInvalidSpec("point %q is not supported in P0", s.Point)
+		return HookSpec{}, wrapInvalidSpec("point %q is not supported", s.Point)
 	}
 	if s.Handler == nil {
 		return HookSpec{}, wrapInvalidSpec("handler is required")
@@ -104,9 +158,17 @@ func (s HookSpec) normalizeAndValidate() (HookSpec, error) {
 		s.Scope = HookScopeInternal
 	}
 	switch s.Scope {
-	case HookScopeInternal, HookScopeUser:
+	case HookScopeInternal, HookScopeUser, HookScopeRepo:
 	default:
 		return HookSpec{}, wrapInvalidSpec("scope %q is not supported", s.Scope)
+	}
+	if s.Source == "" {
+		s.Source = HookSource(strings.TrimSpace(string(s.Scope)))
+	}
+	switch s.Source {
+	case HookSourceInternal, HookSourceUser, HookSourceRepo:
+	default:
+		return HookSpec{}, wrapInvalidSpec("source %q is not supported", s.Source)
 	}
 	if s.Kind == "" {
 		s.Kind = HookKindFunction
@@ -118,7 +180,7 @@ func (s HookSpec) normalizeAndValidate() (HookSpec, error) {
 		s.Mode = HookModeSync
 	}
 	if s.Mode != HookModeSync {
-		return HookSpec{}, wrapInvalidSpec("mode %q is not supported in P0", s.Mode)
+		return HookSpec{}, wrapInvalidSpec("mode %q is not supported in current stage", s.Mode)
 	}
 	if s.FailurePolicy == "" {
 		s.FailurePolicy = FailurePolicyFailOpen
@@ -132,10 +194,12 @@ func (s HookSpec) normalizeAndValidate() (HookSpec, error) {
 }
 
 func isSupportedHookPoint(point HookPoint) bool {
-	switch point {
-	case HookPointBeforeToolCall, HookPointAfterToolResult, HookPointBeforeCompletionDecision:
-		return true
-	default:
-		return false
-	}
+	_, ok := hookPointCapabilities[point]
+	return ok
+}
+
+// HookPointCapabilities 返回指定点位能力描述和存在标记。
+func HookPointCapabilities(point HookPoint) (HookPointCapability, bool) {
+	capability, ok := hookPointCapabilities[point]
+	return capability, ok
 }

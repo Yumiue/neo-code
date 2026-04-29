@@ -125,7 +125,7 @@ context:
 |------|------|
 | `id` | hook 唯一标识，同一配置文件内不可重复 |
 | `enabled` | 是否启用该 hook，默认 `true` |
-| `point` | 仅支持 `before_tool_call` / `after_tool_result` / `before_completion_decision` |
+| `point` | 支持 `before_tool_call` / `after_tool_result` / `before_completion_decision` / `before_permission_decision` / `after_tool_failure` / `session_start` / `session_end` / `user_prompt_submit` / `pre_compact` / `post_compact` / `subagent_start` / `subagent_stop` |
 | `scope` | P2 固定为 `user` |
 | `kind` | P2 固定为 `builtin` |
 | `mode` | P2 固定为 `sync` |
@@ -136,6 +136,53 @@ context:
 | `params` | handler 参数；不同 handler 使用不同键 |
 
 > 注意：`warn_only` 在 runtime 内部映射为 `fail_open`，表示记录失败但不阻断主链。
+
+### Repo Hooks（P3）
+
+仓库级 hooks 文件路径固定为：
+
+```text
+<workspace>/.neocode/hooks.yaml
+```
+
+执行受 trust gate 控制，默认不执行。只有当 workspace 出现在 `~/.neocode/trusted-workspaces.json` 中时才会加载。
+
+`hooks.yaml` 示例：
+
+```yaml
+hooks:
+  items:
+    - id: repo-readme-check
+      enabled: true
+      point: before_completion_decision
+      scope: repo
+      kind: builtin
+      mode: sync
+      handler: require_file_exists
+      params:
+        path: README.md
+        message: "请先补齐 README.md"
+```
+
+trust store 示例：
+
+```json
+{
+  "version": 1,
+  "workspaces": [
+    "/absolute/path/to/workspace"
+  ]
+}
+```
+
+约束说明：
+
+- `runtime.hooks.enabled=false` 会关闭全部 hooks（internal/user/repo）。
+- repo hooks 仅支持 builtin 子集（上述 points + 3 个 handlers）。
+- 执行顺序固定：`internal -> user -> repo`。
+- 跨来源同 ID 允许并存；同来源内重复 ID 会报错。
+- trust store 缺失/空文件/损坏 JSON/结构错误时，按 untrusted 处理并发出 `repo_hooks_trust_store_invalid` 事件，不阻断启动。
+- `before_permission_decision` / `pre_compact` / `subagent_start` 不允许 user/repo 挂载，配置会 fail-fast。
 
 ## Budget 解析规则
 

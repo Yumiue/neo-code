@@ -61,24 +61,45 @@ func (e *Executor) Run(ctx context.Context, point HookPoint, input HookContext) 
 	}
 	for _, spec := range specs {
 		hookInput := input.Clone()
-		if spec.Scope == HookScopeUser {
+		if spec.Scope == HookScopeUser || spec.Scope == HookScopeRepo {
 			hookInput = sanitizeUserHookContext(hookInput)
 		}
 		result := e.runOne(ctx, spec, hookInput)
+		result = normalizeHookResultByCapability(spec.Point, result)
 		output.Results = append(output.Results, result)
 
 		if result.Status == HookResultBlock {
 			output.Blocked = true
 			output.BlockedBy = spec.ID
+			output.BlockedSource = spec.Source
 			break
 		}
 		if result.Status == HookResultFailed && spec.FailurePolicy == FailurePolicyFailClosed {
 			output.Blocked = true
 			output.BlockedBy = spec.ID
+			output.BlockedSource = spec.Source
 			break
 		}
 	}
 	return output
+}
+
+// normalizeHookResultByCapability 根据 HookPoint 能力矩阵约束单条结果。
+func normalizeHookResultByCapability(point HookPoint, result HookResult) HookResult {
+	capability, ok := HookPointCapabilities(point)
+	if !ok {
+		return result
+	}
+	if result.Status == HookResultBlock && !capability.CanBlock {
+		result.Status = HookResultPass
+		if strings.TrimSpace(result.Message) == "" {
+			result.Message = "hook block downgraded: point does not allow blocking"
+		}
+		if strings.TrimSpace(result.Error) == "" {
+			result.Error = "hook block downgraded"
+		}
+	}
+	return result
 }
 
 func (e *Executor) runOne(ctx context.Context, spec HookSpec, input HookContext) HookResult {
@@ -88,6 +109,7 @@ func (e *Executor) runOne(ctx context.Context, spec HookSpec, input HookContext)
 		HookID:    spec.ID,
 		Point:     spec.Point,
 		Scope:     spec.Scope,
+		Source:    spec.Source,
 		Kind:      spec.Kind,
 		Mode:      spec.Mode,
 		StartedAt: startedAt,
@@ -107,6 +129,9 @@ func (e *Executor) runOne(ctx context.Context, spec HookSpec, input HookContext)
 	if result.Scope == "" {
 		result.Scope = spec.Scope
 	}
+	if result.Source == "" {
+		result.Source = spec.Source
+	}
 	if result.DurationMS <= 0 {
 		result.DurationMS = durationMS
 	}
@@ -118,6 +143,7 @@ func (e *Executor) runOne(ctx context.Context, spec HookSpec, input HookContext)
 			HookID:     spec.ID,
 			Point:      spec.Point,
 			Scope:      spec.Scope,
+			Source:     spec.Source,
 			Kind:       spec.Kind,
 			Mode:       spec.Mode,
 			Status:     result.Status,
@@ -131,6 +157,7 @@ func (e *Executor) runOne(ctx context.Context, spec HookSpec, input HookContext)
 			HookID:     spec.ID,
 			Point:      spec.Point,
 			Scope:      spec.Scope,
+			Source:     spec.Source,
 			Kind:       spec.Kind,
 			Mode:       spec.Mode,
 			Status:     result.Status,
@@ -166,6 +193,7 @@ func (e *Executor) callHandler(
 			HookID:    spec.ID,
 			Point:     spec.Point,
 			Scope:     spec.Scope,
+			Source:    spec.Source,
 			Status:    HookResultFailed,
 			Message:   err,
 			Error:     err,
@@ -201,6 +229,7 @@ func (e *Executor) callHandler(
 			HookID:    spec.ID,
 			Point:     spec.Point,
 			Scope:     spec.Scope,
+			Source:    spec.Source,
 			Status:    HookResultFailed,
 			Message:   err,
 			Error:     err,
@@ -213,6 +242,7 @@ func (e *Executor) callHandler(
 				HookID:    spec.ID,
 				Point:     spec.Point,
 				Scope:     spec.Scope,
+				Source:    spec.Source,
 				Status:    HookResultFailed,
 				Message:   err,
 				Error:     err,
@@ -222,6 +252,7 @@ func (e *Executor) callHandler(
 		outcome.result.HookID = spec.ID
 		outcome.result.Point = spec.Point
 		outcome.result.Scope = spec.Scope
+		outcome.result.Source = spec.Source
 		if outcome.result.Status == "" {
 			outcome.result.Status = HookResultPass
 		}
@@ -233,6 +264,7 @@ func (e *Executor) callHandler(
 				HookID:    spec.ID,
 				Point:     spec.Point,
 				Scope:     spec.Scope,
+				Source:    spec.Source,
 				Status:    HookResultFailed,
 				Message:   err,
 				Error:     err,
@@ -269,6 +301,25 @@ func sanitizeUserHookContext(input HookContext) HookContext {
 		"result_metadata_present": {},
 		"execution_error":         {},
 		"workdir":                 {},
+		"session_id":              {},
+		"run_id":                  {},
+		"task_id":                 {},
+		"role":                    {},
+		"workspace":               {},
+		"trigger":                 {},
+		"state":                   {},
+		"stop_reason":             {},
+		"step_count":              {},
+		"error":                   {},
+		"trigger_mode":            {},
+		"applied":                 {},
+		"decision":                {},
+		"reason":                  {},
+		"rule_id":                 {},
+		"completion_passed":       {},
+		"has_tool_calls":          {},
+		"assistant_role":          {},
+		"detail":                  {},
 	}
 	for key, value := range input.Metadata {
 		normalizedKey := strings.ToLower(strings.TrimSpace(key))

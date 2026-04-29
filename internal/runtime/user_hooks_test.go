@@ -187,8 +187,8 @@ func TestConfigureRuntimeHooksFromConfig(t *testing.T) {
 	if err := configureRuntimeHooksFromConfig(service, cfg); err != nil {
 		t.Fatalf("disable user hooks error = %v", err)
 	}
-	if service.hookExecutor != nil {
-		t.Fatal("expected nil hook executor when base executor is nil and user hooks are disabled")
+	if service.hookExecutor == nil {
+		t.Fatal("expected repo-capable hook executor when runtime hooks are enabled")
 	}
 
 	cfg.Runtime.Hooks.Enabled = runtimeBoolPtr(false)
@@ -255,8 +255,8 @@ func TestConfigureRuntimeHooksFromConfigKeepsBaseExecutorAndComposes(t *testing.
 	if err := configureRuntimeHooksFromConfig(service, cfg); err != nil {
 		t.Fatalf("reconfigure disable user hooks error = %v", err)
 	}
-	if service.hookExecutor != base {
-		t.Fatalf("expected base executor to be restored, got %T", service.hookExecutor)
+	if service.hookExecutor == nil {
+		t.Fatal("expected hook executor to remain available for repo hooks when runtime hooks are enabled")
 	}
 
 	cfg.Runtime.Hooks.Enabled = runtimeBoolPtr(false)
@@ -339,6 +339,80 @@ func TestUserComposedHookExecutorAndHelpers(t *testing.T) {
 			t.Fatal("safe run should execute non-nil executor")
 		}
 	})
+}
+
+func TestRepoComposedHookExecutorBranches(t *testing.T) {
+	t.Parallel()
+
+	base := &countingHookExecutor{
+		output: runtimehooks.RunOutput{
+			Results: []runtimehooks.HookResult{{HookID: "base", Scope: runtimehooks.HookScopeInternal, Status: runtimehooks.HookResultPass}},
+		},
+	}
+	repo := &countingHookExecutor{
+		output: runtimehooks.RunOutput{
+			Results:       []runtimehooks.HookResult{{HookID: "repo", Scope: runtimehooks.HookScopeRepo, Status: runtimehooks.HookResultPass}},
+			Blocked:       true,
+			BlockedBy:     "repo",
+			BlockedSource: runtimehooks.HookSourceRepo,
+		},
+	}
+	composed := &repoComposedHookExecutor{base: base, repo: repo}
+	out := composed.Run(context.Background(), runtimehooks.HookPointBeforeToolCall, runtimehooks.HookContext{})
+	if !out.Blocked || out.BlockedBy != "repo" || out.BlockedSource != runtimehooks.HookSourceRepo {
+		t.Fatalf("unexpected blocked output: %+v", out)
+	}
+	if len(out.Results) != 2 {
+		t.Fatalf("results len = %d, want 2", len(out.Results))
+	}
+
+	blockedBase := &countingHookExecutor{
+		output: runtimehooks.RunOutput{Blocked: true, BlockedBy: "base"},
+	}
+	composed = &repoComposedHookExecutor{base: blockedBase, repo: repo}
+	out = composed.Run(context.Background(), runtimehooks.HookPointBeforeToolCall, runtimehooks.HookContext{})
+	if !out.Blocked || out.BlockedBy != "base" {
+		t.Fatalf("expected base block passthrough, got %+v", out)
+	}
+}
+
+func TestResolveHookPathWithinWorkdirAndSymlinkBranches(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	if _, err := resolveHookPathWithinWorkdir("", "a.txt"); err == nil {
+		t.Fatal("expected empty workdir error")
+	}
+	if _, err := resolveHookPathWithinWorkdir(workdir, ""); err == nil {
+		t.Fatal("expected empty path error")
+	}
+	if _, err := resolveHookPathWithinWorkdir(workdir, "../escape.txt"); err == nil {
+		t.Fatal("expected outside workdir error")
+	}
+
+	target := filepath.Join(workdir, "target.txt")
+	if err := os.WriteFile(target, []byte("ok"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	link := filepath.Join(workdir, "link.txt")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+	got, err := resolveHookPathWithinWorkdir(workdir, "link.txt")
+	if err != nil {
+		t.Fatalf("resolveHookPathWithinWorkdir(symlink) error = %v", err)
+	}
+	if strings.TrimSpace(got) == "" {
+		t.Fatal("expected non-empty resolved path")
+	}
+
+	hasLink, err := hookPathContainsSymlink(workdir, link)
+	if err != nil {
+		t.Fatalf("hookPathContainsSymlink() error = %v", err)
+	}
+	if !hasLink {
+		t.Fatal("expected symlink detection for link.txt")
+	}
 }
 
 func TestUserHookHelpersAndErrorBranches(t *testing.T) {
@@ -456,7 +530,7 @@ func TestUserHookHelpersAndErrorBranches(t *testing.T) {
 	}
 }
 
-func TestConfigureRuntimeHooksFromConfigNoEnabledUserItemsRestoresBase(t *testing.T) {
+func TestConfigureRuntimeHooksFromConfigNoEnabledUserItemsKeepsRepoCapableExecutor(t *testing.T) {
 	t.Parallel()
 
 	base := &countingHookExecutor{}
@@ -479,8 +553,8 @@ func TestConfigureRuntimeHooksFromConfigNoEnabledUserItemsRestoresBase(t *testin
 	if err := configureRuntimeHooksFromConfig(service, cfg); err != nil {
 		t.Fatalf("configureRuntimeHooksFromConfig() error = %v", err)
 	}
-	if service.hookExecutor != base {
-		t.Fatalf("expected base executor restored, got %T", service.hookExecutor)
+	if service.hookExecutor == nil {
+		t.Fatal("expected hook executor to remain available for repo hooks")
 	}
 }
 
@@ -591,8 +665,8 @@ func TestConfigureRuntimeHooksAndHelpers(t *testing.T) {
 	if err := configureRuntimeHooksFromConfig(service, cfg); err != nil {
 		t.Fatalf("configureRuntimeHooksFromConfig() error = %v", err)
 	}
-	if service.hookExecutor != nil {
-		t.Fatalf("expected no executor when no enabled items")
+	if service.hookExecutor == nil {
+		t.Fatalf("expected hook executor for repo hooks even when no user item is enabled")
 	}
 
 	cfg.Runtime.Hooks.Items[0].Enabled = runtimeBoolPtr(true)
