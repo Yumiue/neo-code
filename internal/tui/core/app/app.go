@@ -106,6 +106,7 @@ type appRuntimeState struct {
 	lastPasteLikeAt           time.Time
 	pendingCtrlVPasteEcho     string
 	pendingCtrlVEchoUntil     time.Time
+	deferredPastedTextLoadCmd tea.Cmd
 	loadingPastedText         bool
 	pendingSendAfterPasteLoad bool
 	skipNextSendPasteLoadWait bool
@@ -119,6 +120,8 @@ type appRuntimeState struct {
 	lastSummarizedPasteText   string
 	lastSummarizedPasteAt     time.Time
 	lastSummarizedPasteToken  string
+	lastPastedContent         string
+	lastPastedContentAt       time.Time
 	activeMessages            []providertypes.Message
 	activities                []tuistate.ActivityEntry
 	todoItems                 []todoViewItem

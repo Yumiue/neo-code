@@ -1723,6 +1723,81 @@ func TestUpdatePasteEventSuppressesDuplicateSummaryTokenAcrossContentVariants(t 
 	}
 }
 
+func TestUpdatePasteEventSuppressesDuplicateSingleLineContent(t *testing.T) {
+	app, _ := newTestApp(t)
+	now := time.Unix(1_720_000_000, 0)
+	app.nowFn = func() time.Time { return now }
+
+	msg := tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune("single-line-paste"),
+		Paste: true,
+	}
+
+	model, cmd := app.Update(msg)
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	model, cmd = app.Update(msg)
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	if got := app.input.Value(); got != "single-line-paste" {
+		t.Fatalf("expected duplicate single-line paste to be suppressed, got %q", got)
+	}
+}
+
+func TestUpdateSingleLineCtrlVPasteEnterDoesNotReinsertPaste(t *testing.T) {
+	app, runtime := newTestApp(t)
+	now := time.Unix(1_720_000_000, 0)
+	app.nowFn = func() time.Time { return now }
+
+	pasted := "single-line-paste"
+	originalReadImage := readClipboardImage
+	originalReadText := readClipboardText
+	defer func() {
+		readClipboardImage = originalReadImage
+		readClipboardText = originalReadText
+	}()
+	readClipboardImage = func() ([]byte, error) { return nil, errors.New("no image") }
+	readClipboardText = func() (string, error) { return pasted, nil }
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+	if got := app.input.Value(); got != pasted {
+		t.Fatalf("expected single-line Ctrl+V paste inserted once, got %q", got)
+	}
+
+	model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+	if got := app.input.Value(); got != pasted {
+		t.Fatalf("expected Enter during echo window not to reinsert paste, got %q", got)
+	}
+	if len(runtime.prepareInputs) != 0 {
+		t.Fatalf("expected Enter during echo window not to submit yet, got %d submits", len(runtime.prepareInputs))
+	}
+
+	now = now.Add(3 * time.Second)
+	model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+	if len(runtime.prepareInputs) != 1 || runtime.prepareInputs[0].Text != pasted {
+		t.Fatalf("expected delayed Enter to submit single-line paste once, got %+v", runtime.prepareInputs)
+	}
+}
+
 func TestUpdatePasteEventConvertsClipboardFilesAsReferences(t *testing.T) {
 	app, _ := newTestApp(t)
 	root := t.TempDir()
