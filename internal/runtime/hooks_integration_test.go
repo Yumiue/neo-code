@@ -9,10 +9,13 @@ import (
 	"testing"
 	"time"
 
+	"neo-code/internal/config"
+	contextcompact "neo-code/internal/context/compact"
 	providertypes "neo-code/internal/provider/types"
 	approvalflow "neo-code/internal/runtime/approval"
 	"neo-code/internal/runtime/controlplane"
 	runtimehooks "neo-code/internal/runtime/hooks"
+	"neo-code/internal/subagent"
 	"neo-code/internal/tools"
 )
 
@@ -504,4 +507,421 @@ func TestHookRuntimeEventEmitterBranches(t *testing.T) {
 	if payload.HookID != "hook-evt" || payload.Point != string(runtimehooks.HookPointAfterToolResult) || payload.DurationMS != 12 {
 		t.Fatalf("unexpected payload: %+v", payload)
 	}
+}
+
+func TestRunTriggersSessionStartAndSessionEndHooks(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	scripted := &scriptedProvider{
+		streams: [][]providertypes.StreamEvent{
+			{
+				providertypes.NewTextDeltaStreamEvent("done"),
+				providertypes.NewMessageDoneStreamEvent("", nil),
+			},
+		},
+	}
+	service := NewWithFactory(manager, &stubToolManager{}, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
+
+	var (
+		sessionStartCalled bool
+		sessionEndCalled   bool
+	)
+	registry := runtimehooks.NewRegistry()
+	if err := registry.Register(runtimehooks.HookSpec{
+		ID:    "observe-session-start",
+		Point: runtimehooks.HookPointSessionStart,
+		Handler: func(ctx context.Context, input runtimehooks.HookContext) runtimehooks.HookResult {
+			sessionStartCalled = true
+			return runtimehooks.HookResult{Status: runtimehooks.HookResultPass}
+		},
+	}); err != nil {
+		t.Fatalf("register session_start hook: %v", err)
+	}
+	if err := registry.Register(runtimehooks.HookSpec{
+		ID:    "observe-session-end",
+		Point: runtimehooks.HookPointSessionEnd,
+		Handler: func(ctx context.Context, input runtimehooks.HookContext) runtimehooks.HookResult {
+			sessionEndCalled = true
+			return runtimehooks.HookResult{Status: runtimehooks.HookResultPass}
+		},
+	}); err != nil {
+		t.Fatalf("register session_end hook: %v", err)
+	}
+	service.SetHookExecutor(runtimehooks.NewExecutor(registry, newHookRuntimeEventEmitter(service), time.Second))
+
+	if err := service.Run(context.Background(), UserInput{
+		RunID: "run-hook-session-lifecycle",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !sessionStartCalled {
+		t.Fatal("expected session_start hook to be triggered")
+	}
+	if !sessionEndCalled {
+		t.Fatal("expected session_end hook to be triggered")
+	}
+}
+
+func TestRunUserPromptSubmitHookBlockEnforced(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	scripted := &scriptedProvider{
+		streams: [][]providertypes.StreamEvent{
+			{
+				providertypes.NewTextDeltaStreamEvent("should-not-run"),
+				providertypes.NewMessageDoneStreamEvent("", nil),
+			},
+		},
+	}
+	service := NewWithFactory(manager, &stubToolManager{}, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
+
+	registry := runtimehooks.NewRegistry()
+	if err := registry.Register(runtimehooks.HookSpec{
+		ID:    "block-user-submit",
+		Point: runtimehooks.HookPointUserPromptSubmit,
+		Handler: func(context.Context, runtimehooks.HookContext) runtimehooks.HookResult {
+			return runtimehooks.HookResult{Status: runtimehooks.HookResultBlock, Message: "blocked user prompt submit"}
+		},
+	}); err != nil {
+		t.Fatalf("register user_prompt_submit hook: %v", err)
+	}
+	service.SetHookExecutor(runtimehooks.NewExecutor(registry, newHookRuntimeEventEmitter(service), time.Second))
+
+	err := service.Run(context.Background(), UserInput{
+		RunID: "run-hook-user-prompt-blocked",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")},
+	})
+	if err == nil {
+		t.Fatal("expected Run() to be blocked by user_prompt_submit hook")
+	}
+	if !strings.Contains(err.Error(), "blocked user prompt submit") {
+		t.Fatalf("Run() error = %q, want block reason", err.Error())
+	}
+	if scripted.callCount != 0 {
+		t.Fatalf("provider call count = %d, want 0 when blocked before provider call", scripted.callCount)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	blockedIndex := eventIndex(events, EventHookBlocked)
+	if blockedIndex < 0 {
+		t.Fatalf("expected hook_blocked event")
+	}
+	payload, ok := events[blockedIndex].Payload.(HookBlockedPayload)
+	if !ok {
+		t.Fatalf("hook_blocked payload type = %T, want HookBlockedPayload", events[blockedIndex].Payload)
+	}
+	if payload.Point != string(runtimehooks.HookPointUserPromptSubmit) {
+		t.Fatalf("payload.Point = %q, want %q", payload.Point, runtimehooks.HookPointUserPromptSubmit)
+	}
+	if !payload.Enforced {
+		t.Fatal("expected user_prompt_submit block to be enforced")
+	}
+}
+
+func TestExecuteOneToolCallTriggersAfterToolFailureHook(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	session := newRuntimeSession("session-hook-after-tool-failure")
+	store.sessions[session.ID] = cloneSession(session)
+
+	toolManager := &stubToolManager{
+		executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
+			return tools.ToolResult{Name: input.Name, IsError: true, ErrorClass: "tool_failed"}, errors.New("tool failed")
+		},
+	}
+	service := &Service{
+		sessionStore:   store,
+		toolManager:    toolManager,
+		approvalBroker: approvalflow.NewBroker(),
+		events:         make(chan RuntimeEvent, 32),
+	}
+	state := newRunState("run-hook-after-tool-failure", session)
+
+	var called bool
+	registry := runtimehooks.NewRegistry()
+	if err := registry.Register(runtimehooks.HookSpec{
+		ID:    "observe-after-tool-failure",
+		Point: runtimehooks.HookPointAfterToolFailure,
+		Handler: func(ctx context.Context, input runtimehooks.HookContext) runtimehooks.HookResult {
+			called = true
+			return runtimehooks.HookResult{Status: runtimehooks.HookResultPass}
+		},
+	}); err != nil {
+		t.Fatalf("register after_tool_failure hook: %v", err)
+	}
+	service.SetHookExecutor(runtimehooks.NewExecutor(registry, newHookRuntimeEventEmitter(service), time.Second))
+
+	_, _, err := service.executeOneToolCall(
+		context.Background(),
+		&state,
+		TurnBudgetSnapshot{Workdir: t.TempDir(), ToolTimeout: time.Second},
+		providertypes.ToolCall{ID: "call-4", Name: "filesystem_read_file", Arguments: `{"path":"README.md"}`},
+		&sync.Mutex{},
+		func() bool { return false },
+	)
+	if err != nil {
+		t.Fatalf("executeOneToolCall() error = %v, want nil for non-cancel tool failure", err)
+	}
+	if !called {
+		t.Fatal("expected after_tool_failure hook to be triggered")
+	}
+}
+
+func TestBeforePermissionDecisionHookBlockEnforced(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	session := newRuntimeSession("session-hook-before-permission")
+	store.sessions[session.ID] = cloneSession(session)
+	service := &Service{
+		sessionStore:   store,
+		toolManager:    &stubToolManager{},
+		approvalBroker: approvalflow.NewBroker(),
+		events:         make(chan RuntimeEvent, 32),
+	}
+	state := newRunState("run-hook-before-permission", session)
+	permissionErr := permissionDecisionAskError(t)
+
+	registry := runtimehooks.NewRegistry()
+	if err := registry.Register(runtimehooks.HookSpec{
+		ID:    "block-before-permission",
+		Point: runtimehooks.HookPointBeforePermissionDecision,
+		Handler: func(context.Context, runtimehooks.HookContext) runtimehooks.HookResult {
+			return runtimehooks.HookResult{Status: runtimehooks.HookResultBlock, Message: "blocked before permission decision"}
+		},
+	}); err != nil {
+		t.Fatalf("register before_permission_decision hook: %v", err)
+	}
+	service.SetHookExecutor(runtimehooks.NewExecutor(registry, newHookRuntimeEventEmitter(service), time.Second))
+	service.toolManager = &stubToolManager{
+		executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
+			return tools.ToolResult{
+				ToolCallID: input.ID,
+				Name:       input.Name,
+				IsError:    true,
+			}, permissionErr
+		},
+	}
+
+	result, err := service.executeToolCallWithPermission(context.Background(), permissionExecutionInput{
+		RunID:       state.runID,
+		SessionID:   state.session.ID,
+		State:       &state,
+		Call:        providertypes.ToolCall{ID: "call-permission", Name: "filesystem_read_file", Arguments: `{"path":"README.md"}`},
+		Workdir:     t.TempDir(),
+		ToolTimeout: time.Second,
+	})
+	if err == nil {
+		t.Fatal("expected permission chain to be blocked")
+	}
+	if result.ErrorClass != hookErrorClassBlocked {
+		t.Fatalf("result.ErrorClass = %q, want %q", result.ErrorClass, hookErrorClassBlocked)
+	}
+	events := collectRuntimeEvents(service.Events())
+	assertEventContains(t, events, EventHookBlocked)
+	assertNoEventType(t, events, EventPermissionRequested)
+}
+
+func TestRunCompactTriggersPreAndPostCompactHooks(t *testing.T) {
+	t.Parallel()
+
+	service := NewWithFactory(nil, &stubToolManager{}, newMemoryStore(), nil, nil)
+	session := newRuntimeSession("session-hook-compact")
+	cfg := *config.StaticDefaults()
+	service.compactRunner = &stubCompactRunner{
+		result: contextcompact.Result{
+			Applied: false,
+			Metrics: contextcompact.Metrics{TriggerMode: string(contextcompact.ModeManual)},
+		},
+	}
+
+	var preCalled, postCalled bool
+	registry := runtimehooks.NewRegistry()
+	if err := registry.Register(runtimehooks.HookSpec{
+		ID:    "pre-compact-observe",
+		Point: runtimehooks.HookPointPreCompact,
+		Handler: func(context.Context, runtimehooks.HookContext) runtimehooks.HookResult {
+			preCalled = true
+			return runtimehooks.HookResult{Status: runtimehooks.HookResultPass}
+		},
+	}); err != nil {
+		t.Fatalf("register pre_compact hook: %v", err)
+	}
+	if err := registry.Register(runtimehooks.HookSpec{
+		ID:    "post-compact-observe",
+		Point: runtimehooks.HookPointPostCompact,
+		Handler: func(context.Context, runtimehooks.HookContext) runtimehooks.HookResult {
+			postCalled = true
+			return runtimehooks.HookResult{Status: runtimehooks.HookResultPass}
+		},
+	}); err != nil {
+		t.Fatalf("register post_compact hook: %v", err)
+	}
+	service.SetHookExecutor(runtimehooks.NewExecutor(registry, newHookRuntimeEventEmitter(service), time.Second))
+
+	_, _, err := service.runCompactForSession(
+		context.Background(),
+		"run-hook-compact",
+		session,
+		cfg,
+		contextcompact.ModeManual,
+		compactErrorStrict,
+	)
+	if err != nil {
+		t.Fatalf("runCompactForSession() error = %v", err)
+	}
+	if !preCalled {
+		t.Fatal("expected pre_compact hook to be triggered")
+	}
+	if !postCalled {
+		t.Fatal("expected post_compact hook to be triggered")
+	}
+}
+
+func TestRunCompactPreCompactHookBlockEnforced(t *testing.T) {
+	t.Parallel()
+
+	service := NewWithFactory(nil, &stubToolManager{}, newMemoryStore(), nil, nil)
+	session := newRuntimeSession("session-hook-compact-block")
+	cfg := *config.StaticDefaults()
+	service.compactRunner = &stubCompactRunner{
+		result: contextcompact.Result{
+			Applied: false,
+			Metrics: contextcompact.Metrics{TriggerMode: string(contextcompact.ModeManual)},
+		},
+	}
+
+	registry := runtimehooks.NewRegistry()
+	if err := registry.Register(runtimehooks.HookSpec{
+		ID:    "block-pre-compact",
+		Point: runtimehooks.HookPointPreCompact,
+		Handler: func(context.Context, runtimehooks.HookContext) runtimehooks.HookResult {
+			return runtimehooks.HookResult{Status: runtimehooks.HookResultBlock, Message: "blocked pre compact"}
+		},
+	}); err != nil {
+		t.Fatalf("register pre_compact block hook: %v", err)
+	}
+	service.SetHookExecutor(runtimehooks.NewExecutor(registry, newHookRuntimeEventEmitter(service), time.Second))
+
+	_, _, err := service.runCompactForSession(
+		context.Background(),
+		"run-hook-compact-block",
+		session,
+		cfg,
+		contextcompact.ModeManual,
+		compactErrorStrict,
+	)
+	if err == nil {
+		t.Fatal("expected runCompactForSession to be blocked")
+	}
+	events := collectRuntimeEvents(service.Events())
+	assertEventContains(t, events, EventHookBlocked)
+	assertNoEventType(t, events, EventCompactStart)
+}
+
+func TestRunSubAgentTaskTriggersSubagentStartAndStopHooks(t *testing.T) {
+	t.Parallel()
+
+	service := NewWithFactory(nil, nil, nil, nil, nil)
+	service.SetSubAgentFactory(subagent.NewWorkerFactory(func(role subagent.Role, policy subagent.RolePolicy) subagent.Engine {
+		return subagent.EngineFunc(func(ctx context.Context, input subagent.StepInput) (subagent.StepOutput, error) {
+			return subagent.StepOutput{
+				Delta: "done",
+				Done:  true,
+				Output: subagent.Output{
+					Summary:     "ok",
+					Findings:    []string{"f1"},
+					Patches:     []string{"p1"},
+					Risks:       []string{"r1"},
+					NextActions: []string{"n1"},
+					Artifacts:   []string{"a1"},
+				},
+			}, nil
+		})
+	}))
+
+	var startCalled, stopCalled bool
+	registry := runtimehooks.NewRegistry()
+	if err := registry.Register(runtimehooks.HookSpec{
+		ID:    "observe-subagent-start",
+		Point: runtimehooks.HookPointSubAgentStart,
+		Handler: func(context.Context, runtimehooks.HookContext) runtimehooks.HookResult {
+			startCalled = true
+			return runtimehooks.HookResult{Status: runtimehooks.HookResultPass}
+		},
+	}); err != nil {
+		t.Fatalf("register subagent_start hook: %v", err)
+	}
+	if err := registry.Register(runtimehooks.HookSpec{
+		ID:    "observe-subagent-stop",
+		Point: runtimehooks.HookPointSubAgentStop,
+		Handler: func(context.Context, runtimehooks.HookContext) runtimehooks.HookResult {
+			stopCalled = true
+			return runtimehooks.HookResult{Status: runtimehooks.HookResultPass}
+		},
+	}); err != nil {
+		t.Fatalf("register subagent_stop hook: %v", err)
+	}
+	service.SetHookExecutor(runtimehooks.NewExecutor(registry, newHookRuntimeEventEmitter(service), time.Second))
+
+	_, err := service.RunSubAgentTask(context.Background(), SubAgentTaskInput{
+		RunID:     "sub-run-hook-lifecycle",
+		SessionID: "session-hook-lifecycle",
+		Role:      subagent.RoleCoder,
+		Task: subagent.Task{
+			ID:   "task-hook-lifecycle",
+			Goal: "goal",
+		},
+		Budget: subagent.Budget{MaxSteps: 2},
+	})
+	if err != nil {
+		t.Fatalf("RunSubAgentTask() error = %v", err)
+	}
+	if !startCalled {
+		t.Fatal("expected subagent_start hook to be triggered")
+	}
+	if !stopCalled {
+		t.Fatal("expected subagent_stop hook to be triggered")
+	}
+}
+
+func TestRunSubAgentTaskSubagentStartHookBlockEnforced(t *testing.T) {
+	t.Parallel()
+
+	service := NewWithFactory(nil, nil, nil, nil, nil)
+
+	registry := runtimehooks.NewRegistry()
+	if err := registry.Register(runtimehooks.HookSpec{
+		ID:    "block-subagent-start",
+		Point: runtimehooks.HookPointSubAgentStart,
+		Handler: func(context.Context, runtimehooks.HookContext) runtimehooks.HookResult {
+			return runtimehooks.HookResult{Status: runtimehooks.HookResultBlock, Message: "blocked subagent start"}
+		},
+	}); err != nil {
+		t.Fatalf("register subagent_start block hook: %v", err)
+	}
+	service.SetHookExecutor(runtimehooks.NewExecutor(registry, newHookRuntimeEventEmitter(service), time.Second))
+
+	_, err := service.RunSubAgentTask(context.Background(), SubAgentTaskInput{
+		RunID:     "sub-run-hook-blocked",
+		SessionID: "session-hook-blocked",
+		Role:      subagent.RoleCoder,
+		Task: subagent.Task{
+			ID:   "task-hook-blocked",
+			Goal: "goal",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected RunSubAgentTask() to be blocked by subagent_start hook")
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventContains(t, events, EventHookBlocked)
+	assertNoEventType(t, events, EventSubAgentStarted)
 }
