@@ -460,3 +460,94 @@ func TestRememberFullPlanRevisionClearsAlignmentFlags(t *testing.T) {
 		t.Fatalf("expected one-shot alignment flags to be cleared, got %+v", session)
 	}
 }
+
+func TestMarkCurrentPlanRestorePendingAndContextDirty(t *testing.T) {
+	t.Parallel()
+
+	session := agentsession.New("mark restore/context dirty")
+	if markCurrentPlanRestorePending(&session) {
+		t.Fatal("expected false when current plan is missing")
+	}
+	if markCurrentPlanContextDirty(&session) {
+		t.Fatal("expected false when current plan is missing")
+	}
+
+	session.CurrentPlan = &agentsession.PlanArtifact{
+		ID:       "plan-restore",
+		Revision: 1,
+		Status:   agentsession.PlanStatusApproved,
+		Spec: agentsession.PlanSpec{
+			Goal:   "restore full plan",
+			Steps:  []string{"step one"},
+			Verify: []string{"verify one"},
+		},
+	}
+	if !markCurrentPlanRestorePending(&session) {
+		t.Fatal("expected first restore mark to succeed")
+	}
+	if markCurrentPlanRestorePending(&session) {
+		t.Fatal("expected duplicated restore mark to be ignored")
+	}
+	if !markCurrentPlanContextDirty(&session) {
+		t.Fatal("expected first context dirty mark to succeed")
+	}
+	if markCurrentPlanContextDirty(&session) {
+		t.Fatal("expected duplicated context dirty mark to be ignored")
+	}
+
+	session.CurrentPlan.Status = agentsession.PlanStatusCompleted
+	session.PlanCompletionPendingFullReview = false
+	session.PlanRestorePendingAlign = false
+	session.PlanContextDirty = false
+	if markCurrentPlanRestorePending(&session) {
+		t.Fatal("expected completed plan without full review pending not to mark restore align")
+	}
+	if markCurrentPlanContextDirty(&session) {
+		t.Fatal("expected completed plan without full review pending not to mark context dirty")
+	}
+}
+
+func TestApplyCurrentPlanRevisionNilGuards(t *testing.T) {
+	t.Parallel()
+
+	session := agentsession.New("apply plan revision nil guards")
+	plan := &agentsession.PlanArtifact{ID: "plan-1", Revision: 1}
+	if applyCurrentPlanRevision(nil, plan) {
+		t.Fatal("expected nil session to return false")
+	}
+	if applyCurrentPlanRevision(&session, nil) {
+		t.Fatal("expected nil plan to return false")
+	}
+}
+
+func TestApproveCurrentPlanValidationErrors(t *testing.T) {
+	t.Parallel()
+
+	session := agentsession.New("approve validation")
+	if err := approveCurrentPlan(&session, "plan-1", 1); err == nil {
+		t.Fatal("expected error when current plan does not exist")
+	}
+
+	session.CurrentPlan = &agentsession.PlanArtifact{
+		ID:       "plan-1",
+		Revision: 2,
+		Status:   agentsession.PlanStatusDraft,
+		Spec: agentsession.PlanSpec{
+			Goal:   "审批校验",
+			Steps:  []string{"步骤一"},
+			Verify: []string{"验证一"},
+		},
+	}
+
+	if err := approveCurrentPlan(&session, "plan-2", 2); err == nil {
+		t.Fatal("expected id mismatch error")
+	}
+	if err := approveCurrentPlan(&session, "plan-1", 1); err == nil {
+		t.Fatal("expected revision mismatch error")
+	}
+
+	session.CurrentPlan.Status = agentsession.PlanStatusApproved
+	if err := approveCurrentPlan(&session, "plan-1", 2); err == nil {
+		t.Fatal("expected status mismatch error")
+	}
+}
