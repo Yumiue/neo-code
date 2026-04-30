@@ -56,6 +56,14 @@ function buildFileTree(entries: FileEntry[]): FileTreeNode[] {
         parent.children!.push({ entry })
       }
     } else if (!parentPath) {
+      // 根级别节点
+      if (entry.is_dir) {
+        rootNodes.push(dirMap.get(entry.path)!)
+      } else {
+        rootNodes.push({ entry })
+      }
+    } else {
+      // 父目录缺失：作为根节点挂载（容错处理，避免节点丢失）
       if (entry.is_dir) {
         rootNodes.push(dirMap.get(entry.path)!)
       } else {
@@ -67,9 +75,36 @@ function buildFileTree(entries: FileEntry[]): FileTreeNode[] {
   return rootNodes
 }
 
-function FileTreeItem({ node, depth = 0 }: { node: FileTreeNode; depth?: number }) {
-  const [expanded, setExpanded] = useState(true)
+interface FileTreeItemProps {
+  node: FileTreeNode
+  depth?: number
+  dirCache: Map<string, FileTreeNode[]>
+  onLoadDir: (path: string) => Promise<void>
+}
+
+function FileTreeItem({ node, depth = 0, dirCache, onLoadDir }: FileTreeItemProps) {
+  const [expanded, setExpanded] = useState(false)
+  const [localLoading, setLocalLoading] = useState(false)
   const isFolder = node.entry.is_dir
+
+  const cachedChildren = dirCache.get(node.entry.path)
+  const children = cachedChildren !== undefined ? cachedChildren : node.children
+  const isLoaded = cachedChildren !== undefined
+
+  const handleClick = async () => {
+    if (!isFolder) return
+    if (!isLoaded) {
+      setLocalLoading(true)
+      try {
+        await onLoadDir(node.entry.path)
+        setExpanded(true)
+      } finally {
+        setLocalLoading(false)
+      }
+    } else {
+      setExpanded(!expanded)
+    }
+  }
 
   return (
     <div>
@@ -78,21 +113,57 @@ function FileTreeItem({ node, depth = 0 }: { node: FileTreeNode; depth?: number 
           ...styles.treeItem,
           paddingLeft: 8 + depth * 14,
         }}
-        onClick={() => isFolder && setExpanded(!expanded)}
+        onClick={handleClick}
       >
         {isFolder && (
-          <span style={{ ...styles.chevron, transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>
-            <ChevronRight size={12} />
+          <span
+            style={{
+              ...styles.chevron,
+              transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
+            }}
+          >
+            {localLoading ? (
+              <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} />
+            ) : (
+              <ChevronRight size={12} />
+            )}
           </span>
         )}
         <span style={styles.treeIcon}>
-          {isFolder ? (expanded ? <FolderOpen size={14} /> : <Folder size={14} />) : getFileIcon(node.entry.name)}
+          {isFolder
+            ? expanded
+              ? <FolderOpen size={14} />
+              : <Folder size={14} />
+            : getFileIcon(node.entry.name)}
         </span>
         <span style={styles.treeName}>{node.entry.name}</span>
       </button>
-      {isFolder && expanded && node.children?.map((child, i) => (
-        <FileTreeItem key={i} node={child} depth={depth + 1} />
-      ))}
+      {isFolder && expanded && (
+        children && children.length > 0 ? (
+          children.map((child) => (
+            <FileTreeItem
+              key={child.entry.path}
+              node={child}
+              depth={depth + 1}
+              dirCache={dirCache}
+              onLoadDir={onLoadDir}
+            />
+          ))
+        ) : isLoaded ? (
+          <div
+            style={{
+              paddingLeft: 8 + (depth + 1) * 14,
+              paddingTop: 2,
+              paddingBottom: 2,
+              fontSize: 11,
+              color: 'var(--text-tertiary)',
+              fontFamily: 'var(--font-ui)',
+            }}
+          >
+            空文件夹
+          </div>
+        ) : null
+      )}
     </div>
   )
 }
@@ -100,19 +171,36 @@ function FileTreeItem({ node, depth = 0 }: { node: FileTreeNode; depth?: number 
 export default function FileTreePanel() {
   const toggleFileTreePanel = useUIStore((s) => s.toggleFileTreePanel)
   const gatewayAPI = useGatewayAPI()
-  const [entries, setEntries] = useState<FileEntry[]>([])
+  const [rootNodes, setRootNodes] = useState<FileTreeNode[]>([])
+  const [dirCache, setDirCache] = useState<Map<string, FileTreeNode[]>>(new Map())
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [currentPath, setCurrentPath] = useState('')
 
-  const loadFiles = useCallback(async (path: string = '') => {
+  const loadDir = useCallback(async (path: string) => {
+    if (!gatewayAPI) return
+    try {
+      const result = await gatewayAPI.listFiles({ path })
+      const nodes = buildFileTree(result.payload.files)
+      setDirCache((prev) => {
+        const next = new Map(prev)
+        next.set(path, nodes)
+        return next
+      })
+    } catch (err) {
+      console.error(`loadDir(${path}) failed:`, err)
+      throw err
+    }
+  }, [gatewayAPI])
+
+  const loadRoot = useCallback(async () => {
     if (!gatewayAPI) return
     setLoading(true)
     setError('')
     try {
-      const result = await gatewayAPI.listFiles({ path })
-      setEntries(result.payload.files)
-      setCurrentPath(path)
+      const result = await gatewayAPI.listFiles({ path: '' })
+      setRootNodes(buildFileTree(result.payload.files))
+      setCurrentPath('')
     } catch (err) {
       const msg = err instanceof Error ? err.message : '加载文件列表失败'
       setError(msg)
@@ -123,17 +211,19 @@ export default function FileTreePanel() {
   }, [gatewayAPI])
 
   useEffect(() => {
-    loadFiles()
-  }, [loadFiles])
-
-  const treeNodes = buildFileTree(entries)
+    loadRoot()
+  }, [loadRoot])
 
   return (
     <div style={styles.container}>
       <div style={styles.header}>
         <div style={styles.headerTop}>
           <span style={styles.headerTitle}>工作区</span>
-          <button style={styles.closeBtn} onClick={toggleFileTreePanel} title="关闭文件目录">
+          <button
+            style={styles.closeBtn}
+            onClick={toggleFileTreePanel}
+            title="关闭文件目录"
+          >
             <PanelRightClose size={16} />
           </button>
         </div>
@@ -149,17 +239,27 @@ export default function FileTreePanel() {
         )}
         {!loading && error && (
           <div style={styles.emptyState}>
-            <span style={{ ...styles.emptyText, color: 'var(--error)' }}>加载失败: {error}</span>
+            <span style={{ ...styles.emptyText, color: 'var(--error)' }}>
+              加载失败: {error}
+            </span>
           </div>
         )}
-        {!loading && !error && treeNodes.length === 0 && (
+        {!loading && !error && rootNodes.length === 0 && (
           <div style={styles.emptyState}>
             <span style={styles.emptyText}>工作区为空</span>
           </div>
         )}
-        {!loading && !error && treeNodes.map((node, i) => (
-          <FileTreeItem key={i} node={node} />
-        ))}
+        {!loading &&
+          !error &&
+          rootNodes.map((node) => (
+            <FileTreeItem
+              key={node.entry.path}
+              node={node}
+              depth={0}
+              dirCache={dirCache}
+              onLoadDir={loadDir}
+            />
+          ))}
       </div>
     </div>
   )
