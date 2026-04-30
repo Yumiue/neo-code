@@ -239,6 +239,15 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				return s.handleRunError(err)
 			}
 			hasToolCalls := len(turnOutput.assistant.ToolCalls) > 0
+			state.mu.Lock()
+			if hasToolCalls {
+				state.mustUseToolAfterFinalContinue = false
+				state.noToolAfterFinalContinueStreak = 0
+			} else if state.mustUseToolAfterFinalContinue {
+				state.pendingFinalProgress = false
+				state.noToolAfterFinalContinueStreak++
+			}
+			state.mu.Unlock()
 			if hasToolCalls {
 				if err := s.appendAssistantMessageAndSave(
 					ctx,
@@ -337,6 +346,8 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 
 				switch acceptanceDecision.Status {
 				case acceptance.AcceptanceAccepted:
+					state.mustUseToolAfterFinalContinue = false
+					state.noToolAfterFinalContinueStreak = 0
 					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
 						return s.handleRunError(err)
 					}
@@ -348,7 +359,11 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					s.triggerMemoExtraction(state.session.ID, state.session.Messages, state.rememberedThisRun)
 					return nil
 				case acceptance.AcceptanceContinue:
-					reminder := strings.TrimSpace(acceptanceDecision.ContinueHint)
+					state.mustUseToolAfterFinalContinue = true
+					if state.noToolAfterFinalContinueStreak == 0 {
+						state.noToolAfterFinalContinueStreak = 1
+					}
+					reminder := strings.TrimSpace(buildAcceptanceContinueHint(acceptanceDecision))
 					if reminder == "" {
 						reminder = finalContinueReminder
 					}
@@ -357,6 +372,8 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					}
 					break turnAttempt
 				case acceptance.AcceptanceIncomplete:
+					state.mustUseToolAfterFinalContinue = false
+					state.noToolAfterFinalContinueStreak = 0
 					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
 						return s.handleRunError(err)
 					}
@@ -364,6 +381,8 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
 					return nil
 				case acceptance.AcceptanceFailed:
+					state.mustUseToolAfterFinalContinue = false
+					state.noToolAfterFinalContinueStreak = 0
 					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
 						return s.handleRunError(err)
 					}
@@ -375,6 +394,8 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
 					return nil
 				default:
+					state.mustUseToolAfterFinalContinue = false
+					state.noToolAfterFinalContinueStreak = 0
 					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
 						return s.handleRunError(err)
 					}
