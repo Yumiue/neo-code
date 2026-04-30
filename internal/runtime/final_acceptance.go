@@ -10,6 +10,8 @@ import (
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/acceptance"
 	"neo-code/internal/runtime/controlplane"
+	"neo-code/internal/runtime/decider"
+	runtimefacts "neo-code/internal/runtime/facts"
 	"neo-code/internal/runtime/verify"
 	agentsession "neo-code/internal/session"
 )
@@ -18,6 +20,242 @@ const finalContinueReminder = "There are unfinished required todos or unmet acce
 
 // beforeAcceptFinal 在 runtime 接受模型 final 前执行唯一的 completion/verifier/acceptance 闭环。
 func (s *Service) beforeAcceptFinal(
+	ctx context.Context,
+	state *runState,
+	snapshot TurnBudgetSnapshot,
+	assistant providertypes.Message,
+	completionPassed bool,
+) (acceptance.AcceptanceDecision, error) {
+	if state == nil {
+		return acceptance.AcceptanceDecision{}, nil
+	}
+
+	maxNoProgress := snapshot.Config.Runtime.Verification.MaxNoProgress
+	if maxNoProgress <= 0 {
+		maxNoProgress = 3
+	}
+	noProgressStreak := state.finalInterceptStreak
+	if noProgressStreak < 0 {
+		noProgressStreak = 0
+	}
+	if state.mustUseToolAfterFinalContinue && state.noToolAfterFinalContinueStreak > noProgressStreak {
+		noProgressStreak = state.noToolAfterFinalContinueStreak
+	}
+
+	deciderDecision := s.evaluateFinalDecision(state, assistant, completionPassed, noProgressStreak, maxNoProgress)
+	state.mu.Lock()
+	state.lastDeciderDecision = deciderDecision
+	pendingFinalProgress := state.pendingFinalProgress
+	completionBlockedReason := strings.TrimSpace(string(state.completion.CompletionBlockedReason))
+	state.mu.Unlock()
+	s.emitRunScopedOptional(EventDecisionMade, state, deciderDecision)
+	s.emitRuntimeSnapshotUpdated(ctx, state, "decision_made")
+	acceptanceDecision := mapDeciderDecisionToAcceptance(deciderDecision)
+	if acceptanceDecision.Status == acceptance.AcceptanceContinue && pendingFinalProgress {
+		acceptanceDecision.HasProgress = true
+	}
+	if !completionPassed && completionBlockedReason != "" {
+		acceptanceDecision.CompletionBlockedReason = completionBlockedReason
+	}
+	return acceptanceDecision, nil
+}
+
+// evaluateFinalDecision 把当前 run facts + todo 快照输入 FinalDecider，生成唯一终态裁决。
+func (s *Service) evaluateFinalDecision(
+	state *runState,
+	assistant providertypes.Message,
+	completionPassed bool,
+	noProgressStreak int,
+	maxNoProgress int,
+) decider.Decision {
+	if state == nil {
+		return decider.Decision{
+			Status:             decider.DecisionContinue,
+			StopReason:         string(controlplane.StopReasonTodoNotConverged),
+			UserVisibleSummary: "runtime state is unavailable",
+			InternalSummary:    "run state is nil",
+		}
+	}
+	state.mu.Lock()
+	taskKind := state.taskKind
+	userGoal := state.userGoal
+	completionReason := strings.TrimSpace(string(state.completion.CompletionBlockedReason))
+	verificationProfile := state.session.TaskState.VerificationProfile
+	todoSnapshot := buildTodoSnapshotFromItems(cloneTodosForPersistence(state.session.Todos))
+	factsSnapshot := runtimefacts.RuntimeFacts{}
+	if state.factsCollector != nil {
+		factsSnapshot = state.factsCollector.Snapshot()
+	}
+	state.mu.Unlock()
+
+	if !verificationProfile.Valid() {
+		return decider.Decision{
+			Status:             decider.DecisionFailed,
+			StopReason:         string(controlplane.StopReasonVerificationFailed),
+			UserVisibleSummary: "verification profile 非法，任务终止。",
+			InternalSummary:    fmt.Sprintf("invalid verification profile: %q", verificationProfile),
+		}
+	}
+
+	if strings.TrimSpace(userGoal) == "" {
+		userGoal = renderPartsForVerification(assistant.Parts)
+	}
+	if strings.TrimSpace(string(taskKind)) == "" {
+		taskKind = decider.InferTaskKind(userGoal)
+	}
+	if todoSnapshot.Summary.RequiredOpen > 0 {
+		completionPassed = false
+		if completionReason == "" {
+			completionReason = string(controlplane.CompletionBlockedReasonPendingTodo)
+		}
+	}
+
+	return decider.Decide(decider.DecisionInput{
+		RunID:              strings.TrimSpace(state.runID),
+		SessionID:          strings.TrimSpace(state.session.ID),
+		TaskKind:           taskKind,
+		UserGoal:           userGoal,
+		Facts:              factsSnapshot,
+		Todos:              toDeciderTodoSnapshot(todoSnapshot),
+		Progress:           toDeciderProgress(factsSnapshot),
+		LastAssistantText:  renderPartsForVerification(assistant.Parts),
+		CompletionPassed:   completionPassed,
+		CompletionReason:   completionReason,
+		NoProgressExceeded: noProgressStreak >= maxNoProgress,
+	})
+}
+
+// mapDeciderDecisionToAcceptance 把 FinalDecider 裁决映射到现有 acceptance 协议，保证主链兼容。
+func mapDeciderDecisionToAcceptance(decision decider.Decision) acceptance.AcceptanceDecision {
+	out := acceptance.AcceptanceDecision{
+		StopReason:         toControlplaneStopReason(decision.StopReason),
+		UserVisibleSummary: strings.TrimSpace(decision.UserVisibleSummary),
+		InternalSummary:    strings.TrimSpace(decision.InternalSummary),
+		ContinueHint:       buildDeciderContinueHint(decision),
+	}
+	switch decision.Status {
+	case decider.DecisionAccepted:
+		out.Status = acceptance.AcceptanceAccepted
+		if out.StopReason == "" {
+			out.StopReason = controlplane.StopReasonAccepted
+		}
+	case decider.DecisionFailed, decider.DecisionBlocked:
+		out.Status = acceptance.AcceptanceFailed
+		if out.StopReason == "" {
+			out.StopReason = controlplane.StopReasonVerificationFailed
+		}
+	case decider.DecisionIncomplete:
+		out.Status = acceptance.AcceptanceIncomplete
+		if out.StopReason == "" {
+			out.StopReason = controlplane.StopReasonNoProgressAfterFinalIntercept
+		}
+	default:
+		out.Status = acceptance.AcceptanceContinue
+		if out.StopReason == "" {
+			out.StopReason = controlplane.StopReasonTodoNotConverged
+		}
+	}
+	return out
+}
+
+// toDeciderTodoSnapshot 转换 runtime todo 快照到 decider 输入结构。
+func toDeciderTodoSnapshot(snapshot TodoSnapshot) decider.TodoSnapshot {
+	out := decider.TodoSnapshot{
+		Summary: decider.TodoSummary{
+			Total:             snapshot.Summary.Total,
+			RequiredTotal:     snapshot.Summary.RequiredTotal,
+			RequiredCompleted: snapshot.Summary.RequiredCompleted,
+			RequiredFailed:    snapshot.Summary.RequiredFailed,
+			RequiredOpen:      snapshot.Summary.RequiredOpen,
+		},
+	}
+	if len(snapshot.Items) == 0 {
+		return out
+	}
+	out.Items = make([]decider.TodoViewItem, 0, len(snapshot.Items))
+	for _, item := range snapshot.Items {
+		out.Items = append(out.Items, decider.TodoViewItem{
+			ID:            strings.TrimSpace(item.ID),
+			Content:       strings.TrimSpace(item.Content),
+			Status:        strings.TrimSpace(item.Status),
+			Required:      item.Required,
+			Artifacts:     append([]string(nil), item.Artifacts...),
+			FailureReason: strings.TrimSpace(item.FailureReason),
+			BlockedReason: strings.TrimSpace(item.BlockedReason),
+			Revision:      item.Revision,
+		})
+	}
+	return out
+}
+
+// toDeciderProgress 构建 decider 所需的最小进度快照。
+func toDeciderProgress(factsSnapshot runtimefacts.RuntimeFacts) decider.ProgressSnapshot {
+	return decider.ProgressSnapshot{
+		FactCount: max(0, factsSnapshot.Progress.ObservedFactCount),
+	}
+}
+
+// toControlplaneStopReason 把 decider stop reason 映射为 controlplane 枚举。
+func toControlplaneStopReason(reason string) controlplane.StopReason {
+	normalized := strings.TrimSpace(reason)
+	switch normalized {
+	case string(controlplane.StopReasonAccepted):
+		return controlplane.StopReasonAccepted
+	case string(controlplane.StopReasonTodoNotConverged):
+		return controlplane.StopReasonTodoNotConverged
+	case string(controlplane.StopReasonNoProgressAfterFinalIntercept):
+		return controlplane.StopReasonNoProgressAfterFinalIntercept
+	case string(controlplane.StopReasonRequiredTodoFailed):
+		return controlplane.StopReasonRequiredTodoFailed
+	case string(controlplane.StopReasonVerificationFailed):
+		return controlplane.StopReasonVerificationFailed
+	default:
+		return ""
+	}
+}
+
+// buildDeciderContinueHint 生成 FinalDecider continue 场景下的结构化执行提示。
+func buildDeciderContinueHint(decision decider.Decision) string {
+	if decision.Status != decider.DecisionContinue {
+		return ""
+	}
+	var builder strings.Builder
+	builder.WriteString("<acceptance_continue>\n")
+	if summary := strings.TrimSpace(decision.UserVisibleSummary); summary != "" {
+		builder.WriteString("<summary>")
+		builder.WriteString(xmlEscape(summary))
+		builder.WriteString("</summary>\n")
+	}
+	if len(decision.MissingFacts) > 0 {
+		builder.WriteString("<missing_facts>\n")
+		for _, fact := range decision.MissingFacts {
+			builder.WriteString(fmt.Sprintf(
+				"<fact kind=\"%s\" target=\"%s\">%s</fact>\n",
+				xmlEscape(strings.TrimSpace(fact.Kind)),
+				xmlEscape(strings.TrimSpace(fact.Target)),
+				xmlEscape(evidenceJSONPreview(fact.Details)),
+			))
+		}
+		builder.WriteString("</missing_facts>\n")
+	}
+	if len(decision.RequiredNextActions) > 0 {
+		builder.WriteString("<required_next_actions>\n")
+		for _, action := range decision.RequiredNextActions {
+			builder.WriteString(fmt.Sprintf(
+				"<action tool=\"%s\">%s</action>\n",
+				xmlEscape(strings.TrimSpace(action.Tool)),
+				xmlEscape(evidenceJSONPreview(action.ArgsHint)),
+			))
+		}
+		builder.WriteString("</required_next_actions>\n")
+	}
+	builder.WriteString("<rule>Do not claim completion with plain text. Call tools to produce objective facts before final response.</rule>\n")
+	builder.WriteString("</acceptance_continue>")
+	return strings.TrimSpace(builder.String())
+}
+
+// beforeAcceptFinalLegacy 保留历史 acceptance/verify 执行逻辑，作为兼容后备路径。
+func (s *Service) beforeAcceptFinalLegacy(
 	ctx context.Context,
 	state *runState,
 	snapshot TurnBudgetSnapshot,

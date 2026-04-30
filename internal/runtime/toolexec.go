@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	providertypes "neo-code/internal/provider/types"
+	runtimefacts "neo-code/internal/runtime/facts"
 	runtimehooks "neo-code/internal/runtime/hooks"
 	"neo-code/internal/tools"
 )
@@ -181,6 +182,11 @@ func (s *Service) executeOneToolCall(
 
 	s.emitRunScoped(ctx, EventToolResult, state, result)
 	s.emitTodoToolEvent(ctx, state, call, result, execErr)
+	state.mu.Lock()
+	if state.factsCollector != nil {
+		state.factsCollector.ApplyToolResult(call.Name, result)
+	}
+	state.mu.Unlock()
 
 	if isSuccessfulRememberToolCall(call.Name, result, execErr) {
 		state.mu.Lock()
@@ -271,7 +277,18 @@ func (s *Service) emitTodoToolEvent(
 	action, _ := result.Metadata["action"].(string)
 	payload := buildTodoEventPayload(state, strings.TrimSpace(action), "")
 	if execErr == nil && !result.IsError {
+		state.mu.Lock()
+		if state.factsCollector != nil {
+			state.factsCollector.ApplyTodoSnapshot(runtimefacts.TodoSummaryLike{
+				RequiredOpen:      payload.Summary.RequiredOpen,
+				RequiredCompleted: payload.Summary.RequiredCompleted,
+				RequiredFailed:    payload.Summary.RequiredFailed,
+			})
+		}
+		state.mu.Unlock()
 		s.emitRunScoped(ctx, EventTodoUpdated, state, payload)
+		s.emitRunScopedOptional(EventTodoSnapshotUpdated, state, payload)
+		s.emitRuntimeSnapshotUpdated(ctx, state, "todo_updated")
 		return
 	}
 
@@ -287,7 +304,20 @@ func (s *Service) emitTodoToolEvent(
 		reason = "todo_write_failed"
 	}
 	payload.Reason = reason
+	state.mu.Lock()
+	if state.factsCollector != nil {
+		state.factsCollector.ApplyTodoSnapshot(runtimefacts.TodoSummaryLike{
+			RequiredOpen:      payload.Summary.RequiredOpen,
+			RequiredCompleted: payload.Summary.RequiredCompleted,
+			RequiredFailed:    payload.Summary.RequiredFailed,
+		})
+		conflictIDs := extractTodoIDsFromPayload(payload.Items)
+		state.factsCollector.ApplyTodoConflict(conflictIDs)
+	}
+	state.mu.Unlock()
 	s.emitRunScoped(ctx, EventTodoConflict, state, payload)
+	s.emitRunScopedOptional(EventTodoSnapshotUpdated, state, payload)
+	s.emitRuntimeSnapshotUpdated(ctx, state, "todo_conflict")
 }
 
 // hasSuccessfulWorkspaceWriteFact 判断工具结果是否产出了成功写入事实。
@@ -304,6 +334,27 @@ func summarizeHookResultContent(content string) string {
 		return trimmed
 	}
 	return trimmed[:256]
+}
+
+// extractTodoIDsFromPayload 提取 todo 事件快照中的条目 ID，用于冲突事实去重统计。
+func extractTodoIDsFromPayload(items []TodoViewItem) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(items))
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		id := strings.TrimSpace(item.ID)
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 // buildTodoEventPayload 构建 todo 事件快照，确保 UI 可即时渲染结构化收敛信息。
