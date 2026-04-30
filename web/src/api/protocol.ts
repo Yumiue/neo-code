@@ -21,6 +21,20 @@ export const Method = {
   DeactivateSessionSkill: 'gateway.deactivateSessionSkill',
   ListSessionSkills: 'gateway.listSessionSkills',
   ListAvailableSkills: 'gateway.listAvailableSkills',
+  DeleteSession: 'gateway.deleteSession',
+  RenameSession: 'gateway.renameSession',
+  ListFiles: 'gateway.listFiles',
+  ListModels: 'gateway.listModels',
+  SetSessionModel: 'gateway.setSessionModel',
+  GetSessionModel: 'gateway.getSessionModel',
+  ListProviders: 'gateway.listProviders',
+  CreateCustomProvider: 'gateway.createCustomProvider',
+  DeleteCustomProvider: 'gateway.deleteCustomProvider',
+  SelectProviderModel: 'gateway.selectProviderModel',
+  ListMCPServers: 'gateway.listMCPServers',
+  UpsertMCPServer: 'gateway.upsertMCPServer',
+  SetMCPServerEnabled: 'gateway.setMCPServerEnabled',
+  DeleteMCPServer: 'gateway.deleteMCPServer',
   Event: 'gateway.event',
 } as const
 
@@ -34,6 +48,14 @@ export const FrameType = {
 // 帧动作
 export const FrameAction = {
   Run: 'run',
+  ListProviders: 'list_providers',
+  CreateCustomProvider: 'create_custom_provider',
+  DeleteCustomProvider: 'delete_custom_provider',
+  SelectProviderModel: 'select_provider_model',
+  ListMCPServers: 'list_mcp_servers',
+  UpsertMCPServer: 'upsert_mcp_server',
+  SetMCPServerEnabled: 'set_mcp_server_enabled',
+  DeleteMCPServer: 'delete_mcp_server',
 } as const
 
 // 运行时事件类型（从 Go internal/tui/services/runtime_contract.go 对齐）
@@ -92,14 +114,6 @@ export const StopReason = {
 
 // --- 类型定义 ---
 
-/** JSON-RPC 请求 */
-export interface JSONRPCRequest {
-  jsonrpc: typeof JSONRPC_VERSION
-  id: string | number
-  method: string
-  params?: unknown
-}
-
 /** JSON-RPC 响应 */
 export interface JSONRPCResponse {
   jsonrpc: typeof JSONRPC_VERSION
@@ -129,6 +143,15 @@ export interface MessageFrame {
   session_id?: string
   run_id?: string
   payload?: unknown
+}
+
+/** 通用 RPC 响应包装（MessageFrame 格式） */
+export interface RPCResult<T> {
+  type: string
+  action: string
+  session_id?: string
+  run_id?: string
+  payload: T
 }
 
 /** 运行时事件包裹 */
@@ -217,6 +240,8 @@ export interface Session {
   created_at: string
   updated_at: string
   workdir?: string
+  provider?: string
+  model?: string
   messages?: SessionMessage[]
 }
 
@@ -231,23 +256,255 @@ export interface TokenUsage {
   session_output_tokens: number
 }
 
-/** gateway.run ack 响应载荷 */
-export interface RunAckResult {
-  message: string
+/** gateway.run ack 响应 */
+export type RunAckResult = RPCResult<{ message: string }>
+
+/** gateway.listSessions 响应 */
+export type ListSessionsResult = RPCResult<{ sessions: SessionSummary[] }>
+
+/** gateway.cancel 响应 */
+export type CancelResult = RPCResult<{ canceled: boolean; run_id: string }>
+
+/** gateway.deleteSession 参数 */
+export interface DeleteSessionParams {
+  session_id: string
+}
+
+/** gateway.deleteSession 响应 */
+export type DeleteSessionResult = RPCResult<{ deleted: boolean; session_id: string }>
+
+/** gateway.renameSession 参数 */
+export interface RenameSessionParams {
+  session_id: string
+  title: string
+}
+
+/** gateway.renameSession 响应 */
+export type RenameSessionResult = RPCResult<{ session_id: string; title: string }>
+
+/** gateway.listFiles 参数 */
+export interface ListFilesParams {
   session_id?: string
-  run_id?: string
+  workdir?: string
+  path?: string
 }
 
-/** gateway.listSessions 响应载荷 */
-export interface ListSessionsResult {
-  sessions: SessionSummary[]
+/** 文件条目 */
+export interface FileEntry {
+  name: string
+  path: string
+  is_dir: boolean
+  size?: number
+  mod_time?: string
 }
 
-/** gateway.cancel 响应载荷 */
-export interface CancelResult {
-  canceled: boolean
-  run_id: string
+/** gateway.listFiles 响应 */
+export type ListFilesResult = RPCResult<{ files: FileEntry[] }>
+
+/** 模型条目 */
+export interface ModelEntry {
+  id: string
+  name: string
+  provider: string
 }
+
+/** gateway.listModels 响应 */
+export type ListModelsResult = RPCResult<{ models: ModelEntry[] }>
+
+/** gateway.setSessionModel 参数 */
+export interface SetSessionModelParams {
+  session_id: string
+  provider_id?: string
+  model_id: string
+}
+
+/** gateway.setSessionModel 响应 */
+export type SetSessionModelResult = RPCResult<{ session_id: string; model_id: string }>
+
+/** gateway.getSessionModel 参数 */
+export interface GetSessionModelParams {
+  session_id: string
+}
+
+/** gateway.getSessionModel 响应 */
+export type GetSessionModelResult = RPCResult<{ model_id: string; model_name?: string; provider?: string }>
+
+/** 模型能力提示 */
+export interface ProviderModelCapabilityHints {
+  tool_calling?: string
+  image_input?: string
+}
+
+/** Provider 模型描述 */
+export interface ProviderModelDescriptor {
+  id: string
+  name: string
+  description?: string
+  context_window?: number
+  max_output_tokens?: number
+  capability_hints?: ProviderModelCapabilityHints
+}
+
+/** Provider 选项 */
+export interface ProviderOption {
+  id: string
+  name: string
+  driver: string
+  base_url?: string
+  api_key_env: string
+  source: string
+  selected: boolean
+  models?: ProviderModelDescriptor[]
+}
+
+/** gateway.listProviders 响应 */
+export type ListProvidersResult = RPCResult<{ providers: ProviderOption[] }>
+
+/** gateway.createCustomProvider 参数 */
+export interface CreateProviderParams {
+  name: string
+  driver: string
+  base_url?: string
+  chat_api_mode?: string
+  chat_endpoint_path?: string
+  api_key_env: string
+  api_key?: string
+  model_source?: string
+  discovery_endpoint_path?: string
+  models?: ProviderModelDescriptor[]
+}
+
+/** gateway.createCustomProvider 响应 */
+export type CreateProviderResult = RPCResult<{ provider_id: string; model_id: string }>
+
+/** gateway.deleteCustomProvider 参数 */
+export interface DeleteProviderParams {
+  provider_id: string
+}
+
+/** gateway.deleteCustomProvider 响应 */
+export type DeleteProviderResult = RPCResult<{ deleted: boolean; provider_id: string }>
+
+/** gateway.selectProviderModel 参数 */
+export interface SelectProviderModelParams {
+  provider_id: string
+  model_id?: string
+}
+
+/** gateway.selectProviderModel 响应 */
+export type SelectProviderModelResult = RPCResult<{ provider_id: string; model_id: string }>
+
+/** MCP server stdio 参数 */
+export interface MCPStdioParams {
+  command?: string
+  args?: string[]
+  workdir?: string
+  start_timeout_sec?: number
+  call_timeout_sec?: number
+  restart_backoff_sec?: number
+}
+
+/** MCP server 环境变量 */
+export interface MCPEnvVarParams {
+  name: string
+  value?: string
+  value_env?: string
+}
+
+/** MCP server 配置 */
+export interface MCPServerParams {
+  id: string
+  enabled?: boolean
+  source?: string
+  version?: string
+  stdio?: MCPStdioParams
+  env?: MCPEnvVarParams[]
+}
+
+/** gateway.listMCPServers 响应 */
+export type ListMCPServersResult = RPCResult<{ servers: MCPServerParams[] }>
+
+/** gateway.upsertMCPServer 参数 */
+export interface UpsertMCPServerParams {
+  server: MCPServerParams
+}
+
+/** gateway.upsertMCPServer 响应 */
+export type UpsertMCPServerResult = RPCResult<{ server: MCPServerParams }>
+
+/** gateway.setMCPServerEnabled 参数 */
+export interface SetMCPServerEnabledParams {
+  id: string
+  enabled: boolean
+}
+
+/** gateway.setMCPServerEnabled 响应 */
+export type SetMCPServerEnabledResult = RPCResult<{ id: string; enabled: boolean }>
+
+/** gateway.deleteMCPServer 参数 */
+export interface DeleteMCPServerParams {
+  id: string
+}
+
+/** gateway.deleteMCPServer 响应 */
+export type DeleteMCPServerResult = RPCResult<{ deleted: boolean; id: string }>
+
+/** 技能描述元信息 */
+export interface SkillDescriptor {
+  id: string
+  name?: string
+  description?: string
+  version?: string
+  source?: string
+  scope?: string
+}
+
+/** 会话技能状态 */
+export interface SessionSkillState {
+  skill_id: string
+  missing?: boolean
+  descriptor?: SkillDescriptor
+}
+
+/** 可用技能状态 */
+export interface AvailableSkillState {
+  descriptor: SkillDescriptor
+  active: boolean
+}
+
+/** gateway.activateSessionSkill 参数 */
+export interface ActivateSessionSkillParams {
+  session_id: string
+  skill_id: string
+}
+
+/** gateway.activateSessionSkill 响应 */
+export type ActivateSessionSkillResult = RPCResult<{ session_id: string; skill_id: string; message: string }>
+
+/** gateway.deactivateSessionSkill 参数 */
+export interface DeactivateSessionSkillParams {
+  session_id: string
+  skill_id: string
+}
+
+/** gateway.deactivateSessionSkill 响应 */
+export type DeactivateSessionSkillResult = RPCResult<{ session_id: string; skill_id: string; message: string }>
+
+/** gateway.listSessionSkills 参数 */
+export interface ListSessionSkillsParams {
+  session_id: string
+}
+
+/** gateway.listSessionSkills 响应 */
+export type ListSessionSkillsResult = RPCResult<{ skills: SessionSkillState[] }>
+
+/** gateway.listAvailableSkills 参数 */
+export interface ListAvailableSkillsParams {
+  session_id?: string
+}
+
+/** gateway.listAvailableSkills 响应 */
+export type ListAvailableSkillsResult = RPCResult<{ skills: AvailableSkillState[] }>
 
 /** 权限请求载荷 */
 export interface PermissionRequestPayload {

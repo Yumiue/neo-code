@@ -1,4 +1,4 @@
-import { type ChatMessage } from '@/store/useChatStore'
+import { type ChatMessage } from '@/stores/useChatStore'
 import { Loader2, Wrench, CheckCircle2, XCircle } from 'lucide-react'
 
 interface ToolCallCardProps {

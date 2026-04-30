@@ -1,6 +1,7 @@
-import { useState } from 'react'
-import { useSessionStore } from '@/store/useSessionStore'
-import { useUIStore } from '@/store/useUIStore'
+import { useState, useEffect, useCallback } from 'react'
+import { useSessionStore } from '@/stores/useSessionStore'
+import { useUIStore } from '@/stores/useUIStore'
+import { useGatewayAPI } from '@/context/RuntimeProvider'
 import {
   Plus,
   Search,
@@ -14,6 +15,7 @@ import {
   Cpu,
   Blocks,
 } from 'lucide-react'
+import { type ProviderOption, type MCPServerParams, type AvailableSkillState, type SessionSkillState } from '@/api/protocol'
 
 interface SidebarProps {
   collapsed?: boolean
@@ -21,10 +23,11 @@ interface SidebarProps {
 
 /** 左侧栏：会话列表 */
 export default function Sidebar({ collapsed }: SidebarProps) {
+  const gatewayAPI = useGatewayAPI()
+  // All hooks must be called before any early return (React Rules of Hooks)
   const projects = useSessionStore((s) => s.projects)
   const currentSessionId = useSessionStore((s) => s.currentSessionId)
   const switchSession = useSessionStore((s) => s.switchSession)
-  const createSession = useSessionStore((s) => s.createSession)
   const toggleSidebar = useUIStore((s) => s.toggleSidebar)
   const searchQuery = useUIStore((s) => s.searchQuery)
   const setSearchQuery = useUIStore((s) => s.setSearchQuery)
@@ -32,9 +35,13 @@ export default function Sidebar({ collapsed }: SidebarProps) {
 
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set())
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; sessionId: string } | null>(null)
+  const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
   const [mcpModalOpen, setMcpModalOpen] = useState(false)
   const [skillModalOpen, setSkillModalOpen] = useState(false)
   const [providerModalOpen, setProviderModalOpen] = useState(false)
+
+  if (!gatewayAPI) return null
 
   const toggleProject = (projectId: string) => {
     setExpandedProjects((prev) => {
@@ -59,19 +66,17 @@ export default function Sidebar({ collapsed }: SidebarProps) {
 
   async function handleSelectSession(sessionId: string, projectId: string) {
     setCurrentProjectId(projectId)
+    if (!gatewayAPI) return
     try {
-      await switchSession(sessionId)
+      await switchSession(sessionId, gatewayAPI)
     } catch (err) {
       console.error('Switch session failed:', err)
     }
   }
 
-  async function handleNewSession() {
-    try {
-      await createSession()
-    } catch (err) {
-      console.error('Create session failed:', err)
-    }
+  function handleNewSession() {
+    const store = useSessionStore.getState()
+    store.prepareNewChat()
   }
 
   // Collapsed sidebar strip
@@ -164,10 +169,64 @@ export default function Sidebar({ collapsed }: SidebarProps) {
         <>
           <div style={styles.overlay} onClick={() => setContextMenu(null)} />
           <div style={{ ...styles.contextMenu, left: contextMenu.x, top: contextMenu.y }}>
-            <button style={styles.contextItem} onClick={() => setContextMenu(null)}>重命名</button>
-            <button style={styles.contextItem} onClick={() => setContextMenu(null)}>归档</button>
-            <div style={styles.contextDivider} />
-            <button style={{ ...styles.contextItem, color: 'var(--error)' }} onClick={() => setContextMenu(null)}>删除</button>
+            <button style={styles.contextItem} onClick={() => {
+              setRenamingSessionId(contextMenu.sessionId)
+              const proj = projects.find((p) => p.sessions.some((s) => s.id === contextMenu.sessionId))
+              const sess = proj?.sessions.find((s) => s.id === contextMenu.sessionId)
+              setRenameValue(sess?.title ?? '')
+              setContextMenu(null)
+            }}>重命名</button>
+            <button style={{ ...styles.contextItem, color: 'var(--error)' }} onClick={async () => {
+              try {
+                await gatewayAPI.deleteSession(contextMenu.sessionId)
+                await useSessionStore.getState().fetchSessions(gatewayAPI)
+                useSessionStore.getState().prepareNewChat()
+              } catch (err) {
+                console.error('Delete session failed:', err)
+              }
+              setContextMenu(null)
+            }}>删除</button>
+          </div>
+        </>
+      )}
+
+      {/* Rename Dialog */}
+      {renamingSessionId && (
+        <>
+          <div style={styles.overlay} onClick={() => setRenamingSessionId(null)} />
+          <div style={{ ...styles.contextMenu, left: '50%', top: '30%', transform: 'translateX(-50%)', minWidth: 240, padding: 12 }}>
+            <input
+              style={modalStyles.input}
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={async (e) => {
+                if (e.key === 'Enter' && renameValue.trim()) {
+                  try {
+                    await gatewayAPI.renameSession(renamingSessionId, renameValue.trim())
+                    await useSessionStore.getState().fetchSessions(gatewayAPI)
+                  } catch (err) {
+                    console.error('Rename session failed:', err)
+                  }
+                  setRenamingSessionId(null)
+                }
+                if (e.key === 'Escape') setRenamingSessionId(null)
+              }}
+              autoFocus
+            />
+            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+              <button style={modalStyles.actionBtn} onClick={async () => {
+                if (renameValue.trim()) {
+                  try {
+                    await gatewayAPI.renameSession(renamingSessionId, renameValue.trim())
+                    await useSessionStore.getState().fetchSessions(gatewayAPI)
+                  } catch (err) {
+                    console.error('Rename session failed:', err)
+                  }
+                }
+                setRenamingSessionId(null)
+              }}>确认</button>
+              <button style={modalStyles.actionBtn} onClick={() => setRenamingSessionId(null)}>取消</button>
+            </div>
           </div>
         </>
       )}
@@ -194,7 +253,7 @@ function SessionItem({
   onClick,
   onContextMenu,
 }: {
-  session: { id: string; title: string; time: string; messageCount: number }
+  session: { id: string; title: string; time: string }
   isActive: boolean
   onClick: () => void
   onContextMenu: (e: React.MouseEvent) => void
@@ -211,7 +270,6 @@ function SessionItem({
       </div>
       <div style={styles.sessionMeta}>
         <span style={styles.sessionTime}>{session.time}</span>
-        <span style={styles.msgCount}>{session.messageCount} 条</span>
       </div>
     </button>
   )
@@ -219,12 +277,93 @@ function SessionItem({
 
 // ---- Modals ----
 
+/** MCP Server 编辑表单初始值 */
+function emptyServer(): MCPServerParams {
+  return { id: '', enabled: true, stdio: { command: '', args: [], workdir: '' }, env: [] }
+}
+
 function McpModal({ onClose }: { onClose: () => void }) {
-  const servers = [
-    { name: 'filesystem', command: 'npx @modelcontextprotocol/server-filesystem', scope: '工作区文件访问', enabled: true },
-    { name: 'github', command: 'github-mcp-server', scope: 'Issue / PR / 仓库协作', enabled: true },
-    { name: 'browser', command: 'browser-use-mcp', scope: '本地页面调试', enabled: false },
-  ]
+  const gatewayAPI = useGatewayAPI()
+  const [servers, setServers] = useState<MCPServerParams[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [editing, setEditing] = useState<MCPServerParams | null>(null)
+  const [isNew, setIsNew] = useState(false)
+
+  const load = useCallback(async () => {
+    if (!gatewayAPI) return
+    setLoading(true)
+    setError('')
+    try {
+      const result = await gatewayAPI.listMCPServers()
+      setServers(result?.payload?.servers ?? [])
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '加载 MCP 配置失败'
+      setError(msg)
+      console.error('listMCPServers failed:', err)
+    } finally {
+      setLoading(false)
+    }
+  }, [gatewayAPI])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  if (!gatewayAPI) return (<div style={modalStyles.overlay} onClick={onClose}><div style={modalStyles.modal} onClick={(e) => e.stopPropagation()}><div style={modalStyles.header}><h3 style={modalStyles.title}>MCP 配置</h3><button style={modalStyles.closeBtn} onClick={onClose}><X size={16} /></button></div><div style={modalStyles.body}><div style={modalStyles.emptyState}>Gateway 未连接，请检查连接状态</div></div></div></div>)
+
+  async function handleToggle(server: MCPServerParams) {
+    if (!gatewayAPI) return
+    try {
+      await gatewayAPI.setMCPServerEnabled(server.id, !server.enabled)
+      await load()
+    } catch (err) {
+      console.error('setMCPServerEnabled failed:', err)
+      setError(err instanceof Error ? err.message : '操作失败')
+    }
+  }
+
+  function handleEdit(server: MCPServerParams) {
+    setEditing({ ...server, stdio: server.stdio ?? { command: '', args: [], workdir: '' } })
+    setIsNew(false)
+  }
+
+  function handleAdd() {
+    setEditing(emptyServer())
+    setIsNew(true)
+  }
+
+  async function handleDelete(serverId: string) {
+    if (!gatewayAPI) return
+    if (!window.confirm(`确定要删除 MCP Server "${serverId}" 吗？`)) return
+    try {
+      await gatewayAPI.deleteMCPServer(serverId)
+      await load()
+    } catch (err) {
+      console.error('deleteMCPServer failed:', err)
+      setError(err instanceof Error ? err.message : '删除失败')
+    }
+  }
+
+  async function handleSave() {
+    if (!editing || !gatewayAPI) return
+    if (!editing.id.trim()) {
+      setError('Server ID 不能为空')
+      return
+    }
+    if (editing.enabled && !editing.stdio?.command?.trim()) {
+      setError('启用的 MCP Server 必须填写 Command')
+      return
+    }
+    try {
+      await gatewayAPI.upsertMCPServer({ server: editing })
+      setEditing(null)
+      await load()
+    } catch (err) {
+      console.error('upsertMCPServer failed:', err)
+      setError(err instanceof Error ? err.message : '保存失败')
+    }
+  }
 
   return (
     <div style={modalStyles.overlay} onClick={onClose}>
@@ -236,36 +375,197 @@ function McpModal({ onClose }: { onClose: () => void }) {
           </button>
         </div>
         <div style={modalStyles.body}>
-          {servers.map((server) => (
-            <div key={server.name} style={modalStyles.providerCard}>
+          {loading && (
+            <div style={modalStyles.emptyState}>加载中...</div>
+          )}
+          {!loading && error && !editing && (
+            <div style={{ ...modalStyles.emptyState, color: 'var(--error)' }}>{error}</div>
+          )}
+          {!loading && !error && !editing && servers.length === 0 && (
+            <div style={modalStyles.emptyState}>暂无已配置的 MCP Server</div>
+          )}
+          {!editing && servers.map((server) => (
+            <div key={server.id} style={modalStyles.providerCard}>
               <div style={modalStyles.providerHeader}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
                   <Blocks size={16} />
-                  <span style={modalStyles.providerName}>{server.name}</span>
+                  <span style={modalStyles.providerName}>{server.id}</span>
                 </div>
                 <span style={{ ...modalStyles.statusBadge, background: server.enabled ? 'rgba(22,163,74,0.15)' : 'var(--bg-active)', color: server.enabled ? 'var(--success)' : 'var(--text-tertiary)' }}>
                   {server.enabled ? '已启用' : '未启用'}
                 </span>
               </div>
-              <div style={modalStyles.description}>{server.scope}</div>
+              <div style={modalStyles.description}>{server.source || server.version || ''}</div>
               <div style={modalStyles.providerActions}>
-                <input type="text" value={server.command} style={modalStyles.input} readOnly />
-                <button style={modalStyles.actionBtn}>配置</button>
+                <button style={{ ...modalStyles.actionBtn, background: server.enabled ? 'var(--error-bg, rgba(239,68,68,0.1))' : 'rgba(22,163,74,0.15)', color: server.enabled ? 'var(--error)' : 'var(--success)' }} onClick={() => handleToggle(server)}>
+                  {server.enabled ? '停用' : '启用'}
+                </button>
+                <button style={modalStyles.actionBtn} onClick={() => handleEdit(server)}>编辑</button>
+                <button style={{ ...modalStyles.actionBtn, color: 'var(--error)' }} onClick={() => handleDelete(server.id)}>删除</button>
               </div>
             </div>
           ))}
+          {!editing && (
+            <div style={{ marginTop: 8 }}>
+              <button style={{ ...modalStyles.actionBtn, width: '100%' }} onClick={handleAdd}>+ 新增 MCP Server</button>
+            </div>
+          )}
+          {editing && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+              {error && (
+                <div style={{ color: 'var(--error)', fontSize: 12 }}>{error}</div>
+              )}
+              <label style={formLabelStyle}>
+                ID
+                <input
+                  style={modalStyles.input}
+                  value={editing.id}
+                  disabled={!isNew}
+                  onChange={(e) => setEditing({ ...editing, id: e.target.value })}
+                />
+              </label>
+              <label style={formLabelStyle}>
+                Command
+                <input
+                  style={modalStyles.input}
+                  value={editing.stdio?.command || ''}
+                  onChange={(e) => setEditing({ ...editing, stdio: { ...editing.stdio, command: e.target.value } })}
+                />
+              </label>
+              <label style={formLabelStyle}>
+                Args（以空格分隔）
+                <input
+                  style={modalStyles.input}
+                  value={(editing.stdio?.args || []).join(' ')}
+                  onChange={(e) => setEditing({ ...editing, stdio: { ...editing.stdio, args: e.target.value.split(' ').filter(Boolean) } })}
+                />
+              </label>
+              <label style={formLabelStyle}>
+                Workdir
+                <input
+                  style={modalStyles.input}
+                  value={editing.stdio?.workdir || ''}
+                  onChange={(e) => setEditing({ ...editing, stdio: { ...editing.stdio, workdir: e.target.value } })}
+                />
+              </label>
+              <div style={formLabelStyle}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span>环境变量</span>
+                  <button style={{ ...modalStyles.actionBtn, fontSize: 11, padding: '2px 6px' }} onClick={() => {
+                    const env = [...(editing.env || []), { name: '', value: '' }]
+                    setEditing({ ...editing, env })
+                  }}>+ 添加</button>
+                </div>
+                {(editing.env || []).map((ev, idx) => (
+                  <div key={idx} style={{ display: 'flex', gap: 4, marginTop: 2 }}>
+                    <input
+                      style={{ ...modalStyles.input, flex: 1 }}
+                      placeholder="NAME"
+                      value={ev.name}
+                      onChange={(e) => {
+                        const env = [...(editing.env || [])]
+                        env[idx] = { ...env[idx], name: e.target.value }
+                        setEditing({ ...editing, env })
+                      }}
+                    />
+                    <input
+                      style={{ ...modalStyles.input, flex: 1 }}
+                      placeholder="VALUE"
+                      value={ev.value || ''}
+                      onChange={(e) => {
+                        const env = [...(editing.env || [])]
+                        env[idx] = { ...env[idx], value: e.target.value }
+                        setEditing({ ...editing, env })
+                      }}
+                    />
+                    <button style={{ ...modalStyles.actionBtn, color: 'var(--error)', padding: '2px 4px', fontSize: 11 }} onClick={() => {
+                      const env = (editing.env || []).filter((_, i) => i !== idx)
+                      setEditing({ ...editing, env })
+                    }}>X</button>
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                <button style={{ ...modalStyles.actionBtn, flex: 1 }} onClick={handleSave}>保存</button>
+                <button style={{ ...modalStyles.actionBtn, flex: 1 }} onClick={() => { setEditing(null); setError('') }}>取消</button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
   )
 }
 
+const formLabelStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+  fontSize: 12,
+  color: 'var(--text-secondary)',
+}
+
 function SkillModal({ onClose }: { onClose: () => void }) {
-  const skills = [
-    { name: 'web-design-engineer', source: 'system', description: '前端界面与交互原型构建', enabled: true },
-    { name: 'github-work', source: 'workspace', description: 'Issue、提交、推送与 PR 协作', enabled: true },
-    { name: 'kb-retriever', source: 'workspace', description: '本地知识库检索与问答', enabled: false },
-  ]
+  const gatewayAPI = useGatewayAPI()
+  const currentSessionId = useSessionStore((s) => s.currentSessionId)
+  const [availableSkills, setAvailableSkills] = useState<AvailableSkillState[]>([])
+  const [sessionSkills, setSessionSkills] = useState<SessionSkillState[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!gatewayAPI) return
+    let cancelled = false
+    setLoading(true)
+    setError('')
+    Promise.all([
+      gatewayAPI.listAvailableSkills().catch(() => ({ payload: { skills: [] } })),
+      currentSessionId ? gatewayAPI.listSessionSkills(currentSessionId).catch(() => ({ payload: { skills: [] } })) : Promise.resolve({ payload: { skills: [] } }),
+    ])
+      .then(([availResult, sessResult]) => {
+        if (!cancelled) {
+          setAvailableSkills((availResult.payload.skills as AvailableSkillState[]) || [])
+          setSessionSkills((sessResult.payload.skills as SessionSkillState[]) || [])
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          const msg = err instanceof Error ? err.message : '加载 Skill 列表失败'
+          setError(msg)
+          console.error('listSkills failed:', err)
+        }
+      })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [gatewayAPI, currentSessionId])
+
+  if (!gatewayAPI) return (<div style={modalStyles.overlay} onClick={onClose}><div style={modalStyles.modal} onClick={(e) => e.stopPropagation()}><div style={modalStyles.header}><h3 style={modalStyles.title}>Skill 配置</h3><button style={modalStyles.closeBtn} onClick={onClose}><X size={16} /></button></div><div style={modalStyles.body}><div style={modalStyles.emptyState}>Gateway 未连接，请检查连接状态</div></div></div></div>)
+
+  const sessionSkillIds = new Set(sessionSkills.map((s) => s.skill_id))
+
+  async function handleToggleSkill(skillId: string, enabled: boolean) {
+    if (!currentSessionId) {
+      setError('请先选择一个会话再操作 Skill')
+      return
+    }
+    try {
+      if (enabled) {
+        await gatewayAPI.deactivateSessionSkill(currentSessionId, skillId)
+      } else {
+        await gatewayAPI.activateSessionSkill(currentSessionId, skillId)
+      }
+      // 刷新列表
+      const [availResult, sessResult] = await Promise.all([
+        gatewayAPI.listAvailableSkills().catch(() => ({ payload: { skills: [] } })),
+        gatewayAPI.listSessionSkills(currentSessionId).catch(() => ({ payload: { skills: [] } })),
+      ])
+      setAvailableSkills((availResult.payload.skills as AvailableSkillState[]) || [])
+      setSessionSkills((sessResult.payload.skills as SessionSkillState[]) || [])
+    } catch (err) {
+      console.error('toggleSkill failed:', err)
+      setError(err instanceof Error ? err.message : '操作失败')
+    }
+  }
 
   return (
     <div style={modalStyles.overlay} onClick={onClose}>
@@ -277,24 +577,42 @@ function SkillModal({ onClose }: { onClose: () => void }) {
           </button>
         </div>
         <div style={modalStyles.body}>
-          {skills.map((skill) => (
-            <div key={skill.name} style={modalStyles.providerCard}>
-              <div style={modalStyles.providerHeader}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                  <Cpu size={16} />
-                  <span style={modalStyles.providerName}>{skill.name}</span>
+          {loading && (
+            <div style={modalStyles.emptyState}>加载中...</div>
+          )}
+          {!loading && error && (
+            <div style={{ ...modalStyles.emptyState, color: 'var(--error)' }}>{error}</div>
+          )}
+          {!loading && !error && availableSkills.length === 0 && (
+            <div style={modalStyles.emptyState}>暂无可用 Skill</div>
+          )}
+          {!loading && availableSkills.map((skill) => {
+            const skillId = skill.descriptor.id
+            const enabled = skill.active || sessionSkillIds.has(skillId)
+            return (
+              <div key={skillId} style={modalStyles.providerCard}>
+                <div style={modalStyles.providerHeader}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                    <Cpu size={16} />
+                    <span style={modalStyles.providerName}>{skill.descriptor.name || skillId}</span>
+                  </div>
+                  <span style={{ ...modalStyles.statusBadge, background: enabled ? 'rgba(22,163,74,0.15)' : 'var(--bg-active)', color: enabled ? 'var(--success)' : 'var(--text-tertiary)' }}>
+                    {enabled ? '已启用' : '未启用'}
+                  </span>
                 </div>
-                <span style={{ ...modalStyles.statusBadge, background: skill.enabled ? 'rgba(22,163,74,0.15)' : 'var(--bg-active)', color: skill.enabled ? 'var(--success)' : 'var(--text-tertiary)' }}>
-                  {skill.enabled ? '已启用' : '未启用'}
-                </span>
+                <div style={modalStyles.description}>{skill.descriptor.description || ''}</div>
+                <div style={modalStyles.providerActions}>
+                  <button
+                    style={{ ...modalStyles.actionBtn, background: enabled ? 'var(--error-bg, rgba(239,68,68,0.1))' : 'rgba(22,163,74,0.15)', color: enabled ? 'var(--error)' : 'var(--success)' }}
+                    onClick={() => handleToggleSkill(skillId, enabled)}
+                    disabled={!currentSessionId}
+                  >
+                    {enabled ? '停用' : '启用'}
+                  </button>
+                </div>
               </div>
-              <div style={modalStyles.description}>{skill.description}</div>
-              <div style={modalStyles.providerActions}>
-                <input type="text" value={skill.source} style={modalStyles.input} readOnly />
-                <button style={modalStyles.actionBtn}>配置</button>
-              </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       </div>
     </div>
@@ -302,12 +620,36 @@ function SkillModal({ onClose }: { onClose: () => void }) {
 }
 
 function ProviderModal({ onClose }: { onClose: () => void }) {
-  const providers = [
-    { name: 'Anthropic', models: ['Claude 4 Sonnet', 'Claude 4 Opus'], apiKey: 'sk-ant-***', enabled: true },
-    { name: 'OpenAI', models: ['GPT-4o', 'GPT-4o Mini'], apiKey: 'sk-***', enabled: true },
-    { name: 'Google', models: ['Gemini 2.5 Pro'], apiKey: '', enabled: false },
-    { name: 'DeepSeek', models: ['DeepSeek V3'], apiKey: '', enabled: false },
-  ]
+  const gatewayAPI = useGatewayAPI()
+  const [providers, setProviders] = useState<ProviderOption[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!gatewayAPI) return
+    let cancelled = false
+    setLoading(true)
+    setError('')
+    gatewayAPI.listProviders()
+      .then((result) => {
+        if (!cancelled) {
+          setProviders(result.payload.providers)
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          const msg = err instanceof Error ? err.message : '加载供应商列表失败'
+          setError(msg)
+          console.error('listProviders failed:', err)
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [gatewayAPI])
+
+  if (!gatewayAPI) return (<div style={modalStyles.overlay} onClick={onClose}><div style={modalStyles.modal} onClick={(e) => e.stopPropagation()}><div style={modalStyles.header}><h3 style={modalStyles.title}>供应商设置</h3><button style={modalStyles.closeBtn} onClick={onClose}><X size={16} /></button></div><div style={modalStyles.body}><div style={modalStyles.emptyState}>Gateway 未连接，请检查连接状态</div></div></div></div>)
 
   return (
     <div style={modalStyles.overlay} onClick={onClose}>
@@ -319,25 +661,34 @@ function ProviderModal({ onClose }: { onClose: () => void }) {
           </button>
         </div>
         <div style={modalStyles.body}>
-          {providers.map((p) => (
-            <div key={p.name} style={modalStyles.providerCard}>
+          {loading && (
+            <div style={modalStyles.emptyState}>加载中...</div>
+          )}
+          {!loading && error && (
+            <div style={{ ...modalStyles.emptyState, color: 'var(--error)' }}>加载失败: {error}</div>
+          )}
+          {!loading && !error && providers.length === 0 && (
+            <div style={modalStyles.emptyState}>暂无已配置的供应商</div>
+          )}
+          {!loading && providers.map((p) => (
+            <div key={p.id} style={modalStyles.providerCard}>
               <div style={modalStyles.providerHeader}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <Server size={16} />
                   <span style={modalStyles.providerName}>{p.name}</span>
                 </div>
-                <span style={{ ...modalStyles.statusBadge, background: p.enabled ? 'rgba(22,163,74,0.15)' : 'var(--bg-active)', color: p.enabled ? 'var(--success)' : 'var(--text-tertiary)' }}>
-                  {p.enabled ? '已启用' : '未启用'}
+                <span style={{ ...modalStyles.statusBadge, background: p.selected ? 'rgba(22,163,74,0.15)' : 'var(--bg-active)', color: p.selected ? 'var(--success)' : 'var(--text-tertiary)' }}>
+                  {p.selected ? '已启用' : '未启用'}
                 </span>
               </div>
               <div style={modalStyles.providerModels}>
-                {p.models.map((m) => (
-                  <span key={m} style={modalStyles.modelTag}>{m}</span>
+                {p.models?.map((m) => (
+                  <span key={m.id} style={modalStyles.modelTag}>{m.name || m.id}</span>
                 ))}
               </div>
               <div style={modalStyles.providerActions}>
-                <input type="text" placeholder="API Key" defaultValue={p.apiKey} style={modalStyles.input} readOnly />
-                <button style={modalStyles.actionBtn}>{p.apiKey ? '更新' : '配置'}</button>
+                <input type="text" placeholder="API Key 环境变量" value={p.api_key_env} style={modalStyles.input} readOnly />
+                <button style={modalStyles.actionBtn}>配置</button>
               </div>
             </div>
           ))}
@@ -727,5 +1078,12 @@ const modalStyles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     fontFamily: 'var(--font-ui)',
     transition: 'all 0.15s',
+  },
+  emptyState: {
+    padding: '20px 0',
+    textAlign: 'center' as const,
+    color: 'var(--text-tertiary)',
+    fontSize: 13,
+    fontFamily: 'var(--font-ui)',
   },
 }

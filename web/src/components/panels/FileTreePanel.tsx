@@ -1,5 +1,7 @@
-import { useState } from 'react'
-import { useUIStore } from '@/store/useUIStore'
+import { useState, useEffect, useCallback } from 'react'
+import { useUIStore } from '@/stores/useUIStore'
+import { useGatewayAPI } from '@/context/RuntimeProvider'
+import { type FileEntry } from '@/api/protocol'
 import {
   Folder,
   FolderOpen,
@@ -9,13 +11,8 @@ import {
   FileJson,
   ChevronRight,
   PanelRightClose,
+  Loader2,
 } from 'lucide-react'
-
-interface FileNode {
-  name: string
-  type: 'folder' | 'file'
-  children?: FileNode[]
-}
 
 const fileIconMap: Record<string, React.ReactNode> = {
   js: <FileCode size={14} />,
@@ -31,9 +28,48 @@ function getFileIcon(filename: string) {
   return fileIconMap[ext] || <File size={14} />
 }
 
-function FileTreeItem({ node, depth = 0 }: { node: FileNode; depth?: number }) {
+interface FileTreeNode {
+  entry: FileEntry
+  children?: FileTreeNode[]
+}
+
+function buildFileTree(entries: FileEntry[]): FileTreeNode[] {
+  const rootNodes: FileTreeNode[] = []
+  const dirMap = new Map<string, FileTreeNode>()
+
+  // 先创建所有目录节点
+  for (const entry of entries) {
+    if (entry.is_dir) {
+      const node: FileTreeNode = { entry, children: [] }
+      dirMap.set(entry.path, node)
+    }
+  }
+
+  // 再分配所有节点到父目录
+  for (const entry of entries) {
+    const parentPath = entry.path.split('/').slice(0, -1).join('/')
+    if (parentPath && dirMap.has(parentPath)) {
+      const parent = dirMap.get(parentPath)!
+      if (entry.is_dir) {
+        parent.children!.push(dirMap.get(entry.path)!)
+      } else {
+        parent.children!.push({ entry })
+      }
+    } else if (!parentPath) {
+      if (entry.is_dir) {
+        rootNodes.push(dirMap.get(entry.path)!)
+      } else {
+        rootNodes.push({ entry })
+      }
+    }
+  }
+
+  return rootNodes
+}
+
+function FileTreeItem({ node, depth = 0 }: { node: FileTreeNode; depth?: number }) {
   const [expanded, setExpanded] = useState(true)
-  const isFolder = node.type === 'folder'
+  const isFolder = node.entry.is_dir
 
   return (
     <div>
@@ -50,9 +86,9 @@ function FileTreeItem({ node, depth = 0 }: { node: FileNode; depth?: number }) {
           </span>
         )}
         <span style={styles.treeIcon}>
-          {isFolder ? (expanded ? <FolderOpen size={14} /> : <Folder size={14} />) : getFileIcon(node.name)}
+          {isFolder ? (expanded ? <FolderOpen size={14} /> : <Folder size={14} />) : getFileIcon(node.entry.name)}
         </span>
-        <span style={styles.treeName}>{node.name}</span>
+        <span style={styles.treeName}>{node.entry.name}</span>
       </button>
       {isFolder && expanded && node.children?.map((child, i) => (
         <FileTreeItem key={i} node={child} depth={depth + 1} />
@@ -63,9 +99,34 @@ function FileTreeItem({ node, depth = 0 }: { node: FileNode; depth?: number }) {
 
 export default function FileTreePanel() {
   const toggleFileTreePanel = useUIStore((s) => s.toggleFileTreePanel)
+  const gatewayAPI = useGatewayAPI()
+  const [entries, setEntries] = useState<FileEntry[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [currentPath, setCurrentPath] = useState('')
 
-  // mock file tree data
-  const mockFileTree: FileNode[] = []
+  const loadFiles = useCallback(async (path: string = '') => {
+    if (!gatewayAPI) return
+    setLoading(true)
+    setError('')
+    try {
+      const result = await gatewayAPI.listFiles({ path })
+      setEntries(result.payload.files)
+      setCurrentPath(path)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '加载文件列表失败'
+      setError(msg)
+      console.error('listFiles failed:', err)
+    } finally {
+      setLoading(false)
+    }
+  }, [gatewayAPI])
+
+  useEffect(() => {
+    loadFiles()
+  }, [loadFiles])
+
+  const treeNodes = buildFileTree(entries)
 
   return (
     <div style={styles.container}>
@@ -76,11 +137,27 @@ export default function FileTreePanel() {
             <PanelRightClose size={16} />
           </button>
         </div>
-        <div style={styles.headerPath}>~/projects/neocode-auth</div>
+        <div style={styles.headerPath}>{currentPath || '.'}</div>
       </div>
 
       <div style={styles.scrollArea}>
-        {mockFileTree.map((node, i) => (
+        {loading && (
+          <div style={styles.emptyState}>
+            <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />
+            <span style={styles.emptyText}>加载中...</span>
+          </div>
+        )}
+        {!loading && error && (
+          <div style={styles.emptyState}>
+            <span style={{ ...styles.emptyText, color: 'var(--error)' }}>加载失败: {error}</span>
+          </div>
+        )}
+        {!loading && !error && treeNodes.length === 0 && (
+          <div style={styles.emptyState}>
+            <span style={styles.emptyText}>工作区为空</span>
+          </div>
+        )}
+        {!loading && !error && treeNodes.map((node, i) => (
           <FileTreeItem key={i} node={node} />
         ))}
       </div>
@@ -170,5 +247,17 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: 'nowrap',
     fontFamily: 'var(--font-mono)',
     fontSize: 11,
+  },
+  emptyState: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    padding: '20px 8px',
+    color: 'var(--text-tertiary)',
+  },
+  emptyText: {
+    fontSize: 12,
+    fontFamily: 'var(--font-ui)',
   },
 }

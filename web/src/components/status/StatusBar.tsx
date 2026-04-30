@@ -1,8 +1,9 @@
-import { useChatStore } from '@/store/useChatStore'
-import { useUIStore } from '@/store/useUIStore'
-import { useGatewayStore } from '@/store/useGatewayStore'
+import { useChatStore } from '@/stores/useChatStore'
+import { useUIStore } from '@/stores/useUIStore'
+import { useGatewayStore } from '@/stores/useGatewayStore'
+import { useRuntime } from '@/context/RuntimeProvider'
 import { formatTokenCount } from '@/utils/format'
-import { Sun, Moon, Wifi, WifiOff, Loader } from 'lucide-react'
+import { Sun, Moon, Wifi, WifiOff, Loader, FolderOpen } from 'lucide-react'
 
 /** 连接状态图标 */
 function ConnectionIcon({ state }: { state: string }) {
@@ -25,9 +26,15 @@ export default function StatusBar() {
   const setTheme = useUIStore((s) => s.setTheme)
   const connectionState = useGatewayStore((s) => s.connectionState)
   const authenticated = useGatewayStore((s) => s.authenticated)
+  const { mode, workdir, selectWorkdir } = useRuntime()
 
   const totalTokens = tokenUsage ? tokenUsage.input_tokens + tokenUsage.output_tokens : 0
   const maxTokens = 8192
+
+  async function handleChangeWorkdir() {
+    if (mode !== 'electron') return
+    await selectWorkdir()
+  }
 
   return (
     <div style={styles.container}>
@@ -38,6 +45,19 @@ export default function StatusBar() {
            connectionState === 'connecting' ? '连接中...' :
            connectionState === 'error' ? '连接失败' : '未连接'}
         </span>
+        {mode === 'electron' && workdir && (
+          <>
+            <span style={styles.divider} />
+            <button
+              style={styles.workdirBtn}
+              onClick={handleChangeWorkdir}
+              title="点击切换工作区"
+            >
+              <FolderOpen size={12} />
+              <span style={styles.workdirLabel}>{workdir}</span>
+            </button>
+          </>
+        )}
       </div>
       <div style={styles.right}>
         {tokenUsage && (
@@ -108,5 +128,26 @@ const styles: Record<string, React.CSSProperties> = {
     color: 'var(--text-tertiary)',
     cursor: 'pointer',
     transition: 'all 0.15s',
+  },
+  workdirBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 4,
+    border: 'none',
+    background: 'transparent',
+    color: 'var(--text-tertiary)',
+    cursor: 'pointer',
+    fontSize: 11,
+    fontFamily: 'var(--font-mono)',
+    maxWidth: 280,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    padding: 0,
+  },
+  workdirLabel: {
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
   },
 }

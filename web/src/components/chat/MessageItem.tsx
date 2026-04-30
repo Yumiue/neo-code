@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { type ChatMessage } from '@/store/useChatStore'
+import { type ChatMessage } from '@/stores/useChatStore'
 import ToolCallCard from './ToolCallCard'
 import CodeBlock from './CodeBlock'
 import { Bot, ChevronRight } from 'lucide-react'

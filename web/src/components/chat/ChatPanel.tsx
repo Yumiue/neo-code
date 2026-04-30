@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
-import { useUIStore } from '@/store/useUIStore'
-import { useSessionStore } from '@/store/useSessionStore'
+import { useUIStore } from '@/stores/useUIStore'
+import { useSessionStore } from '@/stores/useSessionStore'
+import { useGatewayAPI } from '@/context/RuntimeProvider'
 import MessageList from './MessageList'
 import ChatInput from './ChatInput'
 import ModelSelector from './ModelSelector'
@@ -14,6 +15,7 @@ import {
 
 /** 聊天主区域 */
 export default function ChatPanel() {
+  const gatewayAPI = useGatewayAPI()
   const sidebarOpen = useUIStore((s) => s.sidebarOpen)
   const toggleSidebar = useUIStore((s) => s.toggleSidebar)
   const changesPanelOpen = useUIStore((s) => s.changesPanelOpen)
@@ -56,10 +58,15 @@ export default function ChatPanel() {
     }
   }, [editingTitle])
 
-  const handleTitleSave = () => {
+  const handleTitleSave = async () => {
     const newTitle = titleRef.current?.innerText.trim()
-    if (newTitle && newTitle !== title) {
-      // TODO: dispatch rename action
+    if (newTitle && newTitle !== title && currentSessionId && gatewayAPI) {
+      try {
+        await gatewayAPI.renameSession(currentSessionId, newTitle)
+        await useSessionStore.getState().fetchSessions(gatewayAPI)
+      } catch (err) {
+        console.error('Rename session failed:', err)
+      }
     }
     setEditingTitle(false)
   }
@@ -111,7 +118,18 @@ export default function ChatPanel() {
                 <button style={styles.moreMenuItem} onClick={() => { setMoreMenuOpen(false); setEditingTitle(true) }}>
                   重命名会话
                 </button>
-                <button style={styles.moreMenuItem} onClick={() => { setMoreMenuOpen(false) }}>
+                <button style={styles.moreMenuItem} onClick={async () => {
+                  setMoreMenuOpen(false)
+                  if (currentSessionId && gatewayAPI) {
+                    try {
+                      await gatewayAPI.deleteSession(currentSessionId)
+                      await useSessionStore.getState().fetchSessions(gatewayAPI)
+			      useSessionStore.getState().prepareNewChat()
+                    } catch (err) {
+                      console.error('Archive session failed:', err)
+                    }
+                  }
+                }}>
                   归档会话
                 </button>
               </div>

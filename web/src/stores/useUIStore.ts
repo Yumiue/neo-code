@@ -17,6 +17,8 @@ export interface FileChange {
   diff?: { type: 'add' | 'del' | 'header'; content: string }[]
 }
 
+const TOAST_AUTO_DISMISS_MS = 5000
+
 /** UI 状态 */
 interface UIState {
   /** 侧边栏是否展开 */
@@ -39,8 +41,6 @@ interface UIState {
   fileChanges: FileChange[]
   /** Toast 列表 */
   toasts: Toast[]
-  /** 临时 toast 消息 */
-  toastMessage: string
 
   // Actions
   toggleSidebar: () => void
@@ -49,6 +49,7 @@ interface UIState {
   toggleFileTreePanel: () => void
   setTheme: (theme: 'light' | 'dark') => void
   setSearchQuery: (q: string) => void
+  addFileChange: (change: FileChange) => void
   acceptFileChange: (id: string) => void
   rejectFileChange: (id: string) => void
   showToast: (message: string, type?: Toast['type']) => void
@@ -68,7 +69,6 @@ export const useUIStore = create<UIState>((set) => ({
   searchQuery: '',
   fileChanges: [],
   toasts: [],
-  toastMessage: '',
 
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
@@ -79,6 +79,10 @@ export const useUIStore = create<UIState>((set) => ({
     set({ theme })
   },
   setSearchQuery: (searchQuery) => set({ searchQuery }),
+  addFileChange: (change) =>
+    set((s) => ({
+      fileChanges: [...s.fileChanges, change],
+    })),
   acceptFileChange: (id) =>
     set((s) => ({
       fileChanges: s.fileChanges.map((c) => (c.id === id ? { ...c, status: 'accepted' as const } : c)),
@@ -87,11 +91,16 @@ export const useUIStore = create<UIState>((set) => ({
     set((s) => ({
       fileChanges: s.fileChanges.map((c) => (c.id === id ? { ...c, status: 'rejected' as const } : c)),
     })),
-  showToast: (message, type = 'info') =>
+  showToast: (message, type = 'info') => {
+    const id = `toast_${++toastIdCounter}`
     set((s) => ({
-      toasts: [...s.toasts, { id: `toast_${++toastIdCounter}`, message, type }],
-      toastMessage: message,
-    })),
+      toasts: [...s.toasts, { id, message, type }],
+    }))
+    // Auto-dismiss after timeout
+    setTimeout(() => {
+      useUIStore.getState().dismissToast(id)
+    }, TOAST_AUTO_DISMISS_MS)
+  },
   dismissToast: (id) =>
     set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
 }))

@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { useUIStore } from '@/store/useUIStore'
+import { useUIStore } from '@/stores/useUIStore'
 import {
   ChevronRight,
   FileDiff,

@@ -12,6 +12,13 @@ const config = {
 		'dist/**/*',
 		'dist-electron/**/*',
 	],
+	extraResources: [
+		{
+			from: 'build',
+			to: '.',
+			filter: ['neocode-gateway', 'neocode-gateway.exe'],
+		},
+	],
 	win: {
 		target: [
 			{

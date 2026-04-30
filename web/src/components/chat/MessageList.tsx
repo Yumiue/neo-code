@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { useChatStore } from '@/store/useChatStore'
+import { useChatStore } from '@/stores/useChatStore'
 import MessageItem from './MessageItem'
 
 /** 消息列表，自动滚动到底部 */

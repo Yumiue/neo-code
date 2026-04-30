@@ -1,39 +1,91 @@
-import { useState } from 'react'
-import { ChevronDown } from 'lucide-react'
-
-const mockModels = [
-  { id: 'claude-4-sonnet', name: 'Claude 4 Sonnet', provider: 'Anthropic' },
-  { id: 'claude-4-opus', name: 'Claude 4 Opus', provider: 'Anthropic' },
-  { id: 'gpt-4o', name: 'GPT-4o', provider: 'OpenAI' },
-  { id: 'gpt-4o-mini', name: 'GPT-4o Mini', provider: 'OpenAI' },
-  { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'Google' },
-  { id: 'deepseek-v3', name: 'DeepSeek V3', provider: 'DeepSeek' },
-]
+import { useState, useEffect, useCallback } from 'react'
+import { useGatewayAPI } from '@/context/RuntimeProvider'
+import { useSessionStore } from '@/stores/useSessionStore'
+import { type ModelEntry } from '@/api/protocol'
+import { ChevronDown, Loader2 } from 'lucide-react'
 
 export default function ModelSelector() {
+  const gatewayAPI = useGatewayAPI()
+  const currentSessionId = useSessionStore((s) => s.currentSessionId)
   const [open, setOpen] = useState(false)
-  const [selected, setSelected] = useState(mockModels[0])
+  const [models, setModels] = useState<ModelEntry[]>([])
+  const [selected, setSelected] = useState<ModelEntry | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  // Note: `selected` is intentionally NOT in the dependency array.
+  // Model list does not change when user selects a model.
+  const loadModels = useCallback(async () => {
+    if (!gatewayAPI) return
+    setLoading(true)
+    setError('')
+    try {
+      const result = await gatewayAPI.listModels(currentSessionId || undefined)
+      const fetched = result.payload.models
+      setModels(fetched)
+      if (fetched.length > 0 && !selected) {
+        setSelected(fetched[0])
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '加载模型列表失败'
+      setError(msg)
+      console.error('listModels failed:', err)
+    } finally {
+      setLoading(false)
+    }
+  }, [gatewayAPI, currentSessionId])
+
+  useEffect(() => {
+    loadModels()
+  }, [loadModels])
+
+  async function handleSelect(m: ModelEntry) {
+    setSelected(m)
+    setOpen(false)
+    if (currentSessionId && gatewayAPI) {
+      try {
+        await gatewayAPI.setSessionModel(currentSessionId, m.id)
+      } catch (err) {
+        console.error('setSessionModel failed:', err)
+      }
+    }
+  }
+
+  if (!gatewayAPI) return null
 
   return (
     <div style={{ position: 'relative' }}>
       <button
         style={styles.selectorBtn}
         onClick={() => setOpen(!open)}
+        disabled={loading}
       >
-        <span style={styles.modelName}>{selected.name}</span>
-        <ChevronDown size={14} style={{ color: 'var(--text-tertiary)', transition: 'transform 0.15s', transform: open ? 'rotate(180deg)' : 'none' }} />
+        {loading ? (
+          <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
+        ) : (
+          <>
+            <span style={styles.modelName}>{selected?.name || error || '无可用模型'}</span>
+            <ChevronDown size={14} style={{ color: 'var(--text-tertiary)', transition: 'transform 0.15s', transform: open ? 'rotate(180deg)' : 'none' }} />
+          </>
+        )}
       </button>
 
       {open && (
         <div style={styles.dropdown} onMouseLeave={() => setOpen(false)}>
-          {mockModels.map((m) => (
+          {models.length === 0 && !error && (
+            <div style={styles.emptyItem}>无可用模型</div>
+          )}
+          {error && (
+            <div style={styles.emptyItem}>加载失败</div>
+          )}
+          {models.map((m) => (
             <button
               key={m.id}
               style={{
                 ...styles.dropdownItem,
-                background: selected.id === m.id ? 'var(--bg-active)' : 'transparent',
+                background: selected?.id === m.id ? 'var(--bg-active)' : 'transparent',
               }}
-              onClick={() => { setSelected(m); setOpen(false) }}
+              onClick={() => handleSelect(m)}
             >
               <span style={styles.dropdownName}>{m.name}</span>
               <span style={styles.dropdownProvider}>{m.provider}</span>
@@ -89,6 +141,12 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     textAlign: 'left',
     transition: 'all 0.15s',
+  },
+  emptyItem: {
+    padding: '6px 10px',
+    fontSize: 12,
+    color: 'var(--text-tertiary)',
+    fontFamily: 'var(--font-ui)',
   },
   dropdownName: {
     fontWeight: 500,

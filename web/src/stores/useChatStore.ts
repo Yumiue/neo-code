@@ -42,15 +42,22 @@ interface ChatState {
   phase: string
   /** 停止原因 */
   stopReason: string
+  /** 会话切换中标记（eventBridge 据此丢弃中间窗口期事件） */
+  isTransitioning: boolean
 
   // Actions
   addMessage: (msg: ChatMessage) => void
   appendChunk: (text: string) => void
+  /** 原子操作：创建流式 assistant 消息 + 加入列表 + 设置 streamingMessageId */
+  startStreamingMessage: () => string
   finalizeMessage: (id: string, content: string) => void
   updateToolCall: (toolCallId: string, result: string, status: ChatMessage['toolStatus']) => void
   appendToolOutput: (toolCallId: string, chunk: string) => void
   setGenerating: (v: boolean) => void
   setStreamingMessageId: (id: string) => void
+  /** 重置生成状态：终结当前流式消息 + 清除 isGenerating */
+  resetGeneratingState: () => void
+  setTransitioning: (v: boolean) => void
   addPermissionRequest: (req: PermissionRequestPayload) => void
   removePermissionRequest: (requestId: string) => void
   updateTokenUsage: (usage: TokenUsage) => void
@@ -110,6 +117,7 @@ export const useChatStore = create<ChatState>((set) => ({
   tokenUsage: null,
   phase: '',
   stopReason: '',
+  isTransitioning: false,
 
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
 
@@ -123,12 +131,23 @@ export const useChatStore = create<ChatState>((set) => ({
       }
     }),
 
+  /** 原子操作：创建消息 + 加入列表 + 设置 streamingMessageId，避免竞态 */
+  startStreamingMessage: () => {
+    const msg = createAssistantMessage()
+    set((s) => ({
+      messages: [...s.messages, msg],
+      streamingMessageId: msg.id,
+    }))
+    return msg.id
+  },
+
+  /** 仅当 id 匹配当前 streamingMessageId 时才清空 */
   finalizeMessage: (id, content) =>
     set((s) => ({
       messages: s.messages.map((m) =>
         m.id === id ? { ...m, content, streaming: false } : m
       ),
-      streamingMessageId: '',
+      streamingMessageId: s.streamingMessageId === id ? '' : s.streamingMessageId,
     })),
 
   updateToolCall: (toolCallId, result, status) =>
@@ -150,6 +169,23 @@ export const useChatStore = create<ChatState>((set) => ({
   setGenerating: (isGenerating) => set({ isGenerating }),
   setStreamingMessageId: (streamingMessageId) => set({ streamingMessageId }),
 
+  /** 重置生成状态：终结当前流式消息 + 清除 isGenerating */
+  resetGeneratingState: () =>
+    set((s) => {
+      if (s.streamingMessageId) {
+        return {
+          messages: s.messages.map((m) =>
+            m.id === s.streamingMessageId ? { ...m, streaming: false } : m
+          ),
+          streamingMessageId: '',
+          isGenerating: false,
+        }
+      }
+      return { isGenerating: false }
+    }),
+
+  setTransitioning: (isTransitioning) => set({ isTransitioning }),
+
   addPermissionRequest: (req) =>
     set((s) => ({ permissionRequests: [...s.permissionRequests, req] })),
 
@@ -161,5 +197,16 @@ export const useChatStore = create<ChatState>((set) => ({
   updateTokenUsage: (tokenUsage) => set({ tokenUsage }),
   setPhase: (phase) => set({ phase }),
   setStopReason: (stopReason) => set({ stopReason }),
-  clearMessages: () => set({ messages: [], streamingMessageId: '', isGenerating: false }),
+
+  /** 清理全部聊天状态，包括权限请求、token用量等 */
+  clearMessages: () => set({
+    messages: [],
+    streamingMessageId: '',
+    isGenerating: false,
+    permissionRequests: [],
+    tokenUsage: null,
+    phase: '',
+    stopReason: '',
+    isTransitioning: false,
+  }),
 }))

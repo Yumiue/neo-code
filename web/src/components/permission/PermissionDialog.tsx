@@ -1,13 +1,16 @@
-import { useChatStore } from '@/store/useChatStore'
-import { gatewayAPI } from '@/api/gateway'
+import { useChatStore } from '@/stores/useChatStore'
+import { useGatewayAPI } from '@/context/RuntimeProvider'
 import { PermissionDecision } from '@/api/protocol'
 import { Shield, X, Check } from 'lucide-react'
 
 /** 权限审批弹窗 */
 export default function PermissionDialog() {
+  const maybeAPI = useGatewayAPI()
   const permissionRequests = useChatStore((s) => s.permissionRequests)
 
   if (permissionRequests.length === 0) return null
+  if (!maybeAPI) return null
+  const gatewayAPI = maybeAPI
 
   const current = permissionRequests[0]
 

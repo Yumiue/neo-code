@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { useUIStore, type Toast } from '@/store/useUIStore'
+import { useUIStore, type Toast } from '@/stores/useUIStore'
 import { X, AlertCircle, CheckCircle, Info } from 'lucide-react'
 
 /** Toast 图标映射 */

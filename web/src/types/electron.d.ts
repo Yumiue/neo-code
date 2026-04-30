@@ -2,10 +2,12 @@
 export interface ElectronAPI {
   getToken: () => Promise<string>
   getAddress: () => Promise<string>
+  getWorkdir: () => Promise<string>
+  selectWorkdir: () => Promise<{ canceled: boolean; workdir: string }>
   minimize: () => Promise<void>
   maximize: () => Promise<void>
   close: () => Promise<void>
-  onGatewayEvent: (callback: (data: unknown) => void) => void
+  onGatewayStatus: (callback: (data: { ready: boolean; error?: string }) => void) => () => void
 }
 
 declare global {

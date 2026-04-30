@@ -1,19 +1,20 @@
 import { useState, useRef, useEffect } from 'react'
-import { useChatStore, createUserMessage } from '@/store/useChatStore'
-import { useGatewayStore } from '@/store/useGatewayStore'
-import { useSessionStore } from '@/store/useSessionStore'
-import { gatewayAPI } from '@/api/gateway'
+import { useChatStore, createUserMessage } from '@/stores/useChatStore'
+import { useGatewayStore } from '@/stores/useGatewayStore'
+import { useSessionStore, isValidSessionId } from '@/stores/useSessionStore'
+import { useGatewayAPI } from '@/context/RuntimeProvider'
 import { Send, Square, Paperclip, AtSign } from 'lucide-react'
 
 /** 聊天输入框 */
 export default function ChatInput() {
+  const gatewayAPI = useGatewayAPI()
   const [text, setText] = useState('')
   const [rows, setRows] = useState(1)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const isGenerating = useChatStore((s) => s.isGenerating)
   const addMessage = useChatStore((s) => s.addMessage)
   const setGenerating = useChatStore((s) => s.setGenerating)
-  const sessionId = useGatewayStore((s) => s.boundSessionId)
+  const sessionId = useSessionStore((s) => s.currentSessionId)
 
   useEffect(() => {
     const lines = text.split('\n').length
@@ -29,20 +30,20 @@ export default function ChatInput() {
     setGenerating(true)
 
     try {
+      if (!gatewayAPI) return
       const ack = await gatewayAPI.run({
-        session_id: sessionId || undefined,
+        session_id: isValidSessionId(sessionId) ? sessionId : undefined,
         input_text: input,
       })
 
       // 从 ack 响应中回写 session_id 和 run_id
       const gwStore = useGatewayStore.getState()
+      const sessStore = useSessionStore.getState()
       if (ack.run_id) {
         gwStore.setCurrentRunId(ack.run_id)
       }
-      if (ack.session_id && ack.session_id !== sessionId) {
-        // 新会话：后端返回了真实 session_id
-        gwStore.setBoundSession(ack.session_id)
-        useSessionStore.getState().setCurrentSessionId(ack.session_id)
+      if (ack.session_id) {
+        sessStore.setCurrentSessionId(ack.session_id)
       }
     } catch (err) {
       setGenerating(false)
@@ -59,14 +60,14 @@ export default function ChatInput() {
 
   async function handleCancel() {
     const runId = useGatewayStore.getState().currentRunId
-    if (runId) {
+    if (runId && gatewayAPI) {
       try {
         await gatewayAPI.cancel({ run_id: runId })
       } catch (err) {
         console.error('Cancel failed:', err)
       }
     }
-    setGenerating(false)
+    useChatStore.getState().resetGeneratingState()
   }
 
   return (
