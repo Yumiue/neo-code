@@ -7,6 +7,7 @@ type RuntimeFacts struct {
 	Commands     CommandFacts      `json:"commands"`
 	SubAgents    SubAgentFacts     `json:"subagents"`
 	Verification VerificationFacts `json:"verification"`
+	Errors       ErrorFacts        `json:"errors"`
 	Progress     ProgressFacts     `json:"progress"`
 }
 
@@ -85,6 +86,18 @@ type VerificationFacts struct {
 	Performed []VerificationFact `json:"performed,omitempty"`
 	Passed    []VerificationFact `json:"passed,omitempty"`
 	Failed    []VerificationFact `json:"failed,omitempty"`
+}
+
+// ErrorFacts 描述运行期工具错误事实，供终态决策识别不可恢复失败。
+type ErrorFacts struct {
+	ToolErrors []ToolErrorFact `json:"tool_errors,omitempty"`
+}
+
+// ToolErrorFact 描述单次工具错误事实。
+type ToolErrorFact struct {
+	Tool       string `json:"tool,omitempty"`
+	ErrorClass string `json:"error_class,omitempty"`
+	Content    string `json:"content,omitempty"`
 }
 
 // VerificationFact 描述一次验证尝试事实。

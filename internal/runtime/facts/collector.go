@@ -62,18 +62,39 @@ func (c *Collector) ApplyToolResult(toolName string, result tools.ToolResult) {
 	if name == "" {
 		name = strings.TrimSpace(result.Name)
 	}
-	if name == "" || result.IsError {
+	if name == "" {
 		return
 	}
+	normalizedName := strings.ToLower(name)
+	if result.IsError {
+		c.applyToolErrorFact(name, result)
+	}
 
-	switch strings.ToLower(name) {
+	switch normalizedName {
 	case strings.ToLower(tools.ToolNameTodoWrite):
+		if result.IsError {
+			break
+		}
 		c.applyTodoToolFacts(result)
 	case strings.ToLower(tools.ToolNameFilesystemWriteFile):
+		if result.IsError {
+			break
+		}
 		c.applyWriteFileFacts(result)
 	case strings.ToLower(tools.ToolNameFilesystemReadFile):
+		if result.IsError {
+			break
+		}
 		c.applyReadFileFacts(result)
+	case strings.ToLower(tools.ToolNameFilesystemEdit):
+		if result.IsError {
+			break
+		}
+		c.applyEditFileFacts(result)
 	case strings.ToLower(tools.ToolNameFilesystemGlob):
+		if result.IsError {
+			break
+		}
 		c.applyGlobFacts(result)
 	case strings.ToLower(tools.ToolNameBash):
 		c.applyCommandFacts(name, result)
@@ -84,6 +105,27 @@ func (c *Collector) ApplyToolResult(toolName string, result tools.ToolResult) {
 	}
 
 	c.applyVerificationFacts(name, result)
+}
+
+// applyToolErrorFact 记录工具错误事实，供终态决策识别持续失败模式。
+func (c *Collector) applyToolErrorFact(toolName string, result tools.ToolResult) {
+	errorClass := strings.TrimSpace(result.ErrorClass)
+	if errorClass == "" {
+		errorClass = "generic_error"
+	}
+	content := strings.TrimSpace(result.Content)
+	if len(content) > 256 {
+		content = content[:256]
+	}
+	key := fmt.Sprintf("tool_error:%s:%s", strings.ToLower(strings.TrimSpace(toolName)), errorClass)
+	if !c.markSeen(key) {
+		return
+	}
+	c.facts.Errors.ToolErrors = append(c.facts.Errors.ToolErrors, ToolErrorFact{
+		Tool:       strings.TrimSpace(toolName),
+		ErrorClass: errorClass,
+		Content:    content,
+	})
 }
 
 // ApplySubAgentStarted 记录子代理启动事实。
@@ -180,6 +222,24 @@ func (c *Collector) applyWriteFileFacts(result tools.ToolResult) {
 	c.facts.Files.Written = append(c.facts.Files.Written, FileWriteFact{
 		Path:           path,
 		Bytes:          bytes,
+		WorkspaceWrite: true,
+	})
+	c.facts.Progress.ObservedFactCount++
+}
+
+// applyEditFileFacts 从编辑工具结果提取 workspace write 事实，保证 edit 任务可进入统一验收链路。
+func (c *Collector) applyEditFileFacts(result tools.ToolResult) {
+	path, ok := readString(result.Metadata, "path")
+	if !ok {
+		return
+	}
+	key := fmt.Sprintf("file_written:edit:%s", path)
+	if !c.markSeen(key) {
+		return
+	}
+	c.facts.Files.Written = append(c.facts.Files.Written, FileWriteFact{
+		Path:           path,
+		Bytes:          readInt(result.Metadata, "replacement_length"),
 		WorkspaceWrite: true,
 	})
 	c.facts.Progress.ObservedFactCount++

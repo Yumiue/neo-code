@@ -45,12 +45,20 @@ func TestCollectorApplyToolResultTodoAndVerificationFacts(t *testing.T) {
 			VerificationScope:     "artifact:test.txt",
 		},
 	})
+	collector.ApplyToolResult(tools.ToolNameFilesystemEdit, tools.ToolResult{
+		Name:    tools.ToolNameFilesystemEdit,
+		IsError: false,
+		Metadata: map[string]any{
+			"path":               "edit.go",
+			"replacement_length": 12,
+		},
+	})
 
 	snapshot := collector.Snapshot()
 	if len(snapshot.Todos.CreatedIDs) != 1 || snapshot.Todos.CreatedIDs[0] != "todo-1" {
 		t.Fatalf("todo created facts = %+v", snapshot.Todos.CreatedIDs)
 	}
-	if len(snapshot.Files.Written) != 1 || snapshot.Files.Written[0].Path != "test.txt" {
+	if len(snapshot.Files.Written) != 2 || snapshot.Files.Written[0].Path != "test.txt" || snapshot.Files.Written[1].Path != "edit.go" {
 		t.Fatalf("file written facts = %+v", snapshot.Files.Written)
 	}
 	if len(snapshot.Verification.Passed) != 1 {
@@ -94,5 +102,43 @@ func TestCollectorApplyTodoConflictAndSubAgentFacts(t *testing.T) {
 	}
 	if snapshot.SubAgents.Completed[0].TaskID != "sa-1" {
 		t.Fatalf("subagent completed task_id = %q, want sa-1", snapshot.SubAgents.Completed[0].TaskID)
+	}
+}
+
+func TestCollectorCapturesErrorFactsForToolErrors(t *testing.T) {
+	collector := NewCollector()
+	collector.ApplyToolResult(tools.ToolNameBash, tools.ToolResult{
+		Name:       tools.ToolNameBash,
+		IsError:    true,
+		ErrorClass: "permission_denied",
+		Content:    "permission denied",
+		Metadata: map[string]any{
+			"exit_code":         1,
+			"normalized_intent": "cat README.md",
+			"ok":                false,
+		},
+	})
+	collector.ApplyToolResult(tools.ToolNameSpawnSubAgent, tools.ToolResult{
+		Name:       tools.ToolNameSpawnSubAgent,
+		IsError:    true,
+		ErrorClass: "subagent_failed",
+		Content:    "runtime: subagent output key \"findings\" must be []string",
+		Metadata: map[string]any{
+			"task_id":     "spawn-1",
+			"role":        "reviewer",
+			"state":       "failed",
+			"stop_reason": "error",
+		},
+	})
+
+	snapshot := collector.Snapshot()
+	if len(snapshot.Errors.ToolErrors) != 2 {
+		t.Fatalf("tool errors = %+v, want 2 entries", snapshot.Errors.ToolErrors)
+	}
+	if len(snapshot.Commands.Executed) != 1 || snapshot.Commands.Executed[0].Succeeded {
+		t.Fatalf("command facts = %+v, want one failed command fact", snapshot.Commands.Executed)
+	}
+	if len(snapshot.SubAgents.Failed) != 1 || snapshot.SubAgents.Failed[0].TaskID != "spawn-1" {
+		t.Fatalf("subagent failed facts = %+v", snapshot.SubAgents.Failed)
 	}
 }
