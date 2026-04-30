@@ -2,6 +2,7 @@ import { memo, useState } from 'react'
 import { type ChatMessage } from '@/stores/useChatStore'
 import ToolCallCard from './ToolCallCard'
 import CodeBlock from './CodeBlock'
+import MarkdownContent from './MarkdownContent'
 import { Bot, ChevronRight } from 'lucide-react'
 
 interface MessageItemProps {
@@ -57,7 +58,7 @@ function AIMessage({ message, isLast, children }: { message: ChatMessage; isLast
       <div style={styles.aiContent}>
         {children || (
           <div style={styles.aiText}>
-            {message.content}
+            <MarkdownContent content={message.content} streaming={message.streaming} />
             {isLast && !message.content && message.streaming && (
               <span style={styles.typing}>
                 <span className="thinking-dot">.</span>
