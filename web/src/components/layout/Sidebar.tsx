@@ -83,10 +83,10 @@ export default function Sidebar({ collapsed }: SidebarProps) {
   if (collapsed) {
     return (
       <>
-        <button style={styles.collapseBtn} onClick={toggleSidebar} title="展开侧边栏">
+        <button style={styles.stripBtn} onClick={toggleSidebar} title="展开侧边栏">
           <PanelLeft size={16} />
         </button>
-        <button style={styles.collapseBtn} onClick={handleNewSession} title="新对话">
+        <button style={styles.stripBtn} onClick={handleNewSession} title="新对话">
           <Plus size={16} />
         </button>
       </>
@@ -727,6 +727,20 @@ const styles: Record<string, React.CSSProperties> = {
     zIndex: 2,
     opacity: 0.6,
     transition: 'opacity 0.15s',
+  },
+  stripBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 28,
+    height: 28,
+    borderRadius: 'var(--radius-sm)',
+    border: 'none',
+    background: 'transparent',
+    color: 'var(--text-tertiary)',
+    cursor: 'pointer',
+    transition: 'all 0.15s',
+    flexShrink: 0,
   },
   topActions: {
     padding: '12px 32px 12px 12px',

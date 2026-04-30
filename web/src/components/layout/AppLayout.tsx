@@ -4,7 +4,6 @@ import ChatPanel from '@/components/chat/ChatPanel'
 import FileChangePanel from '@/components/panels/FileChangePanel'
 import FileTreePanel from '@/components/panels/FileTreePanel'
 import StatusBar from '@/components/status/StatusBar'
-import PermissionDialog from '@/components/permission/PermissionDialog'
 import ToastContainer from '@/components/ui/ToastContainer'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { useUIStore } from '@/stores/useUIStore'
@@ -76,7 +75,6 @@ export default function AppLayout({ shellMode = 'electron' }: AppLayoutProps) {
         )}
       </div>
       <StatusBar />
-      <PermissionDialog />
       <ToastContainer />
     </div>
   )

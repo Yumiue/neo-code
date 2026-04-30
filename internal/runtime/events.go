@@ -158,35 +158,35 @@ func newLedgerReconciledPayload(
 
 // PermissionRequestPayload 描述一次权限请求。
 type PermissionRequestPayload struct {
-	RequestID     string
-	ToolCallID    string
-	ToolName      string
-	ToolCategory  string
-	ActionType    string
-	Operation     string
-	TargetType    string
-	Target        string
-	Decision      string
-	Reason        string
-	RuleID        string
-	RememberScope string
+	RequestID     string `json:"request_id"`
+	ToolCallID    string `json:"tool_call_id"`
+	ToolName      string `json:"tool_name"`
+	ToolCategory  string `json:"tool_category"`
+	ActionType    string `json:"action_type"`
+	Operation     string `json:"operation"`
+	TargetType    string `json:"target_type"`
+	Target        string `json:"target"`
+	Decision      string `json:"decision"`
+	Reason        string `json:"reason"`
+	RuleID        string `json:"rule_id"`
+	RememberScope string `json:"remember_scope,omitempty"`
 }
 
 // PermissionResolvedPayload 描述权限请求被处理后的状态。
 type PermissionResolvedPayload struct {
-	RequestID     string
-	ToolCallID    string
-	ToolName      string
-	ToolCategory  string
-	ActionType    string
-	Operation     string
-	TargetType    string
-	Target        string
-	Decision      string
-	Reason        string
-	RuleID        string
-	RememberScope string
-	ResolvedAs    string
+	RequestID     string `json:"request_id"`
+	ToolCallID    string `json:"tool_call_id"`
+	ToolName      string `json:"tool_name"`
+	ToolCategory  string `json:"tool_category"`
+	ActionType    string `json:"action_type"`
+	Operation     string `json:"operation"`
+	TargetType    string `json:"target_type"`
+	Target        string `json:"target"`
+	Decision      string `json:"decision"`
+	Reason        string `json:"reason"`
+	RuleID        string `json:"rule_id"`
+	RememberScope string `json:"remember_scope,omitempty"`
+	ResolvedAs    string `json:"resolved_as,omitempty"`
 }
 
 // SessionSkillEventPayload 描述会话级 skill 变更事件。

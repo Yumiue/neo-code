@@ -7,6 +7,24 @@ import { useSessionStore } from '@/stores/useSessionStore'
 
 type PayloadRecord = Record<string, unknown> | undefined
 
+function normalizePermissionPayload(raw: unknown): PermissionRequestPayload | null {
+  const r = raw as Record<string, unknown> | undefined
+  if (!r || typeof r !== 'object') return null
+  const s = (k1: string, k2: string): string => strField(r, k1) || strField(r, k2)
+  return {
+    request_id: s('request_id', 'RequestID'),
+    tool_call_id: s('tool_call_id', 'ToolCallID'),
+    tool_name: s('tool_name', 'ToolName'),
+    tool_category: s('tool_category', 'ToolCategory'),
+    action_type: s('action_type', 'ActionType'),
+    operation: s('operation', 'Operation'),
+    target_type: s('target_type', 'TargetType'),
+    target: s('target', 'Target'),
+    decision: s('decision', 'Decision'),
+    reason: s('reason', 'Reason'),
+  }
+}
+
 const CRITICAL_EVENTS = new Set<string>([
   EventType.PermissionRequested,
   EventType.PermissionResolved,
@@ -113,13 +131,14 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
     }
 
     case EventType.PermissionRequested: {
-      const permPayload = eventPayload as PermissionRequestPayload | undefined
+      const permPayload = normalizePermissionPayload(eventPayload)
       if (permPayload) useChatStore.getState().addPermissionRequest(permPayload)
       break
     }
 
     case EventType.PermissionResolved: {
-      const requestId = strField(eventPayload, 'request_id')
+      const r = eventPayload as Record<string, unknown> | undefined
+      const requestId = strField(r, 'request_id') || strField(r, 'RequestID')
       if (requestId) useChatStore.getState().removePermissionRequest(requestId)
       break
     }

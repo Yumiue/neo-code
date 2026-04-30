@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect } from 'react'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSessionStore } from '@/stores/useSessionStore'
+import { useChatStore } from '@/stores/useChatStore'
 import { useGatewayAPI } from '@/context/RuntimeProvider'
+import { PermissionDecision } from '@/api/protocol'
 import MessageList from './MessageList'
 import ChatInput from './ChatInput'
 import ModelSelector from './ModelSelector'
@@ -11,6 +13,9 @@ import {
   FolderTree,
   MoreHorizontal,
   Edit3,
+  Shield,
+  X,
+  Check,
 } from 'lucide-react'
 
 /** 聊天主区域 */
@@ -26,14 +31,36 @@ export default function ChatPanel() {
   const currentSessionId = useSessionStore((s) => s.currentSessionId)
   const projects = useSessionStore((s) => s.projects)
 
+  const permissionRequests = useChatStore((s) => s.permissionRequests)
+  const currentPermission = permissionRequests[0]
+
   const [editingTitle, setEditingTitle] = useState(false)
   const [moreMenuOpen, setMoreMenuOpen] = useState(false)
+  const [isResolvingPermission, setIsResolvingPermission] = useState(false)
   const titleRef = useRef<HTMLDivElement>(null)
   const moreMenuRef = useRef<HTMLDivElement>(null)
 
   // Find current session title
   const currentSession = projects.flatMap((p) => p.sessions).find((s) => s.id === currentSessionId)
   const title = currentSession?.title || '新对话'
+
+  async function handlePermissionDecision(decision: string) {
+    if (!gatewayAPI || !currentPermission || isResolvingPermission) return
+    setIsResolvingPermission(true)
+    try {
+      await gatewayAPI.resolvePermission({
+        request_id: currentPermission.request_id,
+        decision,
+      })
+      useUIStore.getState().showToast('已处理权限请求', 'success')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '处理权限请求失败'
+      useUIStore.getState().showToast(message, 'error')
+      console.error('Resolve permission failed:', err)
+    } finally {
+      setIsResolvingPermission(false)
+    }
+  }
 
   useEffect(() => {
     function handleClick(event: MouseEvent) {
@@ -157,8 +184,70 @@ export default function ChatPanel() {
         <MessageList />
       </div>
 
-      {/* Input */}
-      <ChatInput />
+      {/* Input or Permission Request */}
+      {currentPermission ? (
+        <div style={permissionStyles.container}>
+          <div style={permissionStyles.card}>
+            <div style={permissionStyles.header}>
+              <Shield size={16} style={{ color: 'var(--warning)' }} />
+              <span style={permissionStyles.headerTitle}>权限请求</span>
+            </div>
+            <div style={permissionStyles.details}>
+              <div style={permissionStyles.detailRow}>
+                <span style={permissionStyles.detailLabel}>工具</span>
+                <span style={permissionStyles.detailValue}>
+                  {currentPermission.tool_name || currentPermission.tool_category || '-'}
+                </span>
+              </div>
+              <div style={permissionStyles.detailRow}>
+                <span style={permissionStyles.detailLabel}>操作</span>
+                <span style={permissionStyles.detailValue}>
+                  {currentPermission.operation || currentPermission.action_type || '-'}
+                </span>
+              </div>
+              <div style={permissionStyles.detailRow}>
+                <span style={permissionStyles.detailLabel}>目标</span>
+                <span style={{ ...permissionStyles.detailValue, fontSize: 11 }}>
+                  {currentPermission.target || currentPermission.target_type || '-'}
+                </span>
+              </div>
+              {currentPermission.reason && (
+                <div style={permissionStyles.detailRow}>
+                  <span style={permissionStyles.detailLabel}>原因</span>
+                  <span style={{ ...permissionStyles.detailValue, fontSize: 11 }}>
+                    {currentPermission.reason}
+                  </span>
+                </div>
+              )}
+            </div>
+            <div style={permissionStyles.buttons}>
+              <button
+                onClick={() => handlePermissionDecision(PermissionDecision.Reject)}
+                disabled={isResolvingPermission}
+                style={{ ...permissionStyles.btn, ...permissionStyles.btnReject, opacity: isResolvingPermission ? 0.6 : 1, cursor: isResolvingPermission ? 'not-allowed' : 'pointer' }}
+              >
+                <X size={13} /> 拒绝
+              </button>
+              <button
+                onClick={() => handlePermissionDecision(PermissionDecision.AllowOnce)}
+                disabled={isResolvingPermission}
+                style={{ ...permissionStyles.btn, ...permissionStyles.btnPrimary, opacity: isResolvingPermission ? 0.6 : 1, cursor: isResolvingPermission ? 'not-allowed' : 'pointer' }}
+              >
+                <Check size={13} /> 允许一次
+              </button>
+              <button
+                onClick={() => handlePermissionDecision(PermissionDecision.AllowSession)}
+                disabled={isResolvingPermission}
+                style={{ ...permissionStyles.btn, ...permissionStyles.btnSecondary, opacity: isResolvingPermission ? 0.6 : 1, cursor: isResolvingPermission ? 'not-allowed' : 'pointer' }}
+              >
+                <Check size={13} /> 本会话允许
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <ChatInput />
+      )}
     </div>
   )
 }
@@ -286,5 +375,87 @@ const styles: Record<string, React.CSSProperties> = {
     overflowY: 'auto',
     overflowX: 'hidden',
     padding: '0 16px',
+  },
+}
+
+const permissionStyles: Record<string, React.CSSProperties> = {
+  container: {
+    padding: '12px 16px 8px',
+    flexShrink: 0,
+    background: 'var(--bg-primary)',
+  },
+  card: {
+    border: '1px solid var(--border-primary)',
+    borderRadius: 'var(--radius-lg)',
+    background: 'var(--bg-secondary)',
+    padding: '12px 14px',
+    maxWidth: 800,
+    margin: '0 auto',
+  },
+  header: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 10,
+  },
+  headerTitle: {
+    fontSize: 13,
+    fontWeight: 600,
+    color: 'var(--text-primary)',
+  },
+  details: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+    marginBottom: 12,
+    fontSize: 12,
+  },
+  detailRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+  },
+  detailLabel: {
+    color: 'var(--text-tertiary)',
+    flexShrink: 0,
+  },
+  detailValue: {
+    color: 'var(--text-primary)',
+    fontFamily: 'var(--font-mono)',
+    fontWeight: 500,
+    textAlign: 'right',
+    wordBreak: 'break-all',
+  },
+  buttons: {
+    display: 'flex',
+    gap: 8,
+  },
+  btn: {
+    flex: 1,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    padding: '7px 10px',
+    borderRadius: 'var(--radius-md)',
+    fontSize: 12,
+    fontFamily: 'var(--font-ui)',
+    cursor: 'pointer',
+    transition: 'all 0.15s',
+    border: '1px solid var(--border-primary)',
+  },
+  btnReject: {
+    background: 'var(--bg-tertiary)',
+    color: 'var(--text-primary)',
+  },
+  btnPrimary: {
+    background: 'var(--accent)',
+    color: '#fff',
+    border: 'none',
+  },
+  btnSecondary: {
+    background: 'var(--bg-active)',
+    color: 'var(--text-primary)',
   },
 }

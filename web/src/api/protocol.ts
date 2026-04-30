@@ -518,4 +518,5 @@ export interface PermissionRequestPayload {
   target: string
   decision: string
   reason: string
+  rule_id?: string
 }
