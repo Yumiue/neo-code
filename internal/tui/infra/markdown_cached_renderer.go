@@ -2,6 +2,7 @@ package infra
 
 import (
 	"fmt"
+	"hash/fnv"
 	"regexp"
 	"strings"
 
@@ -47,7 +48,7 @@ func (r *CachedMarkdownRenderer) Render(content string, width int) (string, erro
 	content = normalizeMarkdownForTerminal(content)
 
 	renderWidth := max(16, width)
-	cacheKey := fmt.Sprintf("%d:%s", renderWidth, content)
+	cacheKey := hashMarkdownCacheKey(renderWidth, content)
 	if cached, ok := r.cache[cacheKey]; ok {
 		return cached, nil
 	}
@@ -201,3 +202,11 @@ func (r *CachedMarkdownRenderer) cacheResult(key string, value string) {
 }
 
 // maxInt 返回两个整数中的较大值。
+
+// hashMarkdownCacheKey 生成固定长度的缓存键，避免长内容撑大 map key。
+func hashMarkdownCacheKey(width int, content string) string {
+	h := fnv.New64a()
+	fmt.Fprintf(h, "%d:", width)
+	h.Write([]byte(content))
+	return fmt.Sprintf("%016x", h.Sum64())
+}

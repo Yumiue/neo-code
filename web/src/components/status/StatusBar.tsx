@@ -29,7 +29,6 @@ export default function StatusBar() {
   const { mode, workdir, selectWorkdir } = useRuntime()
 
   const totalTokens = tokenUsage ? tokenUsage.input_tokens + tokenUsage.output_tokens : 0
-  const maxTokens = 8192
 
   async function handleChangeWorkdir() {
     if (mode !== 'electron') return
@@ -63,7 +62,7 @@ export default function StatusBar() {
         {tokenUsage && (
           <>
             <span style={styles.tokenInfo}>
-              Tokens: {formatTokenCount(totalTokens)} / {formatTokenCount(maxTokens)}
+              Tokens: {formatTokenCount(totalTokens)}
             </span>
             <span style={styles.divider} />
           </>

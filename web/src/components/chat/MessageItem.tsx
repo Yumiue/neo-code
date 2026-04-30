@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import { type ChatMessage } from '@/stores/useChatStore'
 import ToolCallCard from './ToolCallCard'
 import CodeBlock from './CodeBlock'
@@ -10,7 +10,7 @@ interface MessageItemProps {
 }
 
 /** 单条消息渲染 */
-export default function MessageItem({ message, isLast = false }: MessageItemProps) {
+const MessageItem = memo(function MessageItem({ message, isLast = false }: MessageItemProps) {
   if (message.type === 'welcome') {
     return <WelcomeMessage message={message} />
   }
@@ -36,7 +36,7 @@ export default function MessageItem({ message, isLast = false }: MessageItemProp
   }
 
   return <AIMessage message={message} isLast={isLast} />
-}
+})
 
 function UserMessage({ message }: { message: ChatMessage }) {
   return (
@@ -212,3 +212,5 @@ const styles: Record<string, React.CSSProperties> = {
     margin: 0,
   },
 }
+
+export default MessageItem

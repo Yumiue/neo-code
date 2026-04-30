@@ -1,4 +1,3 @@
-import { useEffect } from 'react'
 import { useUIStore, type Toast } from '@/stores/useUIStore'
 import { X, AlertCircle, CheckCircle, Info } from 'lucide-react'
 
@@ -19,11 +18,6 @@ const colorMap: Record<Toast['type'], string> = {
 /** 单条 Toast */
 function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }) {
   const Icon = iconMap[toast.type]
-
-  useEffect(() => {
-    const timer = setTimeout(onDismiss, 4000)
-    return () => clearTimeout(timer)
-  }, [onDismiss])
 
   return (
     <div style={styles.item} className="animate-slide-up">

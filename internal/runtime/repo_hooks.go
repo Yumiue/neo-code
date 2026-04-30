@@ -404,6 +404,14 @@ func evaluateWorkspaceTrust(workspace string) trustDecision {
 			InvalidReason:  fmt.Sprintf("read trust store failed: %v", err),
 		}
 	}
+
+	if permErr := validateTrustStorePermissions(storePath); permErr != nil {
+		return trustDecision{
+			Trusted:        false,
+			TrustStorePath: storePath,
+			InvalidReason:  fmt.Sprintf("trust store permissions unsafe: %v", permErr),
+		}
+	}
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return trustDecision{
 			Trusted:        false,
