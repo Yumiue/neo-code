@@ -138,7 +138,8 @@ func TestFinalAcceptanceHelpers(t *testing.T) {
 	t.Run("buildAcceptanceContinueHint includes actionable evidence and tool requirement", func(t *testing.T) {
 		t.Parallel()
 		decision := acceptance.AcceptanceDecision{
-			Status: acceptance.AcceptanceContinue,
+			Status:                  acceptance.AcceptanceContinue,
+			CompletionBlockedReason: "pending_todo",
 			VerifierResults: []verify.VerificationResult{
 				{
 					Name:    "todo_convergence",
@@ -162,6 +163,23 @@ func TestFinalAcceptanceHelpers(t *testing.T) {
 		}
 		if !strings.Contains(hint, "<pending_ids>todo-1,todo-2</pending_ids>") {
 			t.Fatalf("hint should include sorted pending ids, got %q", hint)
+		}
+		if !strings.Contains(hint, "<completion_blocked_reason>pending_todo</completion_blocked_reason>") {
+			t.Fatalf("hint should include completion blocked reason, got %q", hint)
+		}
+	})
+
+	t.Run("buildAcceptanceContinueHint emits unverified_write guidance", func(t *testing.T) {
+		t.Parallel()
+		hint := buildAcceptanceContinueHint(acceptance.AcceptanceDecision{
+			Status:                  acceptance.AcceptanceContinue,
+			CompletionBlockedReason: "unverified_write",
+		})
+		if !strings.Contains(hint, "<completion_blocked_reason>unverified_write</completion_blocked_reason>") {
+			t.Fatalf("hint should include unverified_write reason, got %q", hint)
+		}
+		if !strings.Contains(hint, "VerificationPerformed") || !strings.Contains(hint, "VerificationPassed") {
+			t.Fatalf("hint should require verification facts, got %q", hint)
 		}
 	})
 

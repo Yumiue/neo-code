@@ -150,3 +150,67 @@ func TestClassifyToolErrorPrefersExplicitErrorClass(t *testing.T) {
 		t.Fatalf("classifyToolError() = %q, want hook_blocked", got)
 	}
 }
+
+func TestShouldPromotePendingFinalProgress(t *testing.T) {
+	t.Parallel()
+
+	t.Run("business progress always promotes", func(t *testing.T) {
+		t.Parallel()
+		score := controlplane.ProgressScore{HasBusinessProgress: true}
+		if !shouldPromotePendingFinalProgress(score, toolExecutionSummary{}, controlplane.CompletionState{}, "") {
+			t.Fatal("expected business progress to promote pending final progress")
+		}
+	})
+
+	t.Run("duplicate read result with same blocked reason does not promote", func(t *testing.T) {
+		t.Parallel()
+		score := controlplane.ProgressScore{
+			HasExplorationProgress: true,
+			SameToolSignature:      true,
+			SameResultFingerprint:  true,
+			SameSubgoal:            controlplane.SubgoalRelationSame,
+		}
+		summary := toolExecutionSummary{
+			Results: []tools.ToolResult{
+				{Name: tools.ToolNameFilesystemReadFile, Content: "same result"},
+			},
+		}
+		completion := controlplane.CompletionState{
+			CompletionBlockedReason: controlplane.CompletionBlockedReasonPendingTodo,
+		}
+		if shouldPromotePendingFinalProgress(
+			score,
+			summary,
+			completion,
+			string(controlplane.CompletionBlockedReasonPendingTodo),
+		) {
+			t.Fatal("expected duplicate informational read to not promote progress")
+		}
+	})
+
+	t.Run("read result still promotes when blocked reason changed", func(t *testing.T) {
+		t.Parallel()
+		score := controlplane.ProgressScore{
+			HasExplorationProgress: true,
+			SameToolSignature:      true,
+			SameResultFingerprint:  true,
+			SameSubgoal:            controlplane.SubgoalRelationSame,
+		}
+		summary := toolExecutionSummary{
+			Results: []tools.ToolResult{
+				{Name: tools.ToolNameFilesystemGlob, Content: "same result"},
+			},
+		}
+		completion := controlplane.CompletionState{
+			CompletionBlockedReason: controlplane.CompletionBlockedReasonPendingTodo,
+		}
+		if !shouldPromotePendingFinalProgress(
+			score,
+			summary,
+			completion,
+			string(controlplane.CompletionBlockedReasonUnverifiedWrite),
+		) {
+			t.Fatal("expected changed blocked reason to allow one more exploration promotion")
+		}
+	})
+}

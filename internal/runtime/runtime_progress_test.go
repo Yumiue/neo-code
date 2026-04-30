@@ -749,6 +749,28 @@ func TestAcceptanceContinueWithoutToolCallStopsAsIncomplete(t *testing.T) {
 
 	events := collectRuntimeEvents(service.Events())
 	assertStopReasonDecided(t, events, controlplane.StopReasonNoProgressAfterFinalIntercept, "")
+	foundVerificationReason := false
+	foundAcceptanceReason := false
+	for _, event := range events {
+		switch event.Type {
+		case EventVerificationStarted:
+			payload, ok := event.Payload.(VerificationStartedPayload)
+			if ok && strings.TrimSpace(payload.CompletionBlockedReason) == string(controlplane.CompletionBlockedReasonPendingTodo) {
+				foundVerificationReason = true
+			}
+		case EventAcceptanceDecided:
+			payload, ok := event.Payload.(AcceptanceDecidedPayload)
+			if ok && strings.TrimSpace(payload.CompletionBlockedReason) == string(controlplane.CompletionBlockedReasonPendingTodo) {
+				foundAcceptanceReason = true
+			}
+		}
+	}
+	if !foundVerificationReason {
+		t.Fatal("expected verification_started payload to include completion_blocked_reason=pending_todo")
+	}
+	if !foundAcceptanceReason {
+		t.Fatal("expected acceptance_decided payload to include completion_blocked_reason=pending_todo")
+	}
 }
 
 func assertStopReasonDecided(t *testing.T, events []RuntimeEvent, wantReason controlplane.StopReason, wantDetail string) {

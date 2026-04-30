@@ -34,6 +34,7 @@ type runState struct {
 	pendingFinalProgress           bool
 	mustUseToolAfterFinalContinue  bool
 	noToolAfterFinalContinueStreak int
+	lastAcceptanceBlockedReason    string
 	terminalStatus                 controlplane.TerminalStatus
 	terminalStopReason             controlplane.StopReason
 	terminalStopDetail             string

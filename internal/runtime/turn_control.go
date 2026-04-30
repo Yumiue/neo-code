@@ -216,6 +216,48 @@ func hasSuccessfulInformationalResult(results []tools.ToolResult) bool {
 	return false
 }
 
+// shouldPromotePendingFinalProgress 判断本轮执行结果是否可以作为 final 拦截后的有效推进信号。
+func shouldPromotePendingFinalProgress(
+	score controlplane.ProgressScore,
+	summary toolExecutionSummary,
+	completion controlplane.CompletionState,
+	lastBlockedReason string,
+) bool {
+	if score.HasBusinessProgress {
+		return true
+	}
+	if !score.HasExplorationProgress {
+		return false
+	}
+
+	// 只读 read/glob 首次探索可算推进；同签名/同结果/同子目标且阻塞原因未变化时，不再重置 final 拦截计数。
+	if hasSuccessfulReadOrGlobResult(summary.Results) &&
+		score.SameToolSignature &&
+		score.SameResultFingerprint &&
+		score.SameSubgoal == controlplane.SubgoalRelationSame &&
+		strings.EqualFold(
+			strings.TrimSpace(lastBlockedReason),
+			strings.TrimSpace(string(completion.CompletionBlockedReason)),
+		) {
+		return false
+	}
+	return true
+}
+
+// hasSuccessfulReadOrGlobResult 判断本轮是否存在成功的 filesystem_read_file / filesystem_glob 结果。
+func hasSuccessfulReadOrGlobResult(results []tools.ToolResult) bool {
+	for _, result := range results {
+		if result.IsError {
+			continue
+		}
+		switch strings.TrimSpace(result.Name) {
+		case tools.ToolNameFilesystemReadFile, tools.ToolNameFilesystemGlob:
+			return true
+		}
+	}
+	return false
+}
+
 // hasSuccessfulVerificationResult 判断本轮是否存在显式验证成功的结构化事实。
 func hasSuccessfulVerificationResult(results []tools.ToolResult) bool {
 	if len(results) == 0 {

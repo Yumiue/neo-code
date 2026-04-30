@@ -9,6 +9,7 @@ import (
 
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/acceptance"
+	"neo-code/internal/runtime/controlplane"
 	"neo-code/internal/runtime/verify"
 	agentsession "neo-code/internal/session"
 )
@@ -94,6 +95,9 @@ func (s *Service) beforeAcceptFinal(
 	if decision.Status == acceptance.AcceptanceContinue && state.pendingFinalProgress {
 		decision.HasProgress = true
 	}
+	if strings.TrimSpace(decision.CompletionBlockedReason) == "" {
+		decision.CompletionBlockedReason = strings.TrimSpace(string(state.completion.CompletionBlockedReason))
+	}
 	if decision.Status == acceptance.AcceptanceContinue {
 		decision.ContinueHint = buildAcceptanceContinueHint(decision)
 	}
@@ -164,7 +168,8 @@ func synthesizeTodoConvergenceEvidence(todos []agentsession.TodoItem) *verify.Ve
 // buildAcceptanceContinueHint 构造带 verifier 证据的 continue 提示，强制下一轮先补工具事实再尝试 final。
 func buildAcceptanceContinueHint(decision acceptance.AcceptanceDecision) string {
 	const actionDirective = "Do not claim completion with plain text. Next turn MUST call todo_write and/or verification tools to add objective facts before any final response."
-	if len(decision.VerifierResults) == 0 {
+	blockedReason := strings.TrimSpace(decision.CompletionBlockedReason)
+	if len(decision.VerifierResults) == 0 && blockedReason == "" {
 		if base := strings.TrimSpace(decision.ContinueHint); base != "" {
 			return strings.TrimSpace(base + "\n" + actionDirective)
 		}
@@ -173,10 +178,16 @@ func buildAcceptanceContinueHint(decision acceptance.AcceptanceDecision) string 
 
 	var builder strings.Builder
 	builder.WriteString("<acceptance_continue>\n")
+	if blockedReason != "" {
+		builder.WriteString(fmt.Sprintf("<completion_blocked_reason>%s</completion_blocked_reason>\n", xmlEscape(blockedReason)))
+	}
 	builder.WriteString("<rule>")
 	builder.WriteString(actionDirective)
 	builder.WriteString("</rule>\n")
 
+	if section := renderCompletionBlockedReasonHintSection(blockedReason, decision.VerifierResults); section != "" {
+		builder.WriteString(section)
+	}
 	if section := renderTodoConvergenceHintSection(decision.VerifierResults); section != "" {
 		builder.WriteString(section)
 	}
@@ -185,6 +196,48 @@ func buildAcceptanceContinueHint(decision acceptance.AcceptanceDecision) string 
 	}
 	builder.WriteString("</acceptance_continue>")
 	return strings.TrimSpace(builder.String())
+}
+
+// renderCompletionBlockedReasonHintSection 根据 completion gate 阻塞原因输出结构化执行指令。
+func renderCompletionBlockedReasonHintSection(
+	blockedReason string,
+	results []verify.VerificationResult,
+) string {
+	switch strings.TrimSpace(blockedReason) {
+	case string(controlplane.CompletionBlockedReasonPendingTodo):
+		pending := extractPendingTodoIDs(results)
+		if len(pending) == 0 {
+			return "<pending_todo><required_action>Use todo_write to move required todos to terminal states, then retry acceptance.</required_action></pending_todo>\n"
+		}
+		return fmt.Sprintf(
+			"<pending_todo><open_required_ids>%s</open_required_ids><required_action>Use todo_write to close these required todos before final response.</required_action></pending_todo>\n",
+			strings.Join(pending, ","),
+		)
+	case string(controlplane.CompletionBlockedReasonUnverifiedWrite):
+		return "<unverified_write><required_action>Produce VerificationPerformed and VerificationPassed facts via verification tools before final response.</required_action></unverified_write>\n"
+	case string(controlplane.CompletionBlockedReasonPostExecuteClosureRequired):
+		return "<post_execute_closure_required><required_action>First close loop from latest tool results (todo updates/artifact checks), then retry final acceptance.</required_action></post_execute_closure_required>\n"
+	default:
+		return ""
+	}
+}
+
+// extractPendingTodoIDs 从 verifier 证据提取 required 未收敛 todo 列表。
+func extractPendingTodoIDs(results []verify.VerificationResult) []string {
+	for _, result := range results {
+		if strings.TrimSpace(result.Name) != "todo_convergence" {
+			continue
+		}
+		evidence := result.Evidence
+		if len(evidence) == 0 {
+			return nil
+		}
+		ids := append([]string{}, evidenceStringList(evidence["pending_ids"])...)
+		ids = append(ids, evidenceStringList(evidence["in_progress_ids"])...)
+		ids = append(ids, evidenceStringList(evidence["blocked_ids"])...)
+		return normalizeEvidenceList(ids)
+	}
+	return nil
 }
 
 // renderTodoConvergenceHintSection 渲染 todo_convergence 证据，明确 pending/in_progress/blocked 清单。

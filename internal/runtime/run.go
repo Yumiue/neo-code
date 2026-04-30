@@ -314,7 +314,8 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				}
 
 				s.emitRunScoped(ctx, EventVerificationStarted, &state, VerificationStartedPayload{
-					CompletionPassed: completed,
+					CompletionPassed:        completed,
+					CompletionBlockedReason: strings.TrimSpace(string(state.completion.CompletionBlockedReason)),
 				})
 				acceptanceDecision, err := s.beforeAcceptFinal(ctx, &state, snapshot, turnOutput.assistant, completed)
 				if err != nil {
@@ -335,17 +336,19 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					ErrorClass:       acceptanceDecision.ErrorClass,
 				})
 				s.emitRunScoped(ctx, EventAcceptanceDecided, &state, AcceptanceDecidedPayload{
-					Status:             acceptanceDecision.Status,
-					StopReason:         acceptanceDecision.StopReason,
-					ErrorClass:         acceptanceDecision.ErrorClass,
-					UserVisibleSummary: acceptanceDecision.UserVisibleSummary,
-					InternalSummary:    acceptanceDecision.InternalSummary,
-					ContinueHint:       acceptanceDecision.ContinueHint,
+					Status:                  acceptanceDecision.Status,
+					StopReason:              acceptanceDecision.StopReason,
+					ErrorClass:              acceptanceDecision.ErrorClass,
+					CompletionBlockedReason: strings.TrimSpace(acceptanceDecision.CompletionBlockedReason),
+					UserVisibleSummary:      acceptanceDecision.UserVisibleSummary,
+					InternalSummary:         acceptanceDecision.InternalSummary,
+					ContinueHint:            acceptanceDecision.ContinueHint,
 				})
 				applyAcceptanceResultProgress(&state, acceptanceDecision)
 
 				switch acceptanceDecision.Status {
 				case acceptance.AcceptanceAccepted:
+					state.lastAcceptanceBlockedReason = ""
 					state.mustUseToolAfterFinalContinue = false
 					state.noToolAfterFinalContinueStreak = 0
 					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
@@ -359,6 +362,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					s.triggerMemoExtraction(state.session.ID, state.session.Messages, state.rememberedThisRun)
 					return nil
 				case acceptance.AcceptanceContinue:
+					state.lastAcceptanceBlockedReason = strings.TrimSpace(acceptanceDecision.CompletionBlockedReason)
 					state.mustUseToolAfterFinalContinue = true
 					if state.noToolAfterFinalContinueStreak == 0 {
 						state.noToolAfterFinalContinueStreak = 1
@@ -372,6 +376,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					}
 					break turnAttempt
 				case acceptance.AcceptanceIncomplete:
+					state.lastAcceptanceBlockedReason = ""
 					state.mustUseToolAfterFinalContinue = false
 					state.noToolAfterFinalContinueStreak = 0
 					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
@@ -381,6 +386,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
 					return nil
 				case acceptance.AcceptanceFailed:
+					state.lastAcceptanceBlockedReason = ""
 					state.mustUseToolAfterFinalContinue = false
 					state.noToolAfterFinalContinueStreak = 0
 					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
@@ -394,6 +400,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
 					return nil
 				default:
+					state.lastAcceptanceBlockedReason = ""
 					state.mustUseToolAfterFinalContinue = false
 					state.noToolAfterFinalContinueStreak = 0
 					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
@@ -431,7 +438,12 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			)
 			state.progress = controlplane.EvaluateProgress(state.progress, progressInput)
 			currentScore := state.progress.LastScore
-			if currentScore.HasBusinessProgress || currentScore.HasExplorationProgress {
+			if shouldPromotePendingFinalProgress(
+				currentScore,
+				summary,
+				state.completion,
+				state.lastAcceptanceBlockedReason,
+			) {
 				state.pendingFinalProgress = true
 			}
 			state.mu.Unlock()
