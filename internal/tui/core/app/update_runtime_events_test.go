@@ -216,6 +216,66 @@ func TestRuntimeEventHandlerRegistryContainsRenamedEvents(t *testing.T) {
 	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventSubAgentToolCallResult]; !ok {
 		t.Fatalf("expected subagent_tool_call_result handler to be registered")
 	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventRuntimeSnapshotUpdated]; !ok {
+		t.Fatalf("expected runtime_snapshot_updated handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventFactsUpdated]; !ok {
+		t.Fatalf("expected facts_updated handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventDecisionMade]; !ok {
+		t.Fatalf("expected decision_made handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventSubAgentSnapshotUpdated]; !ok {
+		t.Fatalf("expected subagent_snapshot_updated handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventTodoSnapshotUpdated]; !ok {
+		t.Fatalf("expected todo_snapshot_updated handler to be registered")
+	}
+}
+
+func TestRuntimeSnapshotAndFactsHandlers(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	if runtimeEventRuntimeSnapshotUpdatedHandler(&app, agentruntime.RuntimeEvent{Payload: "bad"}) {
+		t.Fatalf("expected invalid runtime snapshot payload to return false")
+	}
+	if runtimeEventFactsUpdatedHandler(&app, agentruntime.RuntimeEvent{Payload: 1}) {
+		t.Fatalf("expected invalid facts payload to return false")
+	}
+	if runtimeEventDecisionMadeHandler(&app, agentruntime.RuntimeEvent{Payload: true}) {
+		t.Fatalf("expected invalid decision payload to return false")
+	}
+	if runtimeEventSubAgentSnapshotUpdatedHandler(&app, agentruntime.RuntimeEvent{Payload: []string{"bad"}}) {
+		t.Fatalf("expected invalid subagent snapshot payload to return false")
+	}
+
+	runtimeEventRuntimeSnapshotUpdatedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.RuntimeSnapshotUpdatedPayload{
+			Reason: "tool_result",
+			Snapshot: agentruntime.RuntimeSnapshot{
+				Todos: agentruntime.TodoSnapshot{
+					Items: []agentruntime.TodoViewItem{
+						{ID: "t1", Content: "demo", Status: "pending"},
+					},
+					Summary: agentruntime.TodoSummary{Total: 1, RequiredTotal: 1, RequiredOpen: 1},
+				},
+			},
+		},
+	})
+	if len(app.todoItems) != 1 || app.todoItems[0].ID != "t1" {
+		t.Fatalf("expected todo panel synced from runtime snapshot, got %+v", app.todoItems)
+	}
+
+	runtimeEventDecisionMadeHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.DecisionMadePayload{
+			Status:             "continue",
+			UserVisibleSummary: "need verification facts",
+		},
+	})
+	last := app.activities[len(app.activities)-1]
+	if last.Title != "Final decision (continue)" {
+		t.Fatalf("unexpected decision activity: %+v", last)
+	}
 }
 
 func TestRuntimeEventHookHandlers(t *testing.T) {

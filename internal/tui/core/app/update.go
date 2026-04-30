@@ -2013,6 +2013,7 @@ var runtimeEventHandlerRegistry = map[tuiservices.EventType]func(*App, tuiservic
 	tuiservices.EventStopReasonDecided:                        runtimeEventStopReasonDecidedHandler,
 	tuiservices.EventTodoUpdated:                              runtimeEventTodoUpdatedHandler,
 	tuiservices.EventTodoConflict:                             runtimeEventTodoConflictHandler,
+	tuiservices.EventTodoSnapshotUpdated:                      runtimeEventTodoSnapshotUpdatedHandler,
 	tuiservices.EventSkillActivated:                           runtimeEventSkillActivatedHandler,
 	tuiservices.EventSkillDeactivated:                         runtimeEventSkillDeactivatedHandler,
 	tuiservices.EventSkillMissing:                             runtimeEventSkillMissingHandler,
@@ -2035,6 +2036,10 @@ var runtimeEventHandlerRegistry = map[tuiservices.EventType]func(*App, tuiservic
 	tuiservices.EventSubAgentToolCallStarted:                  runtimeEventSubAgentToolCallHandler,
 	tuiservices.EventSubAgentToolCallResult:                   runtimeEventSubAgentToolCallHandler,
 	tuiservices.EventSubAgentToolCallDenied:                   runtimeEventSubAgentToolCallHandler,
+	tuiservices.EventRuntimeSnapshotUpdated:                   runtimeEventRuntimeSnapshotUpdatedHandler,
+	tuiservices.EventFactsUpdated:                             runtimeEventFactsUpdatedHandler,
+	tuiservices.EventDecisionMade:                             runtimeEventDecisionMadeHandler,
+	tuiservices.EventSubAgentSnapshotUpdated:                  runtimeEventSubAgentSnapshotUpdatedHandler,
 }
 
 func hookActivityLabel(source string, hookID string) string {
@@ -2559,6 +2564,87 @@ func runtimeEventTodoConflictHandler(a *App, event tuiservices.RuntimeEvent) boo
 		)
 	}
 	a.appendActivity("todo", "Todo conflict", reason, true)
+	return false
+}
+
+// runtimeEventTodoSnapshotUpdatedHandler 处理 todo_snapshot_updated 事件并实时同步 Todo 面板。
+func runtimeEventTodoSnapshotUpdatedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	return runtimeEventTodoUpdatedHandler(a, event)
+}
+
+// runtimeEventRuntimeSnapshotUpdatedHandler 处理 runtime_snapshot_updated 事件并同步 Todo 摘要。
+func runtimeEventRuntimeSnapshotUpdatedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.RuntimeSnapshotUpdatedPayload)
+	if !ok {
+		return false
+	}
+	snapshot := payload.Snapshot
+	if len(snapshot.Todos.Items) > 0 {
+		a.syncTodosFromEventItems(snapshot.Todos.Items)
+	}
+	a.state.StatusText = formatTodoSummaryStatus(snapshot.Todos.Summary)
+	reason := strings.TrimSpace(payload.Reason)
+	if reason == "" {
+		reason = "snapshot updated"
+	}
+	a.appendActivity("runtime", "Runtime snapshot updated", reason, false)
+	return false
+}
+
+// runtimeEventFactsUpdatedHandler 处理 facts_updated 事件，输出简洁事实更新日志。
+func runtimeEventFactsUpdatedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.FactsUpdatedPayload)
+	if !ok {
+		return false
+	}
+	reason := strings.TrimSpace(payload.Reason)
+	if reason == "" {
+		reason = "facts updated"
+	}
+	detail := reason
+	if runtimeFacts, ok := payload.Facts.RuntimeFacts["progress"].(map[string]any); ok {
+		if observed := coerceInt(runtimeFacts["observed_fact_count"]); observed > 0 {
+			detail = fmt.Sprintf("%s (observed_facts=%d)", reason, observed)
+		}
+	}
+	a.appendActivity("facts", "Runtime facts updated", detail, false)
+	return false
+}
+
+// runtimeEventDecisionMadeHandler 处理 decision_made 事件，输出最终裁决摘要。
+func runtimeEventDecisionMadeHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.DecisionMadePayload)
+	if !ok {
+		return false
+	}
+	status := strings.TrimSpace(payload.Status)
+	if status == "" {
+		status = "unknown"
+	}
+	detail := strings.TrimSpace(payload.UserVisibleSummary)
+	if detail == "" {
+		detail = strings.TrimSpace(payload.InternalSummary)
+	}
+	if detail == "" {
+		detail = "decision generated"
+	}
+	a.appendActivity("decision", "Final decision ("+status+")", detail, false)
+	return false
+}
+
+// runtimeEventSubAgentSnapshotUpdatedHandler 处理 subagent_snapshot_updated 事件，输出聚合计数。
+func runtimeEventSubAgentSnapshotUpdatedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.SubAgentSnapshotUpdatedPayload)
+	if !ok {
+		return false
+	}
+	detail := fmt.Sprintf(
+		"started=%d completed=%d failed=%d",
+		payload.SubAgent.StartedCount,
+		payload.SubAgent.CompletedCount,
+		payload.SubAgent.FailedCount,
+	)
+	a.appendActivity("subagent", "SubAgent snapshot updated", detail, false)
 	return false
 }
 
