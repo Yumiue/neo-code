@@ -4186,6 +4186,63 @@ func TestServiceApproveCurrentPlanNilService(t *testing.T) {
 	}
 }
 
+func TestServiceApproveCurrentPlanCanceledContext(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	service := NewWithFactory(manager, tools.NewRegistry(), store, &scriptedProviderFactory{provider: &scriptedProvider{}}, &stubContextBuilder{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := service.ApproveCurrentPlan(ctx, ApproveCurrentPlanInput{
+		SessionID: "session-1",
+		PlanID:    "plan-1",
+		Revision:  1,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context canceled, got %v", err)
+	}
+}
+
+func TestServiceApproveCurrentPlanTrimsSessionID(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	seed := agentsession.New("approve current plan with trimmed session id")
+	seed.CurrentPlan = &agentsession.PlanArtifact{
+		ID:       "plan-trim",
+		Revision: 1,
+		Status:   agentsession.PlanStatusDraft,
+		Spec: agentsession.PlanSpec{
+			Goal:   "trim session id before load",
+			Steps:  []string{"step one"},
+			Verify: []string{"verify one"},
+		},
+	}
+	if _, err := store.CreateSession(context.Background(), createSessionInputFromSession(seed)); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	service := NewWithFactory(manager, tools.NewRegistry(), store, &scriptedProviderFactory{provider: &scriptedProvider{}}, &stubContextBuilder{})
+	if err := service.ApproveCurrentPlan(context.Background(), ApproveCurrentPlanInput{
+		SessionID: "  " + seed.ID + "  ",
+		PlanID:    "plan-trim",
+		Revision:  1,
+	}); err != nil {
+		t.Fatalf("ApproveCurrentPlan() error = %v", err)
+	}
+
+	saved, err := store.LoadSession(context.Background(), seed.ID)
+	if err != nil {
+		t.Fatalf("LoadSession() error = %v", err)
+	}
+	if saved.CurrentPlan == nil || saved.CurrentPlan.Status != agentsession.PlanStatusApproved {
+		t.Fatalf("expected approved plan after trimming session id, got %+v", saved.CurrentPlan)
+	}
+}
+
 func TestServiceRunBuildModeIgnoresPlanningJSON(t *testing.T) {
 	t.Parallel()
 

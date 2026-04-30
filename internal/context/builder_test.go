@@ -220,6 +220,29 @@ func TestDefaultBuilderBuildIncludesTodosBeforeSystemState(t *testing.T) {
 	}
 }
 
+func TestNewBuilderWithMemoAndSummarizersIncludesMemoSection(t *testing.T) {
+	t.Parallel()
+
+	builder := NewBuilderWithMemoAndSummarizers(nil, nil, stubPromptSectionSource{
+		sections: []promptSection{
+			NewPromptSection("memo", "remember this"),
+		},
+	})
+
+	got, err := builder.Build(stdcontext.Background(), BuildInput{
+		Messages: []providertypes.Message{
+			{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
+		},
+		Metadata: testMetadata(t.TempDir()),
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if !strings.Contains(got.SystemPrompt, "## memo") {
+		t.Fatalf("expected memo section in prompt, got %q", got.SystemPrompt)
+	}
+}
+
 func TestDefaultBuilderBuildUsesSpanTrimPolicyWhenTrimPolicyIsUnset(t *testing.T) {
 	t.Parallel()
 
