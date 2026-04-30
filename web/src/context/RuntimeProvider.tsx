@@ -284,7 +284,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
     if (browserConfig?.gatewayBaseURL) {
       connectWithConfig(browserConfig, false).catch(() => {})
     } else {
-      setLoadingMessage('正在检测本地 Gateway...')
+      setLoadingMessage('正在启动本地 Gateway...')
       tryAutoDetectLocalGateway()
         .then(({ config: autoConfig, pluginAvailable }) => {
           setVitePluginAvailable(pluginAvailable)
@@ -427,10 +427,12 @@ function formatRuntimeError(err: unknown) {
 
 /** tryAutoDetectLocalGateway 尝试自动检测本地 Gateway 连接配置。 */
 async function tryAutoDetectLocalGateway(): Promise<{ config: RuntimeConfig | null; pluginAvailable: boolean }> {
+  const maxRetries = 60 // 最多等 60 秒（Go 编译在 Windows 上可能较慢）
   let sawPluginResponse = false
-  for (let i = 0; i < 15; i++) {
+
+  for (let i = 0; i < maxRetries; i++) {
     try {
-      const res = await fetch('/__neocode_dev_config', { signal: AbortSignal.timeout(2000) })
+      const res = await fetch('/__neocode_dev_config', { signal: AbortSignal.timeout(3000) })
       sawPluginResponse = true
       if (res.ok) {
         const data = await res.json() as { gatewayBaseURL?: string; token?: string; available?: boolean }
@@ -438,12 +440,17 @@ async function tryAutoDetectLocalGateway(): Promise<{ config: RuntimeConfig | nu
           return { config: { mode: 'browser', gatewayBaseURL: data.gatewayBaseURL, token: data.token || '' }, pluginAvailable: true }
         }
       }
+      // 503 = 插件在位但 gateway 尚未就绪，继续等待
       if (res.status === 503) {
         await new Promise((r) => setTimeout(r, 1000))
         continue
       }
-      break
-    } catch { break }
+      // 其他非 ok 响应，插件可能不兼容，退出轮询
+      if (!res.ok) break
+    } catch {
+      // fetch 失败（Vite 还没启动 / 网络错误），短暂等待后重试
+      await new Promise((r) => setTimeout(r, 1000))
+    }
   }
 
   try {
