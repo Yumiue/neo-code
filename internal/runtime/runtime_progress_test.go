@@ -658,6 +658,96 @@ func TestNoToolIncompleteTurnStillEvaluatesProgressAndInjectsReminder(t *testing
 	assertStopReasonDecided(t, events, controlplane.StopReasonAccepted, "")
 }
 
+func TestAcceptanceContinueWithoutToolCallStopsAsIncomplete(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Runtime.Verification.MaxNoProgress = 2
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store := newMemoryStore()
+	session := newRuntimeSession("session-no-tool-incomplete")
+	required := true
+	session.TaskState.VerificationProfile = agentsession.VerificationProfileTaskOnly
+	session.Todos = []agentsession.TodoItem{
+		{
+			ID:       "todo-1",
+			Content:  "must be completed",
+			Status:   agentsession.TodoStatusPending,
+			Required: &required,
+		},
+	}
+	store.sessions[session.ID] = cloneSession(session)
+
+	providerImpl := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("我已经完成了")},
+				},
+				FinishReason: "stop",
+			},
+			{
+				Message: providertypes.Message{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("任务已完成")},
+				},
+				FinishReason: "stop",
+			},
+			{
+				Message: providertypes.Message{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("不应再到这里")},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(
+		manager,
+		&stubToolManager{},
+		store,
+		&scriptedProviderFactory{provider: providerImpl},
+		&stubContextBuilder{},
+	)
+
+	if err := service.Run(context.Background(), UserInput{
+		RunID:     "run-no-tool-incomplete",
+		SessionID: session.ID,
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("继续")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if len(providerImpl.requests) != 2 {
+		t.Fatalf("expected runtime to stop after two no-tool continues, got %d requests", len(providerImpl.requests))
+	}
+	secondRequestMessages := providerImpl.requests[1].Messages
+	foundHint := false
+	for _, message := range secondRequestMessages {
+		if message.Role != providertypes.RoleSystem {
+			continue
+		}
+		content := renderPartsForTest(message.Parts)
+		if strings.Contains(content, "<acceptance_continue>") && strings.Contains(content, "MUST call todo_write") {
+			foundHint = true
+			break
+		}
+	}
+	if !foundHint {
+		t.Fatalf("expected actionable acceptance continue hint, got messages: %+v", secondRequestMessages)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertStopReasonDecided(t, events, controlplane.StopReasonNoProgressAfterFinalIntercept, "")
+}
+
 func assertStopReasonDecided(t *testing.T, events []RuntimeEvent, wantReason controlplane.StopReason, wantDetail string) {
 	t.Helper()
 	assertEventContains(t, events, EventStopReasonDecided)
