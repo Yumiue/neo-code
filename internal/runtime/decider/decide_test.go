@@ -90,6 +90,59 @@ func TestDecideWorkspaceWriteNeedsVerificationThenAccepts(t *testing.T) {
 	}
 }
 
+func TestDecideWorkspaceWriteVerificationMustBindTarget(t *testing.T) {
+	decision := Decide(DecisionInput{
+		TaskKind:         TaskKindWorkspaceWrite,
+		CompletionPassed: true,
+		Facts: runtimefacts.RuntimeFacts{
+			Files: runtimefacts.FileFacts{
+				Written: []runtimefacts.FileWriteFact{{Path: "test.txt", Bytes: 1, WorkspaceWrite: true}},
+			},
+			Verification: runtimefacts.VerificationFacts{
+				Passed: []runtimefacts.VerificationFact{{Tool: "filesystem_read_file", Scope: "artifact:other.txt", Passed: true}},
+			},
+		},
+	})
+	if decision.Status != DecisionContinue {
+		t.Fatalf("status = %q, want %q", decision.Status, DecisionContinue)
+	}
+	if len(decision.MissingFacts) == 0 || decision.MissingFacts[0].Target != "test.txt" {
+		t.Fatalf("missing facts = %+v, want target test.txt", decision.MissingFacts)
+	}
+}
+
+func TestDecideWorkspaceWriteHardFailureStops(t *testing.T) {
+	decision := Decide(DecisionInput{
+		TaskKind:         TaskKindWorkspaceWrite,
+		CompletionPassed: true,
+		Facts: runtimefacts.RuntimeFacts{
+			Files: runtimefacts.FileFacts{
+				Written: []runtimefacts.FileWriteFact{{Path: "Z:/not-exist/test.txt", Bytes: 1, WorkspaceWrite: true}},
+			},
+			Errors: runtimefacts.ErrorFacts{
+				ToolErrors: []runtimefacts.ToolErrorFact{
+					{Tool: "filesystem_write_file", ErrorClass: "permission_denied", Content: "permission denied for Z:/not-exist/test.txt"},
+					{Tool: "filesystem_write_file", ErrorClass: "permission_denied", Content: "permission denied for Z:/not-exist/test.txt"},
+				},
+			},
+		},
+	})
+	if decision.Status != DecisionFailed {
+		t.Fatalf("status = %q, want %q", decision.Status, DecisionFailed)
+	}
+}
+
+func TestDecideWorkspaceWriteWithoutExplicitTargetFallsBackToAccepted(t *testing.T) {
+	decision := Decide(DecisionInput{
+		TaskKind:         TaskKindWorkspaceWrite,
+		CompletionPassed: true,
+		UserGoal:         "edit file",
+	})
+	if decision.Status != DecisionAccepted {
+		t.Fatalf("status = %q, want %q", decision.Status, DecisionAccepted)
+	}
+}
+
 func TestDecideSubAgentRequiresCompletedFact(t *testing.T) {
 	continueDecision := Decide(DecisionInput{
 		TaskKind:         TaskKindSubAgent,
@@ -130,6 +183,43 @@ func TestDecideSubAgentRequiresCompletedFact(t *testing.T) {
 	})
 	if acceptedDecision.Status != DecisionAccepted {
 		t.Fatalf("status = %q, want %q", acceptedDecision.Status, DecisionAccepted)
+	}
+}
+
+func TestDecideSubAgentWriteIntentNeedsArtifactEvidence(t *testing.T) {
+	decision := Decide(DecisionInput{
+		TaskKind:         TaskKindSubAgent,
+		CompletionPassed: true,
+		UserGoal:         "用 subagent 创建 test1.txt，内容为 1",
+		Facts: runtimefacts.RuntimeFacts{
+			SubAgents: runtimefacts.SubAgentFacts{
+				Started:   []runtimefacts.SubAgentFact{{TaskID: "sa-1", Role: "coder"}},
+				Completed: []runtimefacts.SubAgentFact{{TaskID: "sa-1", Role: "coder", State: "succeeded"}},
+			},
+		},
+	})
+	if decision.Status != DecisionContinue {
+		t.Fatalf("status = %q, want %q", decision.Status, DecisionContinue)
+	}
+	if len(decision.MissingFacts) == 0 || decision.MissingFacts[0].Kind != "subagent_artifact_or_file_fact" {
+		t.Fatalf("missing facts = %+v", decision.MissingFacts)
+	}
+
+	accepted := Decide(DecisionInput{
+		TaskKind:         TaskKindSubAgent,
+		CompletionPassed: true,
+		UserGoal:         "用 subagent 创建 test1.txt，内容为 1",
+		Facts: runtimefacts.RuntimeFacts{
+			SubAgents: runtimefacts.SubAgentFacts{
+				Started: []runtimefacts.SubAgentFact{{TaskID: "sa-1", Role: "coder"}},
+				Completed: []runtimefacts.SubAgentFact{{
+					TaskID: "sa-1", Role: "coder", State: "succeeded", Artifacts: []string{"test1.txt"},
+				}},
+			},
+		},
+	})
+	if accepted.Status != DecisionAccepted {
+		t.Fatalf("status = %q, want %q", accepted.Status, DecisionAccepted)
 	}
 }
 

@@ -2,7 +2,10 @@ package decider
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
+
+	"neo-code/internal/runtime/facts"
 )
 
 // Decide 执行最终终态裁决，作为 runtime 的唯一决策入口。
@@ -188,11 +191,25 @@ func decideTodoState(input DecisionInput) Decision {
 // decideWorkspaceWrite 依据写入与验证事实判定文件任务。
 func decideWorkspaceWrite(input DecisionInput) Decision {
 	if len(input.Facts.Files.Written) == 0 {
+		if !hasExplicitFileTarget(input.UserGoal) {
+			return Decision{
+				Status:             DecisionAccepted,
+				StopReason:         "accepted",
+				UserVisibleSummary: "任务未声明明确文件目标，已按通用编辑任务收尾。",
+				InternalSummary:    "workspace_write downgraded to generic edit due missing explicit file target",
+			}
+		}
+		errorDetail := latestToolErrorDetail(input.Facts.Errors.ToolErrors, "filesystem_write_file")
+		details := map[string]any{}
+		if errorDetail != "" {
+			details["last_write_error"] = errorDetail
+		}
 		return Decision{
 			Status:     DecisionContinue,
 			StopReason: "todo_not_converged",
 			MissingFacts: []MissingFact{{
-				Kind: "file_written",
+				Kind:    "file_written",
+				Details: details,
 			}},
 			RequiredNextActions: []RequiredAction{{
 				Tool: "filesystem_write_file",
@@ -205,8 +222,19 @@ func decideWorkspaceWrite(input DecisionInput) Decision {
 			InternalSummary:    "workspace_write task missing file_written fact",
 		}
 	}
-	if len(input.Facts.Verification.Passed) == 0 {
-		target := input.Facts.Files.Written[0].Path
+	target := strings.TrimSpace(input.Facts.Files.Written[0].Path)
+	if target == "" {
+		target = "target.txt"
+	}
+	if hasWorkspaceWriteHardFailure(input.Facts.Errors.ToolErrors, target) {
+		return Decision{
+			Status:             DecisionFailed,
+			StopReason:         "verification_failed",
+			UserVisibleSummary: "文件写入出现持续失败，任务终止。请检查路径权限或写入策略。",
+			InternalSummary:    "workspace_write hard failure detected from tool error facts",
+		}
+	}
+	if !hasVerificationForTarget(input.Facts, target) {
 		return Decision{
 			Status:     DecisionContinue,
 			StopReason: "todo_not_converged",
@@ -223,7 +251,7 @@ func decideWorkspaceWrite(input DecisionInput) Decision {
 				},
 			}},
 			UserVisibleSummary: "已写入文件但尚未形成通过的验证事实。",
-			InternalSummary:    "workspace_write task missing verification passed facts",
+			InternalSummary:    "workspace_write task missing verification passed facts bound to target artifact",
 		}
 	}
 	return Decision{
@@ -270,6 +298,26 @@ func decideSubAgent(input DecisionInput) Decision {
 			StopReason:         "todo_not_converged",
 			UserVisibleSummary: "子代理已启动但尚未完成。",
 			InternalSummary:    "subagent task started but no completed fact",
+		}
+	}
+	if isWriteIntentGoal(input.UserGoal) && !hasSubAgentArtifactEvidence(input.Facts) {
+		return Decision{
+			Status:     DecisionContinue,
+			StopReason: "todo_not_converged",
+			MissingFacts: []MissingFact{{
+				Kind:   "subagent_artifact_or_file_fact",
+				Target: "workspace_artifact",
+			}},
+			RequiredNextActions: []RequiredAction{{
+				Tool: "filesystem_glob",
+				ArgsHint: map[string]any{
+					"pattern":            "<artifact-pattern>",
+					"expect_min_matches": 1,
+					"verification_scope": "artifact:<artifact-pattern>",
+				},
+			}},
+			UserVisibleSummary: "子代理已完成，但缺少可验证的产物事实。",
+			InternalSummary:    "subagent completed without artifact/file evidence for write-intent goal",
 		}
 	}
 	return Decision{
@@ -349,4 +397,110 @@ func firstOrEmpty(values []string) string {
 		return ""
 	}
 	return values[0]
+}
+
+// hasVerificationForTarget 判断目标文件是否已经有通过的验证事实，避免跨文件误判 accepted。
+func hasVerificationForTarget(allFacts facts.RuntimeFacts, targetPath string) bool {
+	target := strings.TrimSpace(targetPath)
+	if target == "" {
+		return false
+	}
+	targetBase := strings.TrimSpace(filepath.Base(target))
+	targetArtifactScope := "artifact:" + target
+
+	for _, fact := range allFacts.Verification.Passed {
+		scope := strings.TrimSpace(fact.Scope)
+		if scope == "" {
+			continue
+		}
+		if strings.EqualFold(scope, target) || strings.EqualFold(scope, targetBase) || strings.EqualFold(scope, targetArtifactScope) {
+			return true
+		}
+		if strings.HasPrefix(strings.ToLower(scope), "artifact:") {
+			normalized := strings.TrimPrefix(scope, "artifact:")
+			if strings.EqualFold(strings.TrimSpace(normalized), target) || strings.EqualFold(strings.TrimSpace(normalized), targetBase) {
+				return true
+			}
+		}
+	}
+	for _, fact := range allFacts.Files.ContentMatch {
+		if !fact.VerificationPassed {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(fact.Path), target) || strings.EqualFold(strings.TrimSpace(filepath.Base(fact.Path)), targetBase) {
+			return true
+		}
+	}
+	return false
+}
+
+// latestToolErrorDetail 返回指定工具的最新错误摘要，便于构造可执行 continue 提示。
+func latestToolErrorDetail(errors []facts.ToolErrorFact, toolName string) string {
+	targetTool := strings.TrimSpace(toolName)
+	for i := len(errors) - 1; i >= 0; i-- {
+		fact := errors[i]
+		if !strings.EqualFold(strings.TrimSpace(fact.Tool), targetTool) {
+			continue
+		}
+		content := strings.TrimSpace(fact.Content)
+		if content == "" {
+			content = strings.TrimSpace(fact.ErrorClass)
+		}
+		if content != "" {
+			return content
+		}
+	}
+	return ""
+}
+
+// hasWorkspaceWriteHardFailure 判断写入目标是否出现高置信不可恢复错误，防止无意义循环重试。
+func hasWorkspaceWriteHardFailure(errors []facts.ToolErrorFact, targetPath string) bool {
+	target := strings.TrimSpace(targetPath)
+	if target == "" {
+		return false
+	}
+	errorCount := 0
+	for _, fact := range errors {
+		if !strings.EqualFold(strings.TrimSpace(fact.Tool), "filesystem_write_file") {
+			continue
+		}
+		content := strings.ToLower(strings.TrimSpace(fact.Content))
+		if content == "" {
+			content = strings.ToLower(strings.TrimSpace(fact.ErrorClass))
+		}
+		if strings.Contains(content, strings.ToLower(target)) || strings.Contains(content, "permission denied") ||
+			strings.Contains(content, "path not allowed") || strings.Contains(content, "no such file") {
+			errorCount++
+		}
+	}
+	return errorCount >= 2
+}
+
+// isWriteIntentGoal 判断用户目标是否显式要求产物写入。
+func isWriteIntentGoal(goal string) bool {
+	return containsAny(strings.ToLower(strings.TrimSpace(goal)),
+		"创建文件", "写入", "修改文件", "新增文件", "create file", "write file", "edit file", "update file", ".txt", ".go", ".md", ".json")
+}
+
+// hasExplicitFileTarget 判断用户目标是否包含可定位文件目标，避免对泛化“编辑一下”任务过度拦截。
+func hasExplicitFileTarget(goal string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(goal))
+	return containsAny(
+		normalized,
+		".txt", ".go", ".md", ".json", ".yaml", ".yml", ".ts", ".tsx", ".py", "/",
+		"readme", "package.json",
+	)
+}
+
+// hasSubAgentArtifactEvidence 判断子代理任务是否已有可验证产物事实。
+func hasSubAgentArtifactEvidence(allFacts facts.RuntimeFacts) bool {
+	for _, fact := range allFacts.SubAgents.Completed {
+		if len(fact.Artifacts) > 0 {
+			return true
+		}
+	}
+	if len(allFacts.Files.Written) > 0 || len(allFacts.Files.Exists) > 0 || len(allFacts.Files.ContentMatch) > 0 {
+		return true
+	}
+	return false
 }
