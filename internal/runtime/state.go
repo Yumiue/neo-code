@@ -52,6 +52,7 @@ func newRunState(runID string, session agentsession.Session) runState {
 		runID:                 runID,
 		session:               session,
 		nextAttemptSeq:        1,
+		completion:            controlplane.CompletionState{TodoOnlyTaskCandidate: true},
 		reportedMissingSkills: make(map[string]struct{}),
 	}
 }

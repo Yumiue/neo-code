@@ -27,11 +27,24 @@ func collectCompletionState(
 ) controlplane.CompletionState {
 	current := state.completion
 	current.HasPendingAgentTodos = hasPendingAgentTodos(state.session.Todos)
+	if current.TodoOnlyTaskCandidate && current.TodoStateSatisfied {
+		current.HasPendingAgentTodos = false
+	}
 	return current
 }
 
 // applyToolExecutionCompletion 更新一轮工具执行后的 completion 事实。
 func applyToolExecutionCompletion(current controlplane.CompletionState, summary toolExecutionSummary) controlplane.CompletionState {
+	if !current.TodoOnlyTaskCandidate {
+		// keep false
+	} else {
+		for _, call := range summary.Calls {
+			if !strings.EqualFold(strings.TrimSpace(call.Name), tools.ToolNameTodoWrite) {
+				current.TodoOnlyTaskCandidate = false
+				break
+			}
+		}
+	}
 	if len(summary.Results) == 0 {
 		if summary.HasSuccessfulWorkspaceWrite {
 			current.HasUnverifiedWrites = true
@@ -44,6 +57,18 @@ func applyToolExecutionCompletion(current controlplane.CompletionState, summary 
 	for _, result := range summary.Results {
 		if result.IsError {
 			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(result.Name), tools.ToolNameTodoWrite) {
+			if stateFact, ok := result.Metadata["state_fact"].(string); ok {
+				normalized := strings.TrimSpace(stateFact)
+				if normalized != "" {
+					current.TodoStateChanged = true
+					switch normalized {
+					case "todo_created", "todo_updated", "todo_completed", "todo_failed":
+						current.TodoStateSatisfied = true
+					}
+				}
+			}
 		}
 		if result.Facts.WorkspaceWrite {
 			current.HasUnverifiedWrites = true

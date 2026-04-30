@@ -214,3 +214,46 @@ func TestShouldPromotePendingFinalProgress(t *testing.T) {
 		}
 	})
 }
+
+func TestApplyToolExecutionCompletionTracksTodoStateFacts(t *testing.T) {
+	t.Parallel()
+
+	initial := controlplane.CompletionState{
+		TodoOnlyTaskCandidate: true,
+	}
+	next := applyToolExecutionCompletion(initial, toolExecutionSummary{
+		Results: []tools.ToolResult{
+			{
+				Name: tools.ToolNameTodoWrite,
+				Metadata: map[string]any{
+					"state_fact": "todo_created",
+				},
+			},
+		},
+	})
+	if !next.TodoStateChanged || !next.TodoStateSatisfied {
+		t.Fatalf("todo state facts not tracked: %+v", next)
+	}
+	if !next.TodoOnlyTaskCandidate {
+		t.Fatalf("todo-only candidate should remain true after todo_write: %+v", next)
+	}
+}
+
+func TestCollectCompletionStateAllowsTodoOnlySatisfiedState(t *testing.T) {
+	t.Parallel()
+
+	state := newRunState("run-todo-only", newRuntimeSession("session-todo-only"))
+	state.completion = controlplane.CompletionState{
+		TodoOnlyTaskCandidate: true,
+		TodoStateSatisfied:    true,
+	}
+	required := true
+	state.session.Todos = []agentsession.TodoItem{
+		{ID: "todo-1", Content: "create todo", Required: &required, Status: agentsession.TodoStatusPending},
+	}
+
+	got := collectCompletionState(&state, providertypes.Message{Role: providertypes.RoleAssistant}, false)
+	if got.CompletionBlockedReason == controlplane.CompletionBlockedReasonPendingTodo {
+		t.Fatalf("todo-only satisfied state should not remain blocked by pending_todo: %+v", got)
+	}
+}
