@@ -548,6 +548,10 @@ function SkillModal({ onClose }: { onClose: () => void }) {
       setError('请先选择一个会话再操作 Skill')
       return
     }
+    if (!gatewayAPI) {
+      setError('Gateway 未连接')
+      return
+    }
     try {
       if (enabled) {
         await gatewayAPI.deactivateSessionSkill(currentSessionId, skillId)

@@ -7,7 +7,7 @@ import { useSessionStore } from '@/stores/useSessionStore'
 
 type PayloadRecord = Record<string, unknown> | undefined
 
-const CRITICAL_EVENTS = new Set([
+const CRITICAL_EVENTS = new Set<string>([
   EventType.PermissionRequested,
   EventType.PermissionResolved,
   EventType.Error,
@@ -32,7 +32,7 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
   if (!eventType) return
 
   // Discard non-critical events during session transition to avoid stale data
-  if (useChatStore.getState().isTransitioning && !CRITICAL_EVENTS.has(eventType as EventType)) {
+  if (useChatStore.getState().isTransitioning && !CRITICAL_EVENTS.has(eventType)) {
     return
   }
 
