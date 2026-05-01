@@ -287,8 +287,8 @@ func TestRuntimeSnapshotAndFactsHandlers(t *testing.T) {
 		t.Fatalf("expected decision block inline message")
 	}
 	decisionText := renderMessagePartsForDisplay(app.activeMessages[len(app.activeMessages)-1].Parts)
-	if !strings.Contains(decisionText, "[Runtime Decision]") || !strings.Contains(decisionText, "missing_facts") {
-		t.Fatalf("expected runtime decision block, got %q", decisionText)
+	if !strings.Contains(decisionText, "正在验收中") || !strings.Contains(decisionText, "缺少事实") {
+		t.Fatalf("expected friendly runtime decision hint, got %q", decisionText)
 	}
 }
 
@@ -695,7 +695,7 @@ func TestDecisionContinueSuppressesAssistantFinalMessage(t *testing.T) {
 		t.Fatalf("expected runtime decision block message")
 	}
 	last := app.activeMessages[len(app.activeMessages)-1]
-	if last.Role != roleSystem || !strings.Contains(renderMessagePartsForDisplay(last.Parts), "[Runtime Decision]") {
+	if last.Role != roleSystem || !strings.Contains(renderMessagePartsForDisplay(last.Parts), "正在验收中") {
 		t.Fatalf("expected runtime decision block as last message, got %+v", last)
 	}
 
@@ -731,7 +731,7 @@ func TestRuntimeEventDecisionMadeHandlerAcceptedDoesNotRenderDecisionBlock(t *te
 		t.Fatalf("expected at least one message after accepted decision activity")
 	}
 	lastText := renderMessagePartsForDisplay(app.activeMessages[len(app.activeMessages)-1].Parts)
-	if strings.Contains(lastText, "[Runtime Decision]") {
+	if strings.Contains(lastText, "正在验收中") {
 		t.Fatalf("accepted decision should not render runtime decision block, got %q", lastText)
 	}
 	if len(app.activeMessages) < initialMessages {

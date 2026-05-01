@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -4096,25 +4097,31 @@ func discardTrailingAssistantMessage(a *App) {
 	a.activeMessages = a.activeMessages[:len(a.activeMessages)-1]
 }
 
-// formatDecisionBlockMessage 把裁决结果渲染成结构化提示块，直观展示缺失事实和下一步动作。
+// formatDecisionBlockMessage 把 continue/incomplete 裁决渲染为用户友好的验收提示。
 func formatDecisionBlockMessage(payload tuiservices.DecisionMadePayload) string {
+	status := firstNonBlank(strings.TrimSpace(payload.Status), "unknown")
+	reason := firstNonBlank(strings.TrimSpace(payload.StopReason), "n/a")
+
 	lines := []string{
-		"[Runtime Decision]",
-		"status: " + firstNonBlank(strings.TrimSpace(payload.Status), "unknown"),
-		"reason: " + firstNonBlank(strings.TrimSpace(payload.StopReason), "n/a"),
+		"正在验收中...",
+		"状态: " + status,
+		"原因: " + reason,
+	}
+	if summary := strings.TrimSpace(payload.UserVisibleSummary); summary != "" {
+		lines = append(lines, "说明: "+summary)
 	}
 	if len(payload.MissingFacts) == 0 {
-		lines = append(lines, "missing_facts: []")
+		lines = append(lines, "缺少事实: 无")
 	} else {
-		lines = append(lines, "missing_facts:")
+		lines = append(lines, "缺少事实:")
 		for _, fact := range payload.MissingFacts {
 			lines = append(lines, "- "+jsonCompactOrFallback(fact))
 		}
 	}
 	if len(payload.RequiredNextActions) == 0 {
-		lines = append(lines, "required_next_actions: []")
+		lines = append(lines, "建议下一步: 无")
 	} else {
-		lines = append(lines, "required_next_actions:")
+		lines = append(lines, "建议下一步:")
 		for _, action := range payload.RequiredNextActions {
 			lines = append(lines, "- "+jsonCompactOrFallback(action))
 		}
@@ -4135,11 +4142,15 @@ func firstNonBlank(values ...string) string {
 
 // jsonCompactOrFallback 将结构压缩成单行 JSON，序列化失败时回退为字符串表示。
 func jsonCompactOrFallback(value any) string {
-	encoded, err := json.Marshal(value)
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "")
+	err := encoder.Encode(value)
 	if err != nil {
 		return fmt.Sprintf("%v", value)
 	}
-	return string(encoded)
+	return strings.TrimSpace(buf.String())
 }
 
 // applyInlineCommandError 统一写入内联命令错误，并立即刷新转录区显示。
