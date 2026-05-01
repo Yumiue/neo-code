@@ -113,12 +113,21 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	if err != nil {
 		return s.handleRunError(err)
 	}
+	if applyRequestedAgentMode(&session, input.Mode) {
+		session.UpdatedAt = time.Now()
+		if err := s.sessionStore.UpdateSessionState(ctx, sessionStateInputFromSession(session)); err != nil {
+			return s.handleRunError(err)
+		}
+	}
 
 	if sessionID == "" {
 		releaseSessionLock = s.bindSessionLock(session.ID)
 	}
 
 	state := newRunState(input.RunID, session)
+	state.planningEnabled = strings.TrimSpace(input.Mode) != "" ||
+		session.CurrentPlan != nil ||
+		agentsession.NormalizeAgentMode(session.AgentMode) == agentsession.AgentModePlan
 	state.taskID = strings.TrimSpace(input.TaskID)
 	state.agentID = strings.TrimSpace(input.AgentID)
 	state.taskKind = inferTaskKindFromInput(input.Parts)
@@ -170,7 +179,8 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		state.turn = turn
 		state.compactCount = 0
 		state.nextAttemptSeq = 1
-		if err := s.setBaseRunState(ctx, &state, controlplane.RunStatePlan); err != nil {
+		stage := resolvePlanningStageForState(&state)
+		if err := s.setBaseRunState(ctx, &state, baseRunStateForPlanningStage(stage)); err != nil {
 			return s.handleRunError(err)
 		}
 
@@ -275,6 +285,12 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			}
 			s.emitLedgerReconciled(ctx, &state, turnOutput.usageObservation, reconciled)
 			s.emitTokenUsage(ctx, &state, reconciled)
+			if snapshot.InjectFullPlan && rememberFullPlanRevision(&state.session) {
+				state.touchSession()
+				if err := s.sessionStore.UpdateSessionState(ctx, sessionStateInputFromSession(state.session)); err != nil {
+					return s.handleRunError(err)
+				}
+			}
 
 			state.mu.Lock()
 			state.completion = collectCompletionState(
@@ -290,6 +306,39 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			state.mu.Unlock()
 
 			if !hasToolCalls {
+				stage = resolvePlanningStageForState(&state)
+				if stage == planStagePlan {
+					planOutput, hasPlanOutput, err := maybeParsePlanTurnOutput(turnOutput.assistant)
+					if err != nil {
+						return s.handleRunError(err)
+					}
+					if hasPlanOutput {
+						nextPlan, err := buildPlanArtifact(state.session.CurrentPlan, planOutput)
+						if err != nil {
+							return s.handleRunError(err)
+						}
+						applyCurrentPlanRevision(&state.session, nextPlan)
+						state.touchSession()
+						if err := s.sessionStore.UpdateSessionState(ctx, sessionStateInputFromSession(state.session)); err != nil {
+							return s.handleRunError(err)
+						}
+						planMessage := providertypes.Message{
+							Role: providertypes.RoleAssistant,
+							Parts: []providertypes.ContentPart{
+								providertypes.NewTextPart(resolvePlanDisplayText(planOutput, nextPlan.Spec)),
+							},
+						}
+						if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, planMessage); err != nil {
+							return s.handleRunError(err)
+						}
+						s.emitRunScoped(ctx, EventAgentDone, &state, planMessage)
+						return nil
+					}
+				}
+				completionSignaled, err := maybeParseCompletionTurnOutput(turnOutput.assistant)
+				if err != nil {
+					return s.handleRunError(err)
+				}
 				if err := s.setBaseRunState(ctx, &state, controlplane.RunStateVerify); err != nil {
 					return s.handleRunError(err)
 				}
@@ -354,6 +403,12 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					state.lastAcceptanceBlockedReason = ""
 					state.mustUseToolAfterFinalContinue = false
 					state.noToolAfterFinalContinueStreak = 0
+					if markCurrentPlanCompleted(&state.session, completionSignaled) {
+						state.touchSession()
+						if err := s.sessionStore.UpdateSessionState(ctx, sessionStateInputFromSession(state.session)); err != nil {
+							return s.handleRunError(err)
+						}
+					}
 					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
 						return s.handleRunError(err)
 					}
@@ -429,8 +484,12 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			state.completion = applyToolExecutionCompletion(state.completion, summary)
 			afterTask := state.session.TaskState.Clone()
 			afterTodos := cloneTodosForPersistence(state.session.Todos)
+			progressRunState := controlplane.RunStateExecute
+			if resolvePlanningStageForState(&state) == planStagePlan {
+				progressRunState = controlplane.RunStatePlan
+			}
 			progressInput := collectProgressInput(
-				controlplane.RunStateExecute,
+				progressRunState,
 				beforeTask,
 				afterTask,
 				beforeTodos,
@@ -475,11 +534,18 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 	if err != nil {
 		return TurnBudgetSnapshot{}, false, err
 	}
+	stage := resolvePlanningStageForState(state)
+	readOnly := isReadOnlyPlanningStage(stage)
+	injectFullPlan := planningNeedsFullPlan(state)
 
 	builtContext, err := s.contextBuilder.Build(ctx, agentcontext.BuildInput{
 		Messages:          state.session.Messages,
 		TaskState:         state.session.TaskState,
 		Todos:             cloneTodosForPersistence(state.session.Todos),
+		AgentMode:         state.session.AgentMode,
+		PlanStage:         stage,
+		CurrentPlan:       state.session.CurrentPlan.Clone(),
+		InjectFullPlan:    injectFullPlan,
 		ActiveSkills:      activeSkills,
 		RepositorySummary: repositorySummary,
 		Repository:        repositoryContext,
@@ -506,6 +572,8 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 
 	toolSpecs, err := s.toolManager.ListAvailableSpecs(ctx, tools.SpecListInput{
 		SessionID: state.session.ID,
+		Mode:      string(agentsession.NormalizeAgentMode(state.session.AgentMode)),
+		ReadOnly:  readOnly,
 	})
 	if err != nil {
 		return TurnBudgetSnapshot{}, false, err
@@ -553,6 +621,7 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 		state.compactCount,
 		limit,
 		repeatLimit,
+		injectFullPlan,
 		request,
 	), false, nil
 }
@@ -651,6 +720,12 @@ func (s *Service) applyCompactForState(
 		}
 		state.session = session
 		if result.Applied {
+			if markCurrentPlanContextDirty(&state.session) {
+				state.session.UpdatedAt = time.Now()
+				if err := s.sessionStore.UpdateSessionState(ctx, sessionStateInputFromSession(state.session)); err != nil {
+					return err
+				}
+			}
 			if mode == contextcompact.ModeProactive || mode == contextcompact.ModeReactive {
 				state.compactCount++
 			}
@@ -814,7 +889,7 @@ func hasUserInputParts(parts []providertypes.ContentPart) bool {
 	return false
 }
 
-// sessionTitleFromParts extracts a sensible title from the input parts.
+// sessionTitleFromParts 从输入 parts 中提取一个合适的会话标题。
 func sessionTitleFromParts(parts []providertypes.ContentPart) string {
 	for _, part := range parts {
 		if part.Kind == providertypes.ContentPartText && strings.TrimSpace(part.Text) != "" {
