@@ -351,7 +351,6 @@ func (c *Collector) applySpawnSubAgentFacts(result tools.ToolResult) {
 	fact := SubAgentFact{
 		TaskID:     taskID,
 		Role:       role,
-		State:      state,
 		StopReason: stopReason,
 		Summary:    summary,
 		Artifacts:  normalizeStringList(readStringSlice(result.Metadata, "artifacts")),

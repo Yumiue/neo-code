@@ -65,7 +65,9 @@ type CommandFact struct {
 	Succeeded bool   `json:"succeeded"`
 }
 
-// SubAgentFacts 描述子代理生命周期事实。
+// SubAgentFacts 按生命周期状态分组保存子代理事实。
+// 状态由所在集合表达：Started / Completed / Failed。
+// SubAgentFact 本身不再携带 State 字段，避免出现双重状态来源。
 type SubAgentFacts struct {
 	Started   []SubAgentFact `json:"started,omitempty"`
 	Completed []SubAgentFact `json:"completed,omitempty"`
@@ -76,7 +78,6 @@ type SubAgentFacts struct {
 type SubAgentFact struct {
 	TaskID     string   `json:"task_id"`
 	Role       string   `json:"role,omitempty"`
-	State      string   `json:"state,omitempty"`
 	StopReason string   `json:"stop_reason,omitempty"`
 	Summary    string   `json:"summary,omitempty"`
 	Artifacts  []string `json:"artifacts,omitempty"`

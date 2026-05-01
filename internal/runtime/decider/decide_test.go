@@ -319,7 +319,7 @@ func TestDecideSubAgentRequiresCompletedFact(t *testing.T) {
 		Facts: runtimefacts.RuntimeFacts{
 			SubAgents: runtimefacts.SubAgentFacts{
 				Started: []runtimefacts.SubAgentFact{{TaskID: "sa-1", Role: "reviewer"}},
-				Failed:  []runtimefacts.SubAgentFact{{TaskID: "sa-1", Role: "reviewer", State: "failed"}},
+				Failed:  []runtimefacts.SubAgentFact{{TaskID: "sa-1", Role: "reviewer"}},
 			},
 		},
 	})
@@ -333,7 +333,7 @@ func TestDecideSubAgentRequiresCompletedFact(t *testing.T) {
 		Facts: runtimefacts.RuntimeFacts{
 			SubAgents: runtimefacts.SubAgentFacts{
 				Started:   []runtimefacts.SubAgentFact{{TaskID: "sa-1", Role: "reviewer"}},
-				Completed: []runtimefacts.SubAgentFact{{TaskID: "sa-1", Role: "reviewer", State: "succeeded"}},
+				Completed: []runtimefacts.SubAgentFact{{TaskID: "sa-1", Role: "reviewer"}},
 			},
 		},
 	})
@@ -350,7 +350,7 @@ func TestDecideSubAgentWriteIntentNeedsArtifactEvidence(t *testing.T) {
 		Facts: runtimefacts.RuntimeFacts{
 			SubAgents: runtimefacts.SubAgentFacts{
 				Started:   []runtimefacts.SubAgentFact{{TaskID: "sa-1", Role: "coder"}},
-				Completed: []runtimefacts.SubAgentFact{{TaskID: "sa-1", Role: "coder", State: "succeeded"}},
+				Completed: []runtimefacts.SubAgentFact{{TaskID: "sa-1", Role: "coder"}},
 			},
 		},
 	})
@@ -369,7 +369,7 @@ func TestDecideSubAgentWriteIntentNeedsArtifactEvidence(t *testing.T) {
 			SubAgents: runtimefacts.SubAgentFacts{
 				Started: []runtimefacts.SubAgentFact{{TaskID: "sa-1", Role: "coder"}},
 				Completed: []runtimefacts.SubAgentFact{{
-					TaskID: "sa-1", Role: "coder", State: "succeeded", Artifacts: []string{"test1.txt"},
+					TaskID: "sa-1", Role: "coder", Artifacts: []string{"test1.txt"},
 				}},
 			},
 		},

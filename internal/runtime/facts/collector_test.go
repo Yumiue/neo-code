@@ -1,6 +1,8 @@
 package facts
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"neo-code/internal/tools"
@@ -119,6 +121,9 @@ func TestCollectorApplyTodoConflictAndSubAgentFacts(t *testing.T) {
 	if snapshot.SubAgents.Completed[0].TaskID != "sa-1" {
 		t.Fatalf("subagent completed task_id = %q, want sa-1", snapshot.SubAgents.Completed[0].TaskID)
 	}
+	if len(snapshot.SubAgents.Failed) != 0 {
+		t.Fatalf("failed subagent facts should be empty, got %+v", snapshot.SubAgents.Failed)
+	}
 }
 
 func TestCollectorCapturesErrorFactsForToolErrors(t *testing.T) {
@@ -156,6 +161,9 @@ func TestCollectorCapturesErrorFactsForToolErrors(t *testing.T) {
 	}
 	if len(snapshot.SubAgents.Failed) != 1 || snapshot.SubAgents.Failed[0].TaskID != "spawn-1" {
 		t.Fatalf("subagent failed facts = %+v", snapshot.SubAgents.Failed)
+	}
+	if len(snapshot.SubAgents.Completed) != 0 {
+		t.Fatalf("completed subagent facts should be empty, got %+v", snapshot.SubAgents.Completed)
 	}
 }
 
@@ -266,5 +274,21 @@ func TestCollectorTodoStateFallbackAndErrorDedup(t *testing.T) {
 	}
 	if len(snapshot.Errors.ToolErrors[0].Content) != 256 {
 		t.Fatalf("error content length = %d, want 256", len(snapshot.Errors.ToolErrors[0].Content))
+	}
+}
+
+func TestSubAgentFactJSONDoesNotContainStateField(t *testing.T) {
+	payload, err := json.Marshal(SubAgentFact{
+		TaskID:     "sa-1",
+		Role:       "reviewer",
+		StopReason: "completed",
+		Summary:    "done",
+		Artifacts:  []string{"a.md"},
+	})
+	if err != nil {
+		t.Fatalf("marshal subagent fact failed: %v", err)
+	}
+	if strings.Contains(string(payload), "\"state\"") {
+		t.Fatalf("subagent fact payload should not contain state field, got %s", string(payload))
 	}
 }
