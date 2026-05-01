@@ -11,9 +11,9 @@
 
 1. Stable Core：
    - 认证与连接：`gateway.authenticate`、`gateway.ping`、`gateway.bindStream`、`gateway.event`
-   - 运行与会话：`gateway.run`、`gateway.compact`、`gateway.cancel`、`gateway.listSessions`、`gateway.loadSession`、`gateway.resolvePermission`
+   - 运行与会话：`gateway.run`、`gateway.compact`、`gateway.cancel`、`gateway.listSessions`、`gateway.loadSession`、`gateway.resolvePermission`、`gateway.deleteSession`、`gateway.renameSession`、`gateway.listFiles`
    - 工具与技能：`gateway.executeSystemTool`、`gateway.activateSessionSkill`、`gateway.deactivateSessionSkill`、`gateway.listSessionSkills`、`gateway.listAvailableSkills`
-   - Provider 管理：`gateway.listProviders`、`gateway.createCustomProvider`、`gateway.deleteCustomProvider`、`gateway.selectProviderModel`
+   - Provider 管理：`gateway.listProviders`、`gateway.createCustomProvider`、`gateway.deleteCustomProvider`、`gateway.selectProviderModel`、`gateway.listModels`、`gateway.setSessionModel`、`gateway.getSessionModel`
    - MCP 管理：`gateway.listMCPServers`、`gateway.upsertMCPServer`、`gateway.setMCPServerEnabled`、`gateway.deleteMCPServer`
 2. Experimental：`wake.openUrl`
 
