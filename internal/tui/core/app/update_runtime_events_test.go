@@ -269,12 +269,26 @@ func TestRuntimeSnapshotAndFactsHandlers(t *testing.T) {
 	runtimeEventDecisionMadeHandler(&app, agentruntime.RuntimeEvent{
 		Payload: agentruntime.DecisionMadePayload{
 			Status:             "continue",
+			StopReason:         "todo_not_converged",
 			UserVisibleSummary: "need verification facts",
+			MissingFacts: []map[string]any{
+				{"kind": "verification_passed", "target": "test.txt"},
+			},
+			RequiredNextActions: []map[string]any{
+				{"tool": "filesystem_read_file"},
+			},
 		},
 	})
 	last := app.activities[len(app.activities)-1]
 	if last.Title != "Final decision (continue)" {
 		t.Fatalf("unexpected decision activity: %+v", last)
+	}
+	if len(app.activeMessages) == 0 {
+		t.Fatalf("expected decision block inline message")
+	}
+	decisionText := renderMessagePartsForDisplay(app.activeMessages[len(app.activeMessages)-1].Parts)
+	if !strings.Contains(decisionText, "[Runtime Decision]") || !strings.Contains(decisionText, "missing_facts") {
+		t.Fatalf("expected runtime decision block, got %q", decisionText)
 	}
 }
 
@@ -658,6 +672,48 @@ func TestRuntimeEventVerificationAndAcceptanceHandlers(t *testing.T) {
 	acceptance := app.activities[len(app.activities)-1]
 	if acceptance.Title != "Acceptance decided (failed)" || !strings.Contains(acceptance.Detail, "reason=unverified_write") || !acceptance.IsError {
 		t.Fatalf("unexpected acceptance activity: %+v", acceptance)
+	}
+}
+
+func TestDecisionContinueSuppressesAssistantFinalMessage(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.activeMessages = append(app.activeMessages, providertypes.Message{
+		Role:  roleAssistant,
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("任务已完成")},
+	})
+
+	runtimeEventDecisionMadeHandler(&app, agentruntime.RuntimeEvent{
+		RunID: "run-1",
+		Payload: agentruntime.DecisionMadePayload{
+			Status:             "continue",
+			StopReason:         "todo_not_converged",
+			UserVisibleSummary: "need verification",
+		},
+	})
+
+	if len(app.activeMessages) == 0 {
+		t.Fatalf("expected runtime decision block message")
+	}
+	last := app.activeMessages[len(app.activeMessages)-1]
+	if last.Role != roleSystem || !strings.Contains(renderMessagePartsForDisplay(last.Parts), "[Runtime Decision]") {
+		t.Fatalf("expected runtime decision block as last message, got %+v", last)
+	}
+
+	runtimeEventAgentDoneHandler(&app, agentruntime.RuntimeEvent{
+		RunID: "run-1",
+		Payload: providertypes.Message{
+			Role:  roleAssistant,
+			Parts: []providertypes.ContentPart{providertypes.NewTextPart("任务已完成")},
+		},
+	})
+
+	for _, message := range app.activeMessages {
+		if message.Role != roleAssistant {
+			continue
+		}
+		if strings.Contains(renderMessagePartsForDisplay(message.Parts), "任务已完成") {
+			t.Fatalf("unexpected assistant final message kept after continue decision")
+		}
 	}
 }
 

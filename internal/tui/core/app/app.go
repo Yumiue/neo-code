@@ -145,6 +145,7 @@ type appRuntimeState struct {
 	transcriptContent       string
 	transcriptScrollbarDrag bool
 	startupScreenLocked     bool
+	suppressAssistantForRun string
 
 	textSelection struct {
 		active    bool

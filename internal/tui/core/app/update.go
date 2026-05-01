@@ -2621,6 +2621,13 @@ func runtimeEventDecisionMadeHandler(a *App, event tuiservices.RuntimeEvent) boo
 	if status == "" {
 		status = "unknown"
 	}
+	statusLower := strings.ToLower(status)
+	if statusLower == "continue" || statusLower == "incomplete" {
+		discardTrailingAssistantMessage(a)
+		a.state.StreamingReply = false
+		a.suppressAssistantForRun = strings.TrimSpace(event.RunID)
+		a.appendInlineMessage(roleSystem, formatDecisionBlockMessage(payload))
+	}
 	detail := strings.TrimSpace(payload.UserVisibleSummary)
 	if detail == "" {
 		detail = strings.TrimSpace(payload.InternalSummary)
@@ -3012,6 +3019,7 @@ func runtimeEventUserMessageHandler(a *App, event tuiservices.RuntimeEvent) bool
 	if runID != "" {
 		a.state.ActiveRunID = runID
 	}
+	a.suppressAssistantForRun = ""
 	if sessionID := strings.TrimSpace(event.SessionID); sessionID != "" {
 		a.setActiveSessionID(sessionID)
 	}
@@ -3182,6 +3190,9 @@ func runtimeEventAgentDoneHandler(a *App, event tuiservices.RuntimeEvent) bool {
 		a.state.StatusText = statusReady
 	}
 	if payload, ok := event.Payload.(providertypes.Message); ok {
+		if shouldSuppressAssistantFinalMessage(a, strings.TrimSpace(event.RunID)) {
+			return false
+		}
 		content := renderMessagePartsForDisplay(payload.Parts)
 		if strings.TrimSpace(content) != "" && !a.lastAssistantMatches(content) {
 			a.activeMessages = append(a.activeMessages, providertypes.Message{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart(content)}})
@@ -3377,6 +3388,80 @@ func (a *App) appendInlineMessage(role string, message string) {
 	}
 
 	a.activeMessages = append(a.activeMessages, providertypes.Message{Role: role, Parts: []providertypes.ContentPart{providertypes.NewTextPart(content)}})
+}
+
+// shouldSuppressAssistantFinalMessage 判断是否应抑制当前 run 的 assistant 最终消息，防止 continue/incomplete 误展示“已完成”。
+func shouldSuppressAssistantFinalMessage(a *App, runID string) bool {
+	if a == nil {
+		return false
+	}
+	targetRunID := strings.TrimSpace(a.suppressAssistantForRun)
+	if targetRunID == "" {
+		return false
+	}
+	if runID != "" && !strings.EqualFold(runID, targetRunID) {
+		return false
+	}
+	a.suppressAssistantForRun = ""
+	return true
+}
+
+// discardTrailingAssistantMessage 在继续/未完成裁决时移除尾部 assistant 文本，避免用户看到伪最终回复。
+func discardTrailingAssistantMessage(a *App) {
+	if a == nil || len(a.activeMessages) == 0 {
+		return
+	}
+	last := a.activeMessages[len(a.activeMessages)-1]
+	if last.Role != roleAssistant {
+		return
+	}
+	a.activeMessages = a.activeMessages[:len(a.activeMessages)-1]
+}
+
+// formatDecisionBlockMessage 把裁决结果渲染成结构化提示块，直观展示缺失事实和下一步动作。
+func formatDecisionBlockMessage(payload tuiservices.DecisionMadePayload) string {
+	lines := []string{
+		"[Runtime Decision]",
+		"status: " + firstNonBlank(strings.TrimSpace(payload.Status), "unknown"),
+		"reason: " + firstNonBlank(strings.TrimSpace(payload.StopReason), "n/a"),
+	}
+	if len(payload.MissingFacts) == 0 {
+		lines = append(lines, "missing_facts: []")
+	} else {
+		lines = append(lines, "missing_facts:")
+		for _, fact := range payload.MissingFacts {
+			lines = append(lines, "- "+jsonCompactOrFallback(fact))
+		}
+	}
+	if len(payload.RequiredNextActions) == 0 {
+		lines = append(lines, "required_next_actions: []")
+	} else {
+		lines = append(lines, "required_next_actions:")
+		for _, action := range payload.RequiredNextActions {
+			lines = append(lines, "- "+jsonCompactOrFallback(action))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// firstNonBlank 返回第一个非空候选值，保证展示字段稳定可读。
+func firstNonBlank(values ...string) string {
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+// jsonCompactOrFallback 将结构压缩成单行 JSON，序列化失败时回退为字符串表示。
+func jsonCompactOrFallback(value any) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Sprintf("%v", value)
+	}
+	return string(encoded)
 }
 
 // applyInlineCommandError 缁熶竴鍐欏叆鍛戒护閿欒骞跺埛鏂拌浆褰曞尯锛岀‘淇濋敊璇彁绀虹珛鍗冲彲瑙併€?
