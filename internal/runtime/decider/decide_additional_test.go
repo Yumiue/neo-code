@@ -105,3 +105,51 @@ func TestHelperFunctionsBranches(t *testing.T) {
 	}
 }
 
+func TestHelperFunctionsAdditionalBranches(t *testing.T) {
+	t.Parallel()
+
+	if got := firstOrEmpty(nil); got != "" {
+		t.Fatalf("firstOrEmpty(nil) = %q, want empty", got)
+	}
+	if got := firstOrEmpty([]string{"a", "b"}); got != "a" {
+		t.Fatalf("firstOrEmpty = %q, want a", got)
+	}
+
+	open := collectOpenRequiredTodos([]TodoViewItem{
+		{ID: "todo-1", Required: true, Status: "pending"},
+		{ID: "todo-2", Required: true, Status: "in_progress"},
+		{ID: "todo-3", Required: true, Status: "completed"},
+		{ID: "", Required: true, Status: "pending"},
+	})
+	if len(open) != 2 || open[0] != "todo-1" || open[1] != "todo-2" {
+		t.Fatalf("collectOpenRequiredTodos = %#v, want [todo-1 todo-2]", open)
+	}
+
+	if got := latestToolErrorDetail([]runtimefacts.ToolErrorFact{
+		{Tool: "filesystem_write_file", Content: " last content "},
+	}, "filesystem_write_file"); got != "last content" {
+		t.Fatalf("latestToolErrorDetail(content fallback) = %q, want trimmed content", got)
+	}
+
+	if hasWorkspaceWriteHardFailure([]runtimefacts.ToolErrorFact{
+		{Tool: "filesystem_write_file", ErrorClass: "permission_denied", Content: "permission denied for /tmp/other.txt"},
+		{Tool: "filesystem_write_file", ErrorClass: "permission_denied", Content: "permission denied for /tmp/other2.txt"},
+	}, "/tmp/target.txt") {
+		t.Fatal("hasWorkspaceWriteHardFailure should require target correlation")
+	}
+
+	target, expected, ok := selectVerificationTarget(DecisionInput{
+		UserGoal: "please edit ./docs/readme.md and include hello",
+		Facts: runtimefacts.RuntimeFacts{
+			Files: runtimefacts.FileFacts{
+				Written: []runtimefacts.FileWriteFact{
+					{Path: "a.md", WorkspaceWrite: true},
+					{Path: "docs/readme.md", WorkspaceWrite: true, ExpectedContent: "hello"},
+				},
+			},
+		},
+	})
+	if !ok || target != "docs/readme.md" || expected != "hello" {
+		t.Fatalf("selectVerificationTarget = target=%q expected=%q ok=%v", target, expected, ok)
+	}
+}
