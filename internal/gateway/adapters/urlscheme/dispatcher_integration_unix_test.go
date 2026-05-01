@@ -181,6 +181,14 @@ func (s *urlschemeIntegrationRuntimeStub) ListSessionTodos(
 	return gateway.TodoSnapshot{}, nil
 }
 
+// GetRuntimeSnapshot 返回空快照，用于满足 RuntimePort 接口并保持该集成测试关注 URL 分发主路径。
+func (s *urlschemeIntegrationRuntimeStub) GetRuntimeSnapshot(
+	context.Context,
+	gateway.GetRuntimeSnapshotInput,
+) (gateway.RuntimeSnapshot, error) {
+	return gateway.RuntimeSnapshot{}, nil
+}
+
 func waitGatewayReady(address string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
