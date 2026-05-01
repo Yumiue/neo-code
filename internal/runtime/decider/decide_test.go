@@ -264,6 +264,31 @@ func TestDecideWorkspaceWriteWithoutExplicitTargetFallsBackToAccepted(t *testing
 	}
 }
 
+func TestLatestWriteVerificationHintBranches(t *testing.T) {
+	facts := runtimefacts.RuntimeFacts{
+		Files: runtimefacts.FileFacts{
+			Written: []runtimefacts.FileWriteFact{
+				{Path: "a.txt", ExpectedContent: "A"},
+				{Path: "b.txt", ExpectedContent: "B"},
+			},
+		},
+	}
+	path, expected := latestWriteVerificationHint(facts, "b.txt")
+	if path != "b.txt" || expected != "B" {
+		t.Fatalf("hint for preferred path = (%q,%q), want (b.txt,B)", path, expected)
+	}
+
+	path, expected = latestWriteVerificationHint(facts, "missing.txt")
+	if path != "missing.txt" || expected != "" {
+		t.Fatalf("fallback preferred hint = (%q,%q), want (missing.txt,\"\")", path, expected)
+	}
+
+	path, expected = latestWriteVerificationHint(facts, "")
+	if path != "b.txt" || expected != "B" {
+		t.Fatalf("latest hint = (%q,%q), want (b.txt,B)", path, expected)
+	}
+}
+
 func TestDecideWorkspaceWriteMissingFactsShouldRequestInputNotPlaceholderAction(t *testing.T) {
 	decision := Decide(DecisionInput{
 		TaskKind:         TaskKindWorkspaceWrite,

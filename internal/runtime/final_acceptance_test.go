@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -200,6 +201,73 @@ func TestFinalAcceptanceHelpers(t *testing.T) {
 		pending, _ := result.Evidence["pending_ids"].([]string)
 		if len(pending) != 1 || pending[0] != "todo-1" {
 			t.Fatalf("pending ids = %+v, want [todo-1]", pending)
+		}
+	})
+
+	t.Run("buildVerifyTodos and content checks keep normalized values", func(t *testing.T) {
+		t.Parallel()
+		required := true
+		todos := buildVerifyTodos([]agentsession.TodoItem{
+			{
+				ID:         " todo-1 ",
+				Content:    " do work ",
+				Status:     agentsession.TodoStatusInProgress,
+				Required:   &required,
+				Acceptance: []string{"a"},
+				Artifacts:  []string{"x.md"},
+				Supersedes: []string{"todo-0"},
+				ContentChecks: []agentsession.TodoContentCheck{
+					{Artifact: " README.md ", Contains: []string{"done"}},
+				},
+				RetryCount:    1,
+				RetryLimit:    2,
+				FailureReason: " none ",
+			},
+		})
+		if len(todos) != 1 {
+			t.Fatalf("todos len = %d, want 1", len(todos))
+		}
+		if todos[0].ID != "todo-1" || todos[0].Content != "do work" || todos[0].Status != "in_progress" {
+			t.Fatalf("unexpected todo snapshot: %+v", todos[0])
+		}
+		if len(todos[0].ContentChecks) != 1 || todos[0].ContentChecks[0].Artifact != "README.md" {
+			t.Fatalf("unexpected content checks: %+v", todos[0].ContentChecks)
+		}
+	})
+
+	t.Run("buildVerifyMessages ignores non-text and trims content", func(t *testing.T) {
+		t.Parallel()
+		messages := buildVerifyMessages([]providertypes.Message{
+			{
+				Role: " assistant ",
+				Parts: []providertypes.ContentPart{
+					providertypes.NewTextPart("  first "),
+					{Kind: "tool_call", Text: "ignored"},
+					providertypes.NewTextPart("second"),
+				},
+			},
+		})
+		if len(messages) != 1 {
+			t.Fatalf("messages len = %d, want 1", len(messages))
+		}
+		if messages[0].Role != "assistant" || messages[0].Content != "first\nsecond" {
+			t.Fatalf("unexpected message snapshot: %+v", messages[0])
+		}
+	})
+
+	t.Run("evidence helpers normalize and serialize", func(t *testing.T) {
+		t.Parallel()
+		items := evidenceStringList([]any{" b ", map[string]any{"k": 1}, "a", "a"})
+		if len(items) != 3 || items[0] != "a" || items[1] != "b" {
+			t.Fatalf("unexpected evidence list: %+v", items)
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(items[2]), &m); err != nil {
+			t.Fatalf("expected JSON encoded item, got %q", items[2])
+		}
+		preview := evidenceJSONPreview(map[string]any{"x": 1})
+		if preview == "" || !strings.Contains(preview, "\"x\":1") {
+			t.Fatalf("unexpected preview: %q", preview)
 		}
 	})
 }
