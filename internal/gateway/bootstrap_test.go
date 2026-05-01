@@ -264,6 +264,161 @@ func TestDispatchRequestFramePing(t *testing.T) {
 	}
 }
 
+func TestDecodeExecuteSystemToolPayloadBranches(t *testing.T) {
+	t.Parallel()
+
+	params, frameErr := decodeExecuteSystemToolPayload(map[string]any{
+		"tool_name": "memo_list",
+		"arguments": map[string]any{"title": "a"},
+	})
+	if frameErr != nil {
+		t.Fatalf("decodeExecuteSystemToolPayload(map) err = %v", frameErr)
+	}
+	if string(params.Arguments) == "" || !bytes.Contains(params.Arguments, []byte(`"title"`)) {
+		t.Fatalf("arguments = %s, want marshaled json", string(params.Arguments))
+	}
+
+	_, frameErr = decodeExecuteSystemToolPayload((*protocol.ExecuteSystemToolParams)(nil))
+	if frameErr == nil || frameErr.Code != string(ErrorCodeInvalidAction) {
+		t.Fatalf("nil pointer payload should be invalid_action, got %v", frameErr)
+	}
+
+	_, frameErr = decodeExecuteSystemToolPayload(invalidJSONMarshaler{})
+	if frameErr == nil || frameErr.Code != string(ErrorCodeInvalidAction) {
+		t.Fatalf("marshal failure should be invalid_action, got %v", frameErr)
+	}
+}
+
+func TestNormalizeExecuteSystemToolParamsBranches(t *testing.T) {
+	t.Parallel()
+
+	normalized, frameErr := normalizeExecuteSystemToolParams(protocol.ExecuteSystemToolParams{
+		ToolName:  "memo_list",
+		Arguments: []byte("null"),
+	})
+	if frameErr != nil {
+		t.Fatalf("normalize null arguments err = %v", frameErr)
+	}
+	if string(normalized.Arguments) != "{}" {
+		t.Fatalf("normalized args = %s, want {}", string(normalized.Arguments))
+	}
+
+	_, frameErr = normalizeExecuteSystemToolParams(protocol.ExecuteSystemToolParams{
+		ToolName:  "memo_list",
+		Arguments: []byte("{"),
+	})
+	if frameErr == nil || frameErr.Code != string(ErrorCodeInvalidAction) {
+		t.Fatalf("invalid json arguments should be invalid_action, got %v", frameErr)
+	}
+}
+
+func TestDecodeSessionSkillAndSnapshotPayloadBranches(t *testing.T) {
+	t.Parallel()
+
+	params, frameErr := decodeActivateSessionSkillPayload(protocol.ActivateSessionSkillParams{
+		SessionID: " s-1 ",
+		SkillID:   " skill-1 ",
+	})
+	if frameErr != nil || params.SessionID != "s-1" || params.SkillID != "skill-1" {
+		t.Fatalf("decodeActivateSessionSkillPayload(struct) = %#v, err=%v", params, frameErr)
+	}
+	params, frameErr = decodeActivateSessionSkillPayload(&protocol.ActivateSessionSkillParams{
+		SessionID: "s-2",
+		SkillID:   "skill-2",
+	})
+	if frameErr != nil || params.SessionID != "s-2" || params.SkillID != "skill-2" {
+		t.Fatalf("decodeActivateSessionSkillPayload(ptr) = %#v, err=%v", params, frameErr)
+	}
+	params, frameErr = decodeActivateSessionSkillPayload(map[string]any{"session_id": "s-3", "skill_id": "skill-3"})
+	if frameErr != nil || params.SessionID != "s-3" || params.SkillID != "skill-3" {
+		t.Fatalf("decodeActivateSessionSkillPayload(map) = %#v, err=%v", params, frameErr)
+	}
+	_, frameErr = decodeActivateSessionSkillPayload((*protocol.ActivateSessionSkillParams)(nil))
+	if frameErr == nil || frameErr.Code != string(ErrorCodeInvalidAction) {
+		t.Fatalf("nil activate payload should be invalid_action, got %v", frameErr)
+	}
+	_, frameErr = decodeActivateSessionSkillPayload(invalidJSONMarshaler{})
+	if frameErr == nil || frameErr.Code != string(ErrorCodeInvalidAction) {
+		t.Fatalf("marshal error activate payload should be invalid_action, got %v", frameErr)
+	}
+
+	_, frameErr = decodeDeactivateSessionSkillPayload(protocol.DeactivateSessionSkillParams{
+		SessionID: "",
+		SkillID:   "skill",
+	})
+	if frameErr == nil || frameErr.Code != ErrorCodeMissingRequiredField.String() {
+		t.Fatalf("missing session_id should be missing_required_field, got %v", frameErr)
+	}
+	_, frameErr = decodeDeactivateSessionSkillPayload((*protocol.DeactivateSessionSkillParams)(nil))
+	if frameErr == nil || frameErr.Code != string(ErrorCodeInvalidAction) {
+		t.Fatalf("nil deactivate payload should be invalid_action, got %v", frameErr)
+	}
+	_, frameErr = decodeDeactivateSessionSkillPayload(invalidJSONMarshaler{})
+	if frameErr == nil || frameErr.Code != string(ErrorCodeInvalidAction) {
+		t.Fatalf("marshal error deactivate payload should be invalid_action, got %v", frameErr)
+	}
+
+	_, frameErr = decodeListSessionSkillsPayload((*protocol.ListSessionSkillsParams)(nil))
+	if frameErr == nil || frameErr.Code != string(ErrorCodeInvalidAction) {
+		t.Fatalf("nil list_session_skills payload should be invalid_action, got %v", frameErr)
+	}
+	listSkills, frameErr := decodeListSessionSkillsPayload(protocol.ListSessionSkillsParams{SessionID: " s-1 "})
+	if frameErr != nil || listSkills.SessionID != "s-1" {
+		t.Fatalf("decodeListSessionSkillsPayload(struct) = %#v, err=%v", listSkills, frameErr)
+	}
+	listSkills, frameErr = decodeListSessionSkillsPayload(map[string]any{"session_id": " s-2 "})
+	if frameErr != nil || listSkills.SessionID != "s-2" {
+		t.Fatalf("decodeListSessionSkillsPayload(map) = %#v, err=%v", listSkills, frameErr)
+	}
+	_, frameErr = decodeListSessionSkillsPayload(invalidJSONMarshaler{})
+	if frameErr == nil || frameErr.Code != string(ErrorCodeInvalidAction) {
+		t.Fatalf("marshal error list_session_skills payload should be invalid_action, got %v", frameErr)
+	}
+
+	_, frameErr = decodeListAvailableSkillsPayload((*protocol.ListAvailableSkillsParams)(nil))
+	if frameErr == nil || frameErr.Code != string(ErrorCodeInvalidAction) {
+		t.Fatalf("nil list_available_skills payload should be invalid_action, got %v", frameErr)
+	}
+	listAvailable, frameErr := decodeListAvailableSkillsPayload(protocol.ListAvailableSkillsParams{SessionID: " s-3 "})
+	if frameErr != nil || listAvailable.SessionID != "s-3" {
+		t.Fatalf("decodeListAvailableSkillsPayload(struct) = %#v, err=%v", listAvailable, frameErr)
+	}
+	listAvailable, frameErr = decodeListAvailableSkillsPayload(map[string]any{"session_id": " s-4 "})
+	if frameErr != nil || listAvailable.SessionID != "s-4" {
+		t.Fatalf("decodeListAvailableSkillsPayload(map) = %#v, err=%v", listAvailable, frameErr)
+	}
+	_, frameErr = decodeListAvailableSkillsPayload(invalidJSONMarshaler{})
+	if frameErr == nil || frameErr.Code != string(ErrorCodeInvalidAction) {
+		t.Fatalf("marshal error list_available_skills payload should be invalid_action, got %v", frameErr)
+	}
+
+	listTodos, frameErr := decodeListSessionTodosPayload(protocol.ListSessionTodosParams{SessionID: " s-5 "})
+	if frameErr != nil || listTodos.SessionID != "s-5" {
+		t.Fatalf("decodeListSessionTodosPayload(struct) = %#v, err=%v", listTodos, frameErr)
+	}
+	listTodos, frameErr = decodeListSessionTodosPayload(map[string]any{"session_id": " s-6 "})
+	if frameErr != nil || listTodos.SessionID != "s-6" {
+		t.Fatalf("decodeListSessionTodosPayload(map) = %#v, err=%v", listTodos, frameErr)
+	}
+	_, frameErr = decodeListSessionTodosPayload((*protocol.ListSessionTodosParams)(nil))
+	if frameErr == nil || frameErr.Code != string(ErrorCodeInvalidAction) {
+		t.Fatalf("nil session_todos_list payload should be invalid_action, got %v", frameErr)
+	}
+
+	getSnapshot, frameErr := decodeGetRuntimeSnapshotPayload(protocol.GetRuntimeSnapshotParams{SessionID: " s-7 "})
+	if frameErr != nil || getSnapshot.SessionID != "s-7" {
+		t.Fatalf("decodeGetRuntimeSnapshotPayload(struct) = %#v, err=%v", getSnapshot, frameErr)
+	}
+	getSnapshot, frameErr = decodeGetRuntimeSnapshotPayload(map[string]any{"session_id": " s-8 "})
+	if frameErr != nil || getSnapshot.SessionID != "s-8" {
+		t.Fatalf("decodeGetRuntimeSnapshotPayload(map) = %#v, err=%v", getSnapshot, frameErr)
+	}
+	_, frameErr = decodeGetRuntimeSnapshotPayload((*protocol.GetRuntimeSnapshotParams)(nil))
+	if frameErr == nil || frameErr.Code != string(ErrorCodeInvalidAction) {
+		t.Fatalf("nil runtime_snapshot_get payload should be invalid_action, got %v", frameErr)
+	}
+}
+
 func TestDispatchRequestFrameWakeOpenURLReviewSuccess(t *testing.T) {
 	createInputs := make(chan CreateSessionInput, 1)
 	stub := &bootstrapRuntimeStub{
