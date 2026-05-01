@@ -8,6 +8,13 @@ import (
 	runtimefacts "neo-code/internal/runtime/facts"
 )
 
+func assertDecisionStatus(t *testing.T, decision Decision, want DecisionStatus) {
+	t.Helper()
+	if decision.Status != want {
+		t.Fatalf("status = %q, want %q", decision.Status, want)
+	}
+}
+
 func TestDecideRequiredTodoFailedStopsImmediately(t *testing.T) {
 	decision := Decide(DecisionInput{
 		TaskKind: TaskKindTodoState,
@@ -138,6 +145,25 @@ func TestDecideWorkspaceWriteVerificationMustBindTarget(t *testing.T) {
 	}
 }
 
+func TestDecideWorkspaceWriteVerificationShouldNotMatchByBasenameOnly(t *testing.T) {
+	decision := Decide(DecisionInput{
+		TaskKind:         TaskKindWorkspaceWrite,
+		CompletionPassed: true,
+		Facts: runtimefacts.RuntimeFacts{
+			Files: runtimefacts.FileFacts{
+				Written: []runtimefacts.FileWriteFact{{Path: "src/readme.md", Bytes: 1, WorkspaceWrite: true}},
+			},
+			Verification: runtimefacts.VerificationFacts{
+				Passed: []runtimefacts.VerificationFact{{Tool: "filesystem_read_file", Scope: "artifact:docs/readme.md", Passed: true}},
+			},
+		},
+	})
+	assertDecisionStatus(t, decision, DecisionContinue)
+	if len(decision.MissingFacts) == 0 || decision.MissingFacts[0].Target != "src/readme.md" {
+		t.Fatalf("missing facts = %+v, want target src/readme.md", decision.MissingFacts)
+	}
+}
+
 func TestDecideCompletionBlockedUnverifiedWriteUsesExpectedContentWhenAvailable(t *testing.T) {
 	decision := Decide(DecisionInput{
 		TaskKind:         TaskKindWorkspaceWrite,
@@ -206,6 +232,25 @@ func TestDecideWorkspaceWriteHardFailureStops(t *testing.T) {
 	if decision.Status != DecisionFailed {
 		t.Fatalf("status = %q, want %q", decision.Status, DecisionFailed)
 	}
+}
+
+func TestDecideWorkspaceWriteHardFailureRequiresTargetCorrelation(t *testing.T) {
+	decision := Decide(DecisionInput{
+		TaskKind:         TaskKindWorkspaceWrite,
+		CompletionPassed: true,
+		Facts: runtimefacts.RuntimeFacts{
+			Files: runtimefacts.FileFacts{
+				Written: []runtimefacts.FileWriteFact{{Path: "target/test.txt", Bytes: 1, WorkspaceWrite: true}},
+			},
+			Errors: runtimefacts.ErrorFacts{
+				ToolErrors: []runtimefacts.ToolErrorFact{
+					{Tool: "filesystem_write_file", ErrorClass: "permission_denied", Content: "permission denied for other/path.txt"},
+					{Tool: "filesystem_write_file", ErrorClass: "permission_denied", Content: "permission denied for another/path.txt"},
+				},
+			},
+		},
+	})
+	assertDecisionStatus(t, decision, DecisionContinue)
 }
 
 func TestDecideWorkspaceWriteWithoutExplicitTargetFallsBackToAccepted(t *testing.T) {

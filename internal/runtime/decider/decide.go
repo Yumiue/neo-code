@@ -124,50 +124,12 @@ func continueWithCompletionReason(input DecisionInput) Decision {
 				InternalSummary:    "completion blocked by unverified_write without resolvable verification target",
 			}
 		}
-		scope := "artifact:" + target
-		if expectedContent != "" {
-			return Decision{
-				Status:     DecisionContinue,
-				StopReason: "todo_not_converged",
-				MissingFacts: []MissingFact{{
-					Kind:     "verification_passed",
-					Target:   target,
-					Expected: expectedContent,
-				}},
-				RequiredNextActions: []RequiredAction{
-					{
-						Tool: "filesystem_read_file",
-						ArgsHint: map[string]any{
-							"path":               target,
-							"expect_contains":    []string{expectedContent},
-							"verification_scope": scope,
-						},
-					},
-				},
-				UserVisibleSummary: "写入事实尚未完成验证，需要补充 verification facts。",
-				InternalSummary:    "completion blocked by unverified_write with content-aware verification action",
-			}
-		}
-		return Decision{
-			Status:     DecisionContinue,
-			StopReason: "todo_not_converged",
-			MissingFacts: []MissingFact{{
-				Kind:   "file_exists",
-				Target: target,
-			}},
-			RequiredNextActions: []RequiredAction{
-				{
-					Tool: "filesystem_glob",
-					ArgsHint: map[string]any{
-						"pattern":            target,
-						"expect_min_matches": 1,
-						"verification_scope": scope,
-					},
-				},
-			},
-			UserVisibleSummary: "写入事实尚未完成验证，需要补充 verification facts。",
-			InternalSummary:    "completion blocked by unverified_write with existence fallback action",
-		}
+		return buildWriteVerificationDecision(
+			target,
+			expectedContent,
+			"写入事实尚未完成验证，需要补充 verification facts。",
+			"completion blocked by unverified_write",
+		)
 	case "post_execute_closure_required":
 		return Decision{
 			Status:     DecisionContinue,
@@ -299,47 +261,12 @@ func decideWorkspaceWrite(input DecisionInput) Decision {
 		}
 	}
 	if !hasVerificationForTarget(input.Facts, target) {
-		verificationTarget := target
-		scope := fmt.Sprintf("artifact:%s", verificationTarget)
-		if expectedContent != "" {
-			return Decision{
-				Status:     DecisionContinue,
-				StopReason: "todo_not_converged",
-				MissingFacts: []MissingFact{{
-					Kind:     "verification_passed",
-					Target:   verificationTarget,
-					Expected: expectedContent,
-				}},
-				RequiredNextActions: []RequiredAction{{
-					Tool: "filesystem_read_file",
-					ArgsHint: map[string]any{
-						"path":               verificationTarget,
-						"expect_contains":    []string{expectedContent},
-						"verification_scope": scope,
-					},
-				}},
-				UserVisibleSummary: "已写入文件但尚未形成通过的验证事实。",
-				InternalSummary:    "workspace_write task missing content verification facts bound to target artifact",
-			}
-		}
-		return Decision{
-			Status:     DecisionContinue,
-			StopReason: "todo_not_converged",
-			MissingFacts: []MissingFact{{
-				Kind:   "file_exists",
-				Target: verificationTarget,
-			}},
-			RequiredNextActions: []RequiredAction{{
-				Tool: "filesystem_glob",
-				ArgsHint: map[string]any{
-					"pattern":            verificationTarget,
-					"expect_min_matches": 1,
-					"verification_scope": scope,
-				},
-			}},
-			UserVisibleSummary: "已写入文件但尚未形成通过的验证事实。",
-			InternalSummary:    "workspace_write task missing existence verification facts bound to target artifact",
-		}
+		return buildWriteVerificationDecision(
+			target,
+			expectedContent,
+			"已写入文件但尚未形成通过的验证事实。",
+			"workspace_write task missing",
+		)
 	}
 	return Decision{
 		Status:             DecisionAccepted,
@@ -450,6 +377,50 @@ func decideMixed(input DecisionInput) Decision {
 	}
 }
 
+// buildWriteVerificationDecision 统一构造写入后缺少验证事实时的继续决策。
+func buildWriteVerificationDecision(target string, expectedContent string, userSummary string, internalPrefix string) Decision {
+	scope := fmt.Sprintf("artifact:%s", target)
+	if expectedContent != "" {
+		return Decision{
+			Status:     DecisionContinue,
+			StopReason: "todo_not_converged",
+			MissingFacts: []MissingFact{{
+				Kind:     "verification_passed",
+				Target:   target,
+				Expected: expectedContent,
+			}},
+			RequiredNextActions: []RequiredAction{{
+				Tool: "filesystem_read_file",
+				ArgsHint: map[string]any{
+					"path":               target,
+					"expect_contains":    []string{expectedContent},
+					"verification_scope": scope,
+				},
+			}},
+			UserVisibleSummary: userSummary,
+			InternalSummary:    internalPrefix + " content verification facts bound to target artifact",
+		}
+	}
+	return Decision{
+		Status:     DecisionContinue,
+		StopReason: "todo_not_converged",
+		MissingFacts: []MissingFact{{
+			Kind:   "file_exists",
+			Target: target,
+		}},
+		RequiredNextActions: []RequiredAction{{
+			Tool: "filesystem_glob",
+			ArgsHint: map[string]any{
+				"pattern":            target,
+				"expect_min_matches": 1,
+				"verification_scope": scope,
+			},
+		}},
+		UserVisibleSummary: userSummary,
+		InternalSummary:    internalPrefix + " existence verification facts bound to target artifact",
+	}
+}
+
 // collectOpenRequiredTodos 收集 required 且未终态的 todo id。
 func collectOpenRequiredTodos(items []TodoViewItem) []string {
 	ids := make([]string, 0)
@@ -483,20 +454,22 @@ func hasVerificationForTarget(allFacts facts.RuntimeFacts, targetPath string) bo
 	if target == "" {
 		return false
 	}
-	targetBase := strings.TrimSpace(filepath.Base(target))
 	targetArtifactScope := "artifact:" + target
+	normalizedTarget := strings.ToLower(filepath.Clean(target))
 
 	for _, fact := range allFacts.Verification.Passed {
 		scope := strings.TrimSpace(fact.Scope)
 		if scope == "" {
 			continue
 		}
-		if strings.EqualFold(scope, target) || strings.EqualFold(scope, targetBase) || strings.EqualFold(scope, targetArtifactScope) {
+		normalizedScope := strings.ToLower(filepath.Clean(scope))
+		if strings.EqualFold(scope, target) || strings.EqualFold(scope, targetArtifactScope) || normalizedScope == normalizedTarget {
 			return true
 		}
 		if strings.HasPrefix(strings.ToLower(scope), "artifact:") {
 			normalized := strings.TrimPrefix(scope, "artifact:")
-			if strings.EqualFold(strings.TrimSpace(normalized), target) || strings.EqualFold(strings.TrimSpace(normalized), targetBase) {
+			cleaned := strings.TrimSpace(normalized)
+			if strings.EqualFold(cleaned, target) || strings.ToLower(filepath.Clean(cleaned)) == normalizedTarget {
 				return true
 			}
 		}
@@ -505,7 +478,8 @@ func hasVerificationForTarget(allFacts facts.RuntimeFacts, targetPath string) bo
 		if !fact.VerificationPassed {
 			continue
 		}
-		if strings.EqualFold(strings.TrimSpace(fact.Path), target) || strings.EqualFold(strings.TrimSpace(filepath.Base(fact.Path)), targetBase) {
+		if strings.EqualFold(strings.TrimSpace(fact.Path), target) ||
+			strings.ToLower(filepath.Clean(strings.TrimSpace(fact.Path))) == normalizedTarget {
 			return true
 		}
 	}
@@ -537,6 +511,8 @@ func hasWorkspaceWriteHardFailure(errors []facts.ToolErrorFact, targetPath strin
 	if target == "" {
 		return false
 	}
+	targetLower := strings.ToLower(target)
+	targetBaseLower := strings.ToLower(strings.TrimSpace(filepath.Base(target)))
 	errorCount := 0
 	for _, fact := range errors {
 		if !strings.EqualFold(strings.TrimSpace(fact.Tool), "filesystem_write_file") {
@@ -546,7 +522,12 @@ func hasWorkspaceWriteHardFailure(errors []facts.ToolErrorFact, targetPath strin
 		if content == "" {
 			content = strings.ToLower(strings.TrimSpace(fact.ErrorClass))
 		}
-		if strings.Contains(content, strings.ToLower(target)) || strings.Contains(content, "permission denied") ||
+		mentionsTarget := strings.Contains(content, targetLower) ||
+			(targetBaseLower != "" && strings.Contains(content, targetBaseLower))
+		if !mentionsTarget {
+			continue
+		}
+		if strings.Contains(content, "permission denied") ||
 			strings.Contains(content, "path not allowed") || strings.Contains(content, "no such file") {
 			errorCount++
 		}
