@@ -210,28 +210,31 @@ func (c *Collector) applyTodoToolFacts(result tools.ToolResult) {
 
 // applyWriteFileFacts 从写文件工具结果提取 workspace write 事实。
 func (c *Collector) applyWriteFileFacts(result tools.ToolResult) {
-	if readBool(result.Metadata, "noop_write") {
-		return
-	}
 	path, ok := readString(result.Metadata, "path")
 	if !ok {
 		return
 	}
-	bytes := readInt(result.Metadata, "bytes")
-	key := fmt.Sprintf("file_written:%s:%d", path, bytes)
-	if !c.markSeen(key) {
-		return
+	noopWrite := readBool(result.Metadata, "noop_write")
+	if !noopWrite {
+		bytes := readInt(result.Metadata, "bytes")
+		key := fmt.Sprintf("file_written:%s:%d", path, bytes)
+		if c.markSeen(key) {
+			c.facts.Files.Written = append(c.facts.Files.Written, FileWriteFact{
+				Path:            path,
+				Bytes:           bytes,
+				WorkspaceWrite:  true,
+				ExpectedContent: readStringDefault(result.Metadata, "written_content"),
+			})
+			c.facts.Progress.ObservedFactCount++
+		}
 	}
-	c.facts.Files.Written = append(c.facts.Files.Written, FileWriteFact{
-		Path:            path,
-		Bytes:           bytes,
-		WorkspaceWrite:  true,
-		ExpectedContent: readStringDefault(result.Metadata, "written_content"),
-	})
-	c.facts.Progress.ObservedFactCount++
-	existsKey := fmt.Sprintf("file_exists:write:%s", path)
+	existsSource := "filesystem_write_file"
+	if noopWrite {
+		existsSource = "filesystem_write_file_noop"
+	}
+	existsKey := fmt.Sprintf("file_exists:write:%s:%s", existsSource, path)
 	if c.markSeen(existsKey) {
-		c.facts.Files.Exists = append(c.facts.Files.Exists, FileExistFact{Path: path, Source: "filesystem_write_file"})
+		c.facts.Files.Exists = append(c.facts.Files.Exists, FileExistFact{Path: path, Source: existsSource})
 		c.facts.Progress.ObservedFactCount++
 	}
 	if !result.Facts.VerificationPerformed {
@@ -247,7 +250,11 @@ func (c *Collector) applyWriteFileFacts(result tools.ToolResult) {
 	if contentFact.VerificationPassed {
 		status = "passed"
 	}
-	matchKey := fmt.Sprintf("file_content_match:write:%s:%s:%s", path, contentFact.Scope, status)
+	matchSource := "write"
+	if noopWrite {
+		matchSource = "noop_write"
+	}
+	matchKey := fmt.Sprintf("file_content_match:%s:%s:%s:%s", matchSource, path, contentFact.Scope, status)
 	if !c.markSeen(matchKey) {
 		return
 	}

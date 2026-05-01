@@ -3432,6 +3432,11 @@ func runtimeEventDecisionMadeHandler(a *App, event tuiservices.RuntimeEvent) boo
 	if detail == "" {
 		detail = "decision generated"
 	}
+	if statusLower == "continue" || statusLower == "incomplete" {
+		if debugDetail := formatDecisionDebugDetail(payload); debugDetail != "" {
+			detail = detail + " | " + debugDetail
+		}
+	}
 	a.appendActivity("decision", "Final decision ("+status+")", detail, false)
 	if shouldRenderDecisionBlock {
 		a.appendInlineMessage(roleSystem, formatDecisionBlockMessage(payload))
@@ -4226,28 +4231,93 @@ func formatDecisionBlockMessage(payload tuiservices.DecisionMadePayload) string 
 	lines := []string{
 		"正在验收中...",
 		"状态: " + status,
-		"原因: " + reason,
+		"原因: " + humanizeDecisionReason(reason, payload.MissingFacts),
 	}
 	if summary := strings.TrimSpace(payload.UserVisibleSummary); summary != "" {
 		lines = append(lines, "说明: "+summary)
 	}
-	if len(payload.MissingFacts) == 0 {
-		lines = append(lines, "缺少事实: 无")
-	} else {
-		lines = append(lines, "缺少事实:")
-		for _, fact := range payload.MissingFacts {
-			lines = append(lines, "- "+jsonCompactOrFallback(fact))
-		}
-	}
-	if len(payload.RequiredNextActions) == 0 {
-		lines = append(lines, "建议下一步: 无")
-	} else {
-		lines = append(lines, "建议下一步:")
-		for _, action := range payload.RequiredNextActions {
-			lines = append(lines, "- "+jsonCompactOrFallback(action))
-		}
-	}
+	lines = append(lines, "建议: "+humanizeDecisionSuggestion(payload))
 	return strings.Join(lines, "\n")
+}
+
+// humanizeDecisionReason 将机器 stop reason 映射为用户可读原因，避免主界面暴露内部字段。
+func humanizeDecisionReason(reason string, missingFacts []map[string]any) string {
+	normalized := strings.ToLower(strings.TrimSpace(reason))
+	switch normalized {
+	case "todo_not_converged":
+		for _, fact := range missingFacts {
+			kind := strings.ToLower(strings.TrimSpace(readStringFromMap(fact, "kind")))
+			switch kind {
+			case "verification_passed":
+				return "文件写入尚未完成验证。"
+			case "file_exists":
+				return "尚未确认目标文件存在。"
+			case "required_todo_terminal":
+				return "仍有 required todo 未收敛。"
+			case "post_execute_closure":
+				return "需要先基于工具结果完成闭环。"
+			}
+		}
+		return "任务仍缺少关键事实。"
+	case "no_progress_after_final_intercept":
+		return "连续多轮未产生新事实。"
+	case "required_todo_failed":
+		return "存在 required todo 失败。"
+	default:
+		if normalized == "" || normalized == "n/a" {
+			return "系统正在校验任务事实。"
+		}
+		return reason
+	}
+}
+
+// humanizeDecisionSuggestion 生成用户可执行的自然语言建议，不直接泄露工具参数 JSON。
+func humanizeDecisionSuggestion(payload tuiservices.DecisionMadePayload) string {
+	for _, fact := range payload.MissingFacts {
+		kind := strings.ToLower(strings.TrimSpace(readStringFromMap(fact, "kind")))
+		switch kind {
+		case "verification_passed":
+			return "请读取目标文件并确认内容符合预期。"
+		case "file_exists":
+			return "请确认目标文件已创建并可访问。"
+		case "required_todo_terminal":
+			return "请继续推进待办状态直至 required 项收敛。"
+		case "post_execute_closure":
+			return "请先基于最近工具结果补充闭环，再尝试完成。"
+		}
+	}
+	if len(payload.RequiredNextActions) > 0 {
+		return "请继续调用合适工具补充可验证事实。"
+	}
+	return "请继续推进任务并补充可验证事实。"
+}
+
+// readStringFromMap 读取 map 中的字符串字段，字段缺失或类型不匹配时返回空串。
+func readStringFromMap(values map[string]any, key string) string {
+	if values == nil {
+		return ""
+	}
+	raw, ok := values[key]
+	if !ok {
+		return ""
+	}
+	text, ok := raw.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(text)
+}
+
+// formatDecisionDebugDetail 生成供活动日志/调试视图使用的结构化详情。
+func formatDecisionDebugDetail(payload tuiservices.DecisionMadePayload) string {
+	parts := make([]string, 0, 2)
+	if len(payload.MissingFacts) > 0 {
+		parts = append(parts, "missing_facts="+jsonCompactOrFallback(payload.MissingFacts))
+	}
+	if len(payload.RequiredNextActions) > 0 {
+		parts = append(parts, "required_next_actions="+jsonCompactOrFallback(payload.RequiredNextActions))
+	}
+	return strings.Join(parts, " ")
 }
 
 // firstNonBlank 返回第一个非空候选值，保证展示字段稳定可读。

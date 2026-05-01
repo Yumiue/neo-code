@@ -201,6 +201,41 @@ func TestCollectorApplyWriteFileVerificationFacts(t *testing.T) {
 	}
 }
 
+func TestCollectorApplyNoopWriteKeepsVerificationFacts(t *testing.T) {
+	collector := NewCollector()
+	collector.ApplyToolResult(tools.ToolNameFilesystemWriteFile, tools.ToolResult{
+		Name:    tools.ToolNameFilesystemWriteFile,
+		IsError: false,
+		Metadata: map[string]any{
+			"path":                  "2.txt",
+			"noop_write":            true,
+			"verification_expected": []string{"2"},
+		},
+		Facts: tools.ToolExecutionFacts{
+			VerificationPerformed: true,
+			VerificationPassed:    true,
+			VerificationScope:     "artifact:2.txt",
+		},
+	})
+
+	snapshot := collector.Snapshot()
+	if len(snapshot.Files.Written) != 0 {
+		t.Fatalf("noop write should not append written fact, got %+v", snapshot.Files.Written)
+	}
+	if len(snapshot.Files.Exists) != 1 || snapshot.Files.Exists[0].Path != "2.txt" {
+		t.Fatalf("exists facts = %+v, want path 2.txt", snapshot.Files.Exists)
+	}
+	if len(snapshot.Files.ContentMatch) != 1 {
+		t.Fatalf("content match facts = %+v, want one noop verification content match", snapshot.Files.ContentMatch)
+	}
+	if !snapshot.Files.ContentMatch[0].VerificationPassed || snapshot.Files.ContentMatch[0].Path != "2.txt" {
+		t.Fatalf("content match fact = %+v", snapshot.Files.ContentMatch[0])
+	}
+	if len(snapshot.Verification.Performed) != 1 || len(snapshot.Verification.Passed) != 1 {
+		t.Fatalf("verification facts = %+v", snapshot.Verification)
+	}
+}
+
 func TestCollectorApplyGlobAndStringMetadataFacts(t *testing.T) {
 	collector := NewCollector()
 	collector.ApplyToolResult(tools.ToolNameFilesystemGlob, tools.ToolResult{

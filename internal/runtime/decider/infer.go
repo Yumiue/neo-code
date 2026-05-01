@@ -75,6 +75,9 @@ func InferTaskIntent(goal string) TaskIntent {
 // DeriveEffectiveTaskKind 基于运行事实修正任务类型；文本 hint 仅作回退。
 func DeriveEffectiveTaskKind(hint TaskKind, allFacts runtimefacts.RuntimeFacts, todos TodoSnapshot) TaskKind {
 	hasWrite := len(allFacts.Files.Written) > 0 || len(allFacts.Files.ContentMatch) > 0
+	if !hasWrite && hint == TaskKindWorkspaceWrite && hasArtifactVerificationPassed(allFacts) {
+		hasWrite = true
+	}
 	hasVerification := len(allFacts.Verification.Passed) > 0
 	hasSubAgent := len(allFacts.SubAgents.Started) > 0 || len(allFacts.SubAgents.Completed) > 0 || len(allFacts.SubAgents.Failed) > 0
 	hasTodo := todos.Summary.Total > 0 || len(allFacts.Todos.CreatedIDs) > 0 || len(allFacts.Todos.CompletedIDs) > 0 || len(allFacts.Todos.FailedIDs) > 0
@@ -98,6 +101,17 @@ func DeriveEffectiveTaskKind(hint TaskKind, allFacts runtimefacts.RuntimeFacts, 
 	default:
 		return TaskKindChatAnswer
 	}
+}
+
+// hasArtifactVerificationPassed 判断是否存在与产物路径绑定的通过验证事实。
+func hasArtifactVerificationPassed(allFacts runtimefacts.RuntimeFacts) bool {
+	for _, fact := range allFacts.Verification.Passed {
+		scope := strings.TrimSpace(fact.Scope)
+		if strings.HasPrefix(strings.ToLower(scope), "artifact:") {
+			return true
+		}
+	}
+	return false
 }
 
 // containsAny 判断文本是否包含任一关键词。

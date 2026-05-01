@@ -106,4 +106,12 @@ func TestDeriveEffectiveTaskKindFactsOverrideHint(t *testing.T) {
 	}, TodoSnapshot{}); got != TaskKindReadOnly {
 		t.Fatalf("effective kind = %q, want %q", got, TaskKindReadOnly)
 	}
+
+	if got := DeriveEffectiveTaskKind(TaskKindWorkspaceWrite, runtimefacts.RuntimeFacts{
+		Verification: runtimefacts.VerificationFacts{
+			Passed: []runtimefacts.VerificationFact{{Tool: "filesystem_write_file", Scope: "artifact:2.txt"}},
+		},
+	}, TodoSnapshot{}); got != TaskKindWorkspaceWrite {
+		t.Fatalf("effective kind = %q, want %q when artifact verification exists", got, TaskKindWorkspaceWrite)
+	}
 }

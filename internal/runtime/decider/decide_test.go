@@ -124,6 +124,63 @@ func TestDecideWorkspaceWriteNeedsVerificationThenAccepts(t *testing.T) {
 	}
 }
 
+func TestDecideWorkspaceWriteNoopSatisfiedByVerificationFacts(t *testing.T) {
+	decision := Decide(DecisionInput{
+		TaskKind:         TaskKindWorkspaceWrite,
+		CompletionPassed: true,
+		UserGoal:         "创建 2.txt 内容为 2",
+		Facts: runtimefacts.RuntimeFacts{
+			Files: runtimefacts.FileFacts{
+				Exists: []runtimefacts.FileExistFact{{Path: "2.txt", Source: "filesystem_write_file_noop"}},
+				ContentMatch: []runtimefacts.FileContentMatchFact{{
+					Path:               "2.txt",
+					Scope:              "artifact:2.txt",
+					ExpectedContains:   []string{"2"},
+					VerificationPassed: true,
+				}},
+			},
+			Verification: runtimefacts.VerificationFacts{
+				Passed: []runtimefacts.VerificationFact{{Tool: "filesystem_write_file", Scope: "artifact:2.txt"}},
+			},
+		},
+	})
+	if decision.Status != DecisionAccepted {
+		t.Fatalf("status = %q, want %q", decision.Status, DecisionAccepted)
+	}
+}
+
+func TestDecideWorkspaceWriteRepeatedNoopShouldStayAccepted(t *testing.T) {
+	decision := Decide(DecisionInput{
+		TaskKind:         TaskKindWorkspaceWrite,
+		CompletionPassed: true,
+		UserGoal:         "创建 2.txt 内容为 2",
+		Facts: runtimefacts.RuntimeFacts{
+			Files: runtimefacts.FileFacts{
+				Written: []runtimefacts.FileWriteFact{
+					{Path: "2.txt", Bytes: 1, WorkspaceWrite: true, ExpectedContent: "2"},
+				},
+				Exists: []runtimefacts.FileExistFact{
+					{Path: "2.txt", Source: "filesystem_write_file"},
+					{Path: "2.txt", Source: "filesystem_write_file_noop"},
+				},
+				ContentMatch: []runtimefacts.FileContentMatchFact{{
+					Path:               "2.txt",
+					Scope:              "artifact:2.txt",
+					ExpectedContains:   []string{"2"},
+					VerificationPassed: true,
+				}},
+			},
+			Verification: runtimefacts.VerificationFacts{
+				Performed: []runtimefacts.VerificationFact{{Tool: "filesystem_write_file", Scope: "artifact:2.txt"}},
+				Passed:    []runtimefacts.VerificationFact{{Tool: "filesystem_write_file", Scope: "artifact:2.txt"}},
+			},
+		},
+	})
+	if decision.Status != DecisionAccepted {
+		t.Fatalf("status = %q, want %q", decision.Status, DecisionAccepted)
+	}
+}
+
 func TestDecideWorkspaceWriteVerificationMustBindTarget(t *testing.T) {
 	decision := Decide(DecisionInput{
 		TaskKind:         TaskKindWorkspaceWrite,

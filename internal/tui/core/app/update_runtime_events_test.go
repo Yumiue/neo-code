@@ -287,8 +287,14 @@ func TestRuntimeSnapshotAndFactsHandlers(t *testing.T) {
 		t.Fatalf("expected decision block inline message")
 	}
 	decisionText := renderMessagePartsForDisplay(app.activeMessages[len(app.activeMessages)-1].Parts)
-	if !strings.Contains(decisionText, "正在验收中") || !strings.Contains(decisionText, "缺少事实") {
+	if !strings.Contains(decisionText, "正在验收中") || !strings.Contains(decisionText, "建议:") {
 		t.Fatalf("expected friendly runtime decision hint, got %q", decisionText)
+	}
+	if strings.Contains(decisionText, "required_next_actions") || strings.Contains(decisionText, "filesystem_read_file") {
+		t.Fatalf("decision message should hide machine next-action JSON, got %q", decisionText)
+	}
+	if !strings.Contains(last.Detail, "required_next_actions=") || !strings.Contains(last.Detail, "missing_facts=") {
+		t.Fatalf("expected activity detail to keep debug machine details, got %+v", last)
 	}
 }
 
@@ -697,6 +703,10 @@ func TestDecisionContinueSuppressesAssistantFinalMessage(t *testing.T) {
 	last := app.activeMessages[len(app.activeMessages)-1]
 	if last.Role != roleSystem || !strings.Contains(renderMessagePartsForDisplay(last.Parts), "正在验收中") {
 		t.Fatalf("expected runtime decision block as last message, got %+v", last)
+	}
+	lastText := renderMessagePartsForDisplay(last.Parts)
+	if strings.Contains(lastText, "required_next_actions") || strings.Contains(lastText, "filesystem_read_file") {
+		t.Fatalf("runtime decision block should not expose machine JSON, got %q", lastText)
 	}
 
 	runtimeEventAgentDoneHandler(&app, agentruntime.RuntimeEvent{

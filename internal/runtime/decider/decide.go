@@ -9,6 +9,10 @@ import (
 	"neo-code/internal/runtime/facts"
 )
 
+// TODO(runtime-control-plane): FinalDecider 当前同时承担了意图推断、有效任务类型推导、事实解释、
+// 终态裁决与下一步动作合成。待验收循环稳定后拆分为 IntentInferer、EffectiveTaskKindDeriver、
+// AcceptanceProfile 与 NextActionPlanner，降低单模块职责耦合。
+//
 // Decide 执行最终终态裁决，作为 runtime 的唯一决策入口。
 func Decide(input DecisionInput) Decision {
 	intent := InferTaskIntent(input.UserGoal)
@@ -205,6 +209,14 @@ func decideTodoState(input DecisionInput) Decision {
 // decideWorkspaceWrite 依据写入与验证事实判定文件任务。
 func decideWorkspaceWrite(input DecisionInput) Decision {
 	if len(input.Facts.Files.Written) == 0 {
+		if hasSatisfiedWorkspaceWriteWithoutNewWrite(input) {
+			return Decision{
+				Status:             DecisionAccepted,
+				StopReason:         "accepted",
+				UserVisibleSummary: "目标文件状态已满足，无需重复写入。",
+				InternalSummary:    "workspace_write satisfied by noop_write verification facts",
+			}
+		}
 		if !hasExplicitFileTarget(input.UserGoal) {
 			return Decision{
 				Status:             DecisionAccepted,
@@ -551,6 +563,21 @@ func hasExplicitFileTarget(goal string) bool {
 	)
 }
 
+// hasSatisfiedWorkspaceWriteWithoutNewWrite 判断未产生新写入时是否已有可验收写入结果。
+func hasSatisfiedWorkspaceWriteWithoutNewWrite(input DecisionInput) bool {
+	goalPaths := extractGoalPaths(input.UserGoal)
+	for _, goalPath := range goalPaths {
+		if hasVerificationForTarget(input.Facts, goalPath) {
+			return true
+		}
+	}
+	if len(goalPaths) > 0 {
+		return false
+	}
+	target, _, ok := selectVerificationTarget(input)
+	return ok && hasVerificationForTarget(input.Facts, target)
+}
+
 // hasSubAgentArtifactEvidence 判断子代理任务是否已有可验证产物事实。
 func hasSubAgentArtifactEvidence(allFacts facts.RuntimeFacts) bool {
 	for _, fact := range allFacts.SubAgents.Completed {
@@ -622,6 +649,38 @@ func selectVerificationTarget(input DecisionInput) (path string, expectedContent
 		if target != "" {
 			return target, strings.TrimSpace(writeFact.ExpectedContent), true
 		}
+	}
+	for i := len(goalPaths) - 1; i >= 0; i-- {
+		goalPath := strings.TrimSpace(goalPaths[i])
+		if goalPath != "" && hasVerificationForTarget(input.Facts, goalPath) {
+			return goalPath, "", true
+		}
+	}
+	for i := len(input.Facts.Files.ContentMatch) - 1; i >= 0; i-- {
+		matchFact := input.Facts.Files.ContentMatch[i]
+		if !matchFact.VerificationPassed {
+			continue
+		}
+		target := strings.TrimSpace(matchFact.Path)
+		if target == "" {
+			continue
+		}
+		return target, firstOrEmpty(matchFact.ExpectedContains), true
+	}
+	for i := len(input.Facts.Verification.Passed) - 1; i >= 0; i-- {
+		verifyFact := input.Facts.Verification.Passed[i]
+		scope := strings.TrimSpace(verifyFact.Scope)
+		if scope == "" {
+			continue
+		}
+		target := scope
+		if strings.HasPrefix(strings.ToLower(target), "artifact:") {
+			target = strings.TrimSpace(target[len("artifact:"):])
+		}
+		if target == "" {
+			continue
+		}
+		return target, "", true
 	}
 	return "", "", false
 }
