@@ -1,6 +1,49 @@
-import { useEffect, useRef } from 'react'
-import { useChatStore } from '@/stores/useChatStore'
+import { useEffect, useMemo, useRef } from 'react'
+import { useChatStore, type ChatMessage } from '@/stores/useChatStore'
 import MessageItem from './MessageItem'
+
+/** 判断消息是否属于"AI 回合"（用于把连续的 assistant/tool 视作同一叙述单元） */
+function inAITurn(msg: ChatMessage): boolean {
+  if (msg.role === 'tool') return true
+  if (msg.role === 'assistant') return msg.type !== 'system' && msg.type !== 'welcome'
+  return false
+}
+
+/** 是 AI 回合内的"过程"消息（工具调用、思考），渲染时优先置于"结论文本"之前 */
+function isProcessMsg(msg: ChatMessage): boolean {
+  return msg.role === 'tool' || msg.type === 'thinking'
+}
+
+/**
+ * 在每个 AI 回合内重排消息：过程类（工具/思考）→ 结论类（assistant 文本/代码）。
+ * 让最终生成的文本始终位于该回合末尾，避免被工具调用堆叠遮挡。
+ * user / system / welcome 作为段分隔符，保持原位。
+ */
+function reorderForAITurn(messages: ChatMessage[]): ChatMessage[] {
+  const out: ChatMessage[] = []
+  let procBuf: ChatMessage[] = []
+  let textBuf: ChatMessage[] = []
+
+  const flush = () => {
+    if (procBuf.length || textBuf.length) {
+      out.push(...procBuf, ...textBuf)
+      procBuf = []
+      textBuf = []
+    }
+  }
+
+  for (const m of messages) {
+    if (!inAITurn(m)) {
+      flush()
+      out.push(m)
+      continue
+    }
+    if (isProcessMsg(m)) procBuf.push(m)
+    else textBuf.push(m)
+  }
+  flush()
+  return out
+}
 
 /** 消息列表，自动滚动到底部 */
 export default function MessageList() {
@@ -8,9 +51,11 @@ export default function MessageList() {
   const isGenerating = useChatStore((s) => s.isGenerating)
   const bottomRef = useRef<HTMLDivElement>(null)
 
+  const ordered = useMemo(() => reorderForAITurn(messages), [messages])
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, isGenerating])
+  }, [ordered, isGenerating])
 
   const styles: Record<string, React.CSSProperties> = {
     container: {
@@ -96,9 +141,18 @@ export default function MessageList() {
 
   return (
     <div style={styles.container}>
-      {messages.map((msg, i) => (
-        <MessageItem key={msg.id} message={msg} isLast={i === messages.length - 1} />
-      ))}
+      {ordered.map((msg, i) => {
+        const prev = i > 0 ? ordered[i - 1] : null
+        const groupedWithPrev = !!prev && inAITurn(prev) && inAITurn(msg)
+        return (
+          <MessageItem
+            key={msg.id}
+            message={msg}
+            isLast={i === ordered.length - 1}
+            groupedWithPrev={groupedWithPrev}
+          />
+        )
+      })}
       <div ref={bottomRef} />
     </div>
   )

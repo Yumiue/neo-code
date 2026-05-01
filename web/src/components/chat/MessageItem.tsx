@@ -8,10 +8,12 @@ import { Bot, ChevronRight, Info } from 'lucide-react'
 interface MessageItemProps {
   message: ChatMessage
   isLast?: boolean
+  /** 是否与上一条 AI/工具消息属于同一回合（同回合压缩 avatar 与上下间距） */
+  groupedWithPrev?: boolean
 }
 
 /** 单条消息渲染 */
-const MessageItem = memo(function MessageItem({ message, isLast = false }: MessageItemProps) {
+const MessageItem = memo(function MessageItem({ message, isLast = false, groupedWithPrev = false }: MessageItemProps) {
   if (message.type === 'system') {
     return <SystemMessage message={message} />
   }
@@ -21,16 +23,16 @@ const MessageItem = memo(function MessageItem({ message, isLast = false }: Messa
   }
 
   if (message.type === 'thinking') {
-    return <ThinkingMessage message={message} />
+    return <ThinkingMessage message={message} groupedWithPrev={groupedWithPrev} />
   }
 
   if (message.type === 'tool_call') {
-    return <ToolCallCard message={message} />
+    return <ToolCallCard message={message} groupedWithPrev={groupedWithPrev} />
   }
 
   if (message.type === 'code') {
     return (
-      <AIMessage message={message} isLast={isLast}>
+      <AIMessage message={message} isLast={isLast} groupedWithPrev={groupedWithPrev}>
         <CodeBlock code={message.content} language={message.language || 'text'} filename={message.filename} />
       </AIMessage>
     )
@@ -40,7 +42,7 @@ const MessageItem = memo(function MessageItem({ message, isLast = false }: Messa
     return <UserMessage message={message} />
   }
 
-  return <AIMessage message={message} isLast={isLast} />
+  return <AIMessage message={message} isLast={isLast} groupedWithPrev={groupedWithPrev} />
 })
 
 function UserMessage({ message }: { message: ChatMessage }) {
@@ -53,12 +55,16 @@ function UserMessage({ message }: { message: ChatMessage }) {
   )
 }
 
-function AIMessage({ message, isLast, children }: { message: ChatMessage; isLast: boolean; children?: React.ReactNode }) {
+function AIMessage({ message, isLast, children, groupedWithPrev = false }: { message: ChatMessage; isLast: boolean; children?: React.ReactNode; groupedWithPrev?: boolean }) {
   return (
-    <div style={styles.aiRow} className="animate-slide-up">
-      <div style={styles.aiAvatar}>
-        <Bot size={16} />
-      </div>
+    <div style={groupedWithPrev ? styles.aiRowGrouped : styles.aiRow} className="animate-slide-up">
+      {groupedWithPrev ? (
+        <div style={styles.avatarSpacer} aria-hidden />
+      ) : (
+        <div style={styles.aiAvatar}>
+          <Bot size={16} />
+        </div>
+      )}
       <div style={styles.aiContent}>
         {children || (
           <div style={styles.aiText}>
@@ -77,14 +83,18 @@ function AIMessage({ message, isLast, children }: { message: ChatMessage; isLast
   )
 }
 
-function ThinkingMessage({ message }: { message: ChatMessage }) {
+function ThinkingMessage({ message, groupedWithPrev = false }: { message: ChatMessage; groupedWithPrev?: boolean }) {
   const [expanded, setExpanded] = useState(false)
 
   return (
-    <div style={styles.aiRow} className="animate-fade-in">
-      <div style={{ ...styles.aiAvatar, background: 'var(--warning)', color: '#fff' }}>
-        <Bot size={16} />
-      </div>
+    <div style={groupedWithPrev ? styles.aiRowGrouped : styles.aiRow} className="animate-fade-in">
+      {groupedWithPrev ? (
+        <div style={styles.avatarSpacer} aria-hidden />
+      ) : (
+        <div style={{ ...styles.aiAvatar, background: 'var(--warning)', color: '#fff' }}>
+          <Bot size={16} />
+        </div>
+      )}
       <div style={styles.aiContent}>
         <button style={styles.thinkingToggle} onClick={() => setExpanded(!expanded)}>
           <span style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.2s', display: 'flex' }}>
@@ -149,6 +159,15 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     gap: 10,
     padding: '8px 0',
+  },
+  aiRowGrouped: {
+    display: 'flex',
+    gap: 10,
+    padding: '2px 0',
+  },
+  avatarSpacer: {
+    width: 28,
+    flexShrink: 0,
   },
   aiAvatar: {
     width: 28,
