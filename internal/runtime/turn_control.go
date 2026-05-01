@@ -70,7 +70,7 @@ func applyToolExecutionCompletion(current controlplane.CompletionState, summary 
 				}
 			}
 		}
-		if result.Facts.WorkspaceWrite {
+		if result.Facts.WorkspaceWrite && !toolResultNoopWrite(result.Metadata) {
 			current.HasUnverifiedWrites = true
 		}
 		if result.Facts.VerificationPerformed && result.Facts.VerificationPassed {

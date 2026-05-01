@@ -74,6 +74,41 @@ func TestApplyToolExecutionCompletionClearsWhenVerifyAfterWrite(t *testing.T) {
 	}
 }
 
+func TestApplyToolExecutionCompletionIgnoresNoopWrite(t *testing.T) {
+	t.Parallel()
+
+	got := applyToolExecutionCompletion(controlplane.CompletionState{}, toolExecutionSummary{
+		Results: []tools.ToolResult{
+			{
+				Facts: tools.ToolExecutionFacts{WorkspaceWrite: true},
+				Metadata: map[string]any{
+					"noop_write": true,
+				},
+			},
+		},
+	})
+	if got.HasUnverifiedWrites {
+		t.Fatalf("expected noop write not to require verification, got %+v", got)
+	}
+}
+
+func TestToolResultNoopWrite(t *testing.T) {
+	t.Parallel()
+
+	if !toolResultNoopWrite(map[string]any{"noop_write": true}) {
+		t.Fatal("expected bool noop_write=true to be recognized")
+	}
+	if !toolResultNoopWrite(map[string]any{"noop_write": "true"}) {
+		t.Fatal("expected string noop_write=true to be recognized")
+	}
+	if toolResultNoopWrite(map[string]any{"noop_write": false}) {
+		t.Fatal("expected noop_write=false to be ignored")
+	}
+	if toolResultNoopWrite(nil) {
+		t.Fatal("expected nil metadata to be ignored")
+	}
+}
+
 func TestHasPendingAgentTodosBlocksOnAnyNonTerminalTodo(t *testing.T) {
 	t.Parallel()
 

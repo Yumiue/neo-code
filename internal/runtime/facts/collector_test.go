@@ -53,6 +53,15 @@ func TestCollectorApplyToolResultTodoAndVerificationFacts(t *testing.T) {
 			"replacement_length": 12,
 		},
 	})
+	collector.ApplyToolResult(tools.ToolNameFilesystemWriteFile, tools.ToolResult{
+		Name:    tools.ToolNameFilesystemWriteFile,
+		IsError: false,
+		Metadata: map[string]any{
+			"path":       "test.txt",
+			"bytes":      1,
+			"noop_write": true,
+		},
+	})
 
 	snapshot := collector.Snapshot()
 	if len(snapshot.Todos.CreatedIDs) != 1 || snapshot.Todos.CreatedIDs[0] != "todo-1" {

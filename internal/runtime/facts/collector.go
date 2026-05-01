@@ -210,6 +210,9 @@ func (c *Collector) applyTodoToolFacts(result tools.ToolResult) {
 
 // applyWriteFileFacts 从写文件工具结果提取 workspace write 事实。
 func (c *Collector) applyWriteFileFacts(result tools.ToolResult) {
+	if readBool(result.Metadata, "noop_write") {
+		return
+	}
 	path, ok := readString(result.Metadata, "path")
 	if !ok {
 		return

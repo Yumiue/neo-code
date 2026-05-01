@@ -338,7 +338,29 @@ func hasSuccessfulWorkspaceWriteFact(result tools.ToolResult, execErr error) boo
 	if execErr != nil || result.IsError {
 		return false
 	}
+	if toolResultNoopWrite(result.Metadata) {
+		return false
+	}
 	return result.Facts.WorkspaceWrite
+}
+
+// toolResultNoopWrite 判断工具结果是否声明了 no-op 写入（内容未变化）。
+func toolResultNoopWrite(metadata map[string]any) bool {
+	if metadata == nil {
+		return false
+	}
+	raw, ok := metadata["noop_write"]
+	if !ok || raw == nil {
+		return false
+	}
+	switch typed := raw.(type) {
+	case bool:
+		return typed
+	case string:
+		return strings.EqualFold(strings.TrimSpace(typed), "true")
+	default:
+		return false
+	}
 }
 
 func summarizeHookResultContent(content string) string {

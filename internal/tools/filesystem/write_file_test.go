@@ -134,3 +134,41 @@ func TestWriteFileToolInvalidArgumentsFormatting(t *testing.T) {
 		t.Fatalf("expected error result, got %#v", result)
 	}
 }
+
+func TestWriteFileToolNoopWriteMetadata(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	tool := NewWrite(workspace)
+	target := filepath.Join(workspace, "same.txt")
+	if err := os.WriteFile(target, []byte("same"), 0o644); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+
+	args, err := json.Marshal(map[string]string{
+		"path":    "same.txt",
+		"content": "same",
+	})
+	if err != nil {
+		t.Fatalf("marshal args: %v", err)
+	}
+	result, execErr := tool.Execute(context.Background(), tools.ToolCallInput{
+		Name:      tool.Name(),
+		Arguments: args,
+		Workdir:   workspace,
+	})
+	if execErr != nil {
+		t.Fatalf("Execute() error = %v", execErr)
+	}
+	if result.Content != "ok" {
+		t.Fatalf("result content = %q, want ok", result.Content)
+	}
+	noop, ok := result.Metadata["noop_write"].(bool)
+	if !ok || !noop {
+		t.Fatalf("noop_write metadata = %#v, want true", result.Metadata["noop_write"])
+	}
+	unchanged, ok := result.Metadata["content_unchanged"].(bool)
+	if !ok || !unchanged {
+		t.Fatalf("content_unchanged metadata = %#v, want true", result.Metadata["content_unchanged"])
+	}
+}

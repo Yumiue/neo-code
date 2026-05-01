@@ -83,6 +83,22 @@ func (t *WriteFileTool) Execute(ctx context.Context, input tools.ToolCallInput) 
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
+	existing, readErr := os.ReadFile(target)
+	if readErr == nil && string(existing) == args.Content {
+		return tools.ToolResult{
+			Name:    t.Name(),
+			Content: "ok",
+			Metadata: map[string]any{
+				"path":              target,
+				"bytes":             len(args.Content),
+				"noop_write":        true,
+				"content_unchanged": true,
+			},
+		}, nil
+	}
+	if readErr != nil && !os.IsNotExist(readErr) {
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), readErr), "", nil), readErr
+	}
 	if err := os.WriteFile(target, []byte(args.Content), 0o644); err != nil {
 		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
@@ -91,8 +107,10 @@ func (t *WriteFileTool) Execute(ctx context.Context, input tools.ToolCallInput) 
 		Name:    t.Name(),
 		Content: "ok",
 		Metadata: map[string]any{
-			"path":  target,
-			"bytes": len(args.Content),
+			"path":              target,
+			"bytes":             len(args.Content),
+			"noop_write":        false,
+			"content_unchanged": false,
 		},
 	}, nil
 }
