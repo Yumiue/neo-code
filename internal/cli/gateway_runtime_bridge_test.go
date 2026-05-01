@@ -56,6 +56,12 @@ type runtimeStub struct {
 	createID              string
 	createSession         agentsession.Session
 	createErr             error
+	listTodosSessionID    string
+	listTodosSnapshot     agentruntime.TodoSnapshot
+	listTodosErr          error
+	getSnapshotSessionID  string
+	getSnapshotResult     agentruntime.RuntimeSnapshot
+	getSnapshotErr        error
 }
 
 const testBridgeSubjectID = bridgeLocalSubjectID
@@ -134,6 +140,14 @@ func (s *runtimeStub) ListSessionSkills(_ context.Context, sessionID string) ([]
 func (s *runtimeStub) ListAvailableSkills(_ context.Context, sessionID string) ([]agentruntime.AvailableSkillState, error) {
 	s.listAvailableSkillsID = sessionID
 	return s.availableSkills, s.availableSkillsErr
+}
+func (s *runtimeStub) ListTodos(_ context.Context, sessionID string) (agentruntime.TodoSnapshot, error) {
+	s.listTodosSessionID = sessionID
+	return s.listTodosSnapshot, s.listTodosErr
+}
+func (s *runtimeStub) GetRuntimeSnapshot(_ context.Context, sessionID string) (agentruntime.RuntimeSnapshot, error) {
+	s.getSnapshotSessionID = sessionID
+	return s.getSnapshotResult, s.getSnapshotErr
 }
 func (s *runtimeStub) DeleteSession(_ context.Context, _ string) error {
 	return nil
@@ -568,6 +582,99 @@ func TestGatewayRuntimePortBridgeRuntimeMethods(t *testing.T) {
 	if len(session.Messages[0].ToolCalls) != 1 || session.Messages[0].ToolCalls[0].Name != "bash" {
 		t.Fatalf("message tool calls = %#v, want trimmed tool call", session.Messages[0].ToolCalls)
 	}
+}
+
+func TestGatewayRuntimePortBridgeListSessionTodosAndSnapshot(t *testing.T) {
+	t.Run("list todos via runtime todo lister", func(t *testing.T) {
+		stub := &runtimeStub{
+			listTodosSnapshot: agentruntime.TodoSnapshot{
+				Summary: agentruntime.TodoSummary{Total: 1, RequiredTotal: 1, RequiredCompleted: 1},
+				Items: []agentruntime.TodoViewItem{
+					{ID: "todo-1", Content: "done", Status: "completed", Required: true, Revision: 2},
+				},
+			},
+		}
+		bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
+		if err != nil {
+			t.Fatalf("newGatewayRuntimePortBridge() error = %v", err)
+		}
+		t.Cleanup(func() { _ = bridge.Close() })
+
+		snapshot, err := bridge.ListSessionTodos(context.Background(), gateway.ListSessionTodosInput{
+			SubjectID: testBridgeSubjectID,
+			SessionID: " session-1 ",
+		})
+		if err != nil {
+			t.Fatalf("ListSessionTodos() error = %v", err)
+		}
+		if stub.listTodosSessionID != "session-1" {
+			t.Fatalf("listTodos session = %q, want %q", stub.listTodosSessionID, "session-1")
+		}
+		if snapshot.Summary.RequiredCompleted != 1 || len(snapshot.Items) != 1 || snapshot.Items[0].ID != "todo-1" {
+			t.Fatalf("snapshot = %#v", snapshot)
+		}
+	})
+
+	t.Run("list todos fallback from session todos", func(t *testing.T) {
+		required := true
+		stub := &runtimeWithoutCreator{
+			base: &runtimeStub{
+				loadSession: agentsession.Session{
+					Todos: []agentsession.TodoItem{
+						{ID: "todo-2", Content: "x", Status: agentsession.TodoStatusPending, Required: &required, Revision: 9},
+					},
+				},
+			},
+		}
+		bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
+		if err != nil {
+			t.Fatalf("newGatewayRuntimePortBridge() error = %v", err)
+		}
+		t.Cleanup(func() { _ = bridge.Close() })
+
+		snapshot, err := bridge.ListSessionTodos(context.Background(), gateway.ListSessionTodosInput{
+			SubjectID: testBridgeSubjectID,
+			SessionID: "session-fallback",
+		})
+		if err != nil {
+			t.Fatalf("ListSessionTodos() fallback error = %v", err)
+		}
+		if len(snapshot.Items) != 1 || snapshot.Summary.RequiredOpen != 1 {
+			t.Fatalf("fallback snapshot = %#v", snapshot)
+		}
+	})
+
+	t.Run("get runtime snapshot", func(t *testing.T) {
+		stub := &runtimeStub{
+			getSnapshotResult: agentruntime.RuntimeSnapshot{
+				RunID:     "run-1",
+				SessionID: "session-2",
+				Phase:     "acceptance",
+				TaskKind:  "workspace_write",
+				Decision:  agentruntime.DecisionSnapshot{Status: "continue", StopReason: "unverified_write"},
+				SubAgents: agentruntime.SubAgentSnapshot{StartedCount: 1, CompletedCount: 1, FailedCount: 0},
+			},
+		}
+		bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
+		if err != nil {
+			t.Fatalf("newGatewayRuntimePortBridge() error = %v", err)
+		}
+		t.Cleanup(func() { _ = bridge.Close() })
+
+		snapshot, err := bridge.GetRuntimeSnapshot(context.Background(), gateway.GetRuntimeSnapshotInput{
+			SubjectID: testBridgeSubjectID,
+			SessionID: " session-2 ",
+		})
+		if err != nil {
+			t.Fatalf("GetRuntimeSnapshot() error = %v", err)
+		}
+		if stub.getSnapshotSessionID != "session-2" {
+			t.Fatalf("snapshot session = %q, want %q", stub.getSnapshotSessionID, "session-2")
+		}
+		if snapshot.RunID != "run-1" || snapshot.Decision["status"] != "continue" {
+			t.Fatalf("snapshot = %#v", snapshot)
+		}
+	})
 }
 
 func TestGatewayRuntimePortBridgeLoadSessionNotFoundBranches(t *testing.T) {
