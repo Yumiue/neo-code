@@ -527,7 +527,10 @@ func TestWatchPTYWindowResizeNilPTY(t *testing.T) {
 }
 
 func TestDecodeToolResult(t *testing.T) {
-	result, err := decodeToolResult([]byte(`{"content":"ok","isError":false}`))
+	result, err := decodeToolResult(map[string]any{
+		"content": "ok",
+		"isError": false,
+	})
 	if err != nil {
 		t.Fatalf("decodeToolResult() error = %v", err)
 	}
@@ -585,7 +588,7 @@ func TestRenderDiagnosisErrorHeader(t *testing.T) {
 
 func TestRenderDiagnosisFullContent(t *testing.T) {
 	var buffer bytes.Buffer
-	renderDiagnosis(&buffer, `{"confidence":0.95,"rootCause":"disk full","investigationCommands":["df -h"],"fixCommands":["rm -rf /tmp/*"]}`, false)
+	renderDiagnosis(&buffer, `{"confidence":0.95,"root_cause":"disk full","investigation_commands":["df -h"],"fix_commands":["rm -rf /tmp/*"]}`, false)
 	output := buffer.String()
 	assertNoBareLineFeed(t, output)
 	if !strings.Contains(output, "置信度: 0.95") {

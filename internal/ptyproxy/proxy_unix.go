@@ -45,8 +45,8 @@ var (
 	restoreTerminal   = term.Restore
 
 	proxyOutputLineEndingNormalizer = strings.NewReplacer(
-		"\r\n", "\n",
-		"\r", "\n",
+		"\r\n", "\r\n",
+		"\r", "\r\n",
 		"\n", "\r\n",
 	)
 )

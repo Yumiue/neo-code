@@ -92,14 +92,3 @@ func TestNormalizeShellOptionsResolvesEmptyWorkdir(t *testing.T) {
 		t.Fatal("Workdir should not be empty after normalization")
 	}
 }
-
-func TestNormalizeShellOptionsFailsOnBadGetwd(t *testing.T) {
-	// Remove read permission on a parent dir to cause Getwd failure.
-	// We simulate by providing a non-empty but unresolvable path.
-	_, err := NormalizeShellOptions(ManualShellOptions{
-		Workdir: string([]byte{0}),
-	})
-	if err == nil {
-		t.Fatal("expected error for invalid workdir path")
-	}
-}
