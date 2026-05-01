@@ -44,6 +44,8 @@ interface ChatState {
   stopReason: string
   /** 会话切换中标记（eventBridge 据此丢弃中间窗口期事件） */
   isTransitioning: boolean
+  /** 当前 Agent 工作模式 */
+  agentMode: 'build' | 'plan'
 
   // Actions
   addMessage: (msg: ChatMessage) => void
@@ -66,6 +68,7 @@ interface ChatState {
   setStopReason: (reason: string) => void
   clearMessages: () => void
   addSystemMessage: (content: string) => void
+  setAgentMode: (mode: 'build' | 'plan') => void
 }
 
 let msgIdCounter = 0
@@ -131,6 +134,7 @@ export const useChatStore = create<ChatState>((set) => ({
   phase: '',
   stopReason: '',
   isTransitioning: false,
+  agentMode: 'build',
 
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
   removeMessage: (id) => set((s) => ({ messages: s.messages.filter((m) => m.id !== id) })),
@@ -215,6 +219,8 @@ export const useChatStore = create<ChatState>((set) => ({
   addSystemMessage: (content) =>
     set((s) => ({ messages: [...s.messages, createSystemMessage(content)] })),
 
+  setAgentMode: (agentMode) => set({ agentMode }),
+
   /** 清理全部聊天状态，包括权限请求、token用量等 */
   clearMessages: () => set({
     messages: [],
@@ -225,5 +231,6 @@ export const useChatStore = create<ChatState>((set) => ({
     phase: '',
     stopReason: '',
     isTransitioning: false,
+    agentMode: 'build',
   }),
 }))

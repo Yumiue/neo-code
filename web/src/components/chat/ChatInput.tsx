@@ -30,6 +30,8 @@ export default function ChatInput() {
   const addSystemMessage = useChatStore((s) => s.addSystemMessage)
   const setGenerating = useChatStore((s) => s.setGenerating)
   const sessionId = useSessionStore((s) => s.currentSessionId)
+  const agentMode = useChatStore((s) => s.agentMode)
+  const setAgentMode = useChatStore((s) => s.setAgentMode)
 
   // Slash command 菜单状态
   const [showSlashMenu, setShowSlashMenu] = useState(false)
@@ -257,6 +259,7 @@ export default function ChatInput() {
       const ack = await gatewayAPI.run({
         session_id: isValidSessionId(sessionId) ? sessionId : undefined,
         input_text: input,
+        mode: agentMode,
       })
 
       // 仅在未被取消时回写 session_id 和 run_id
@@ -399,6 +402,22 @@ export default function ChatInput() {
                 <button style={styles.toolBtn} title="引用上下文">
                   <AtSign size={16} />
                 </button>
+                <button
+                  style={{
+                    ...styles.modeBtn,
+                    background: agentMode === 'plan' ? 'var(--accent-soft, rgba(99,102,241,0.12))' : 'transparent',
+                    color: agentMode === 'plan' ? 'var(--accent)' : 'var(--text-tertiary)',
+                    opacity: isGenerating ? 0.5 : 1,
+                    cursor: isGenerating ? 'not-allowed' : 'pointer',
+                  }}
+                  title={agentMode === 'plan' ? '当前模式：Plan（规划模式）' : '当前模式：Build（构建模式）'}
+                  onClick={() => {
+                    if (isGenerating) return
+                    setAgentMode(agentMode === 'plan' ? 'build' : 'plan')
+                  }}
+                >
+                  {agentMode === 'plan' ? 'Plan' : 'Build'}
+                </button>
               </div>
               <button
                 style={{
@@ -466,6 +485,21 @@ const styles: Record<string, React.CSSProperties> = {
     border: 'none',
     background: 'transparent',
     color: 'var(--text-tertiary)',
+    cursor: 'pointer',
+    transition: 'all 0.15s',
+  },
+  modeBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 28,
+    padding: '0 8px',
+    borderRadius: 'var(--radius-sm)',
+    border: 'none',
+    background: 'transparent',
+    fontSize: 12,
+    fontWeight: 600,
+    fontFamily: 'var(--font-ui)',
     cursor: 'pointer',
     transition: 'all 0.15s',
   },

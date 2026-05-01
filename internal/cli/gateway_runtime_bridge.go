@@ -903,6 +903,7 @@ func convertGatewayRunInput(input gateway.RunInput) agentruntime.PrepareInput {
 		SessionID: strings.TrimSpace(input.SessionID),
 		RunID:     runID,
 		Workdir:   strings.TrimSpace(input.Workdir),
+		Mode:      strings.TrimSpace(input.Mode),
 		Text:      strings.Join(textParts, "\n"),
 		Images:    images,
 	}
@@ -1078,6 +1079,7 @@ func convertRuntimeSessionToGatewaySession(session agentsession.Session) gateway
 		Workdir:   strings.TrimSpace(session.Workdir),
 		Provider:  strings.TrimSpace(session.Provider),
 		Model:     strings.TrimSpace(session.Model),
+		AgentMode: strings.TrimSpace(string(session.AgentMode)),
 		Messages:  convertSessionMessages(session.Messages),
 	}
 }

@@ -62,6 +62,7 @@ func dispatchRPCRequest(ctx context.Context, request protocol.JSONRPCRequest, ru
 		SessionID: normalized.SessionID,
 		RunID:     normalized.RunID,
 		Workdir:   normalized.Workdir,
+		Mode:      normalized.Mode,
 		Payload:   normalized.Payload,
 	}
 
@@ -303,6 +304,9 @@ func hydrateFrameRunPayload(frame MessageFrame) MessageFrame {
 	}
 	if strings.TrimSpace(frame.Workdir) == "" {
 		frame.Workdir = strings.TrimSpace(params.Workdir)
+	}
+	if strings.TrimSpace(frame.Mode) == "" {
+		frame.Mode = strings.TrimSpace(params.Mode)
 	}
 	if strings.TrimSpace(frame.InputText) == "" {
 		frame.InputText = strings.TrimSpace(params.InputText)

@@ -211,7 +211,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
       // 4. Load historical messages
       const sessionFrame = await gatewayAPI.loadSession(sessionId)
-      const sessionData = sessionFrame.payload as { messages?: BackendMessage[] }
+      const sessionData = sessionFrame.payload as { messages?: BackendMessage[]; agent_mode?: string }
 
       // Check if this request was superseded
       if (abortCtrl.signal.aborted) return
@@ -223,6 +223,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           useChatStore.getState().addMessage(msg)
         }
       }
+      // 恢复会话的 agent_mode
+      const restoredMode = sessionData.agent_mode === 'plan' ? 'plan' : 'build'
+      useChatStore.getState().setAgentMode(restoredMode)
       chatStore.setTransitioning(false)
     } catch (err) {
       if (abortCtrl.signal.aborted) return
@@ -295,13 +298,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
             // Load historical messages for the auto-selected session
             const sessionFrame = await gatewayAPI.loadSession(firstSession.id)
-            const sessionData = sessionFrame.payload as { messages?: BackendMessage[] }
+            const sessionData = sessionFrame.payload as { messages?: BackendMessage[]; agent_mode?: string }
             if (sessionData.messages && sessionData.messages.length > 0) {
               const mapped = mapHistoryMessages(sessionData.messages)
               for (const msg of mapped) {
                 useChatStore.getState().addMessage(msg)
               }
             }
+            const restoredMode = sessionData.agent_mode === 'plan' ? 'plan' : 'build'
+            useChatStore.getState().setAgentMode(restoredMode)
           } catch (err) {
             console.error('Auto bindStream or loadSession failed:', err)
             useUIStore.getState().showToast('会话加载失败', 'error')

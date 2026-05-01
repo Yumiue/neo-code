@@ -183,6 +183,7 @@ export interface RunParams {
   input_text?: string
   input_parts?: RunInputPart[]
   workdir?: string
+  mode?: string
 }
 
 /** gateway.run 输入分片 */
@@ -242,6 +243,7 @@ export interface Session {
   workdir?: string
   provider?: string
   model?: string
+  agent_mode?: string
   messages?: SessionMessage[]
 }
 

@@ -249,6 +249,7 @@ func dispatchRunFrameWithSubjectID(
 		InputText:  strings.TrimSpace(frame.InputText),
 		InputParts: append([]InputPart(nil), frame.InputParts...),
 		Workdir:    strings.TrimSpace(frame.Workdir),
+		Mode:       strings.TrimSpace(frame.Mode),
 	}
 	frame.RunID = input.RunID
 

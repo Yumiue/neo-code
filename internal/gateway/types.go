@@ -146,6 +146,8 @@ type MessageFrame struct {
 	InputParts []InputPart `json:"input_parts,omitempty"`
 	// Workdir 是本次请求的工作目录覆盖值。
 	Workdir string `json:"workdir,omitempty"`
+	// Mode 是本次请求的 Agent 工作模式（build / plan）。
+	Mode string `json:"mode,omitempty"`
 	// Payload 是动作扩展负载或事件负载。
 	Payload any `json:"payload,omitempty"`
 	// Error 是错误帧负载。

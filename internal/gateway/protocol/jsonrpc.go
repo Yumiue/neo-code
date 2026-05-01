@@ -161,6 +161,7 @@ type NormalizedRequest struct {
 	SessionID string
 	RunID     string
 	Workdir   string
+	Mode      string
 	Payload   any
 }
 
@@ -197,6 +198,7 @@ type RunParams struct {
 	InputText  string         `json:"input_text,omitempty"`
 	InputParts []RunInputPart `json:"input_parts,omitempty"`
 	Workdir    string         `json:"workdir,omitempty"`
+	Mode       string         `json:"mode,omitempty"`
 }
 
 // CancelParams 表示 gateway.cancel 可选参数。
@@ -441,6 +443,7 @@ func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRP
 		normalized.SessionID = strings.TrimSpace(params.SessionID)
 		normalized.RunID = strings.TrimSpace(params.RunID)
 		normalized.Workdir = strings.TrimSpace(params.Workdir)
+		normalized.Mode = strings.TrimSpace(params.Mode)
 		normalized.Payload = params
 		return normalized, nil
 	case MethodGatewayCompact:
