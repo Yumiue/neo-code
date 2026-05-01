@@ -115,6 +115,7 @@ func RunManualShell(ctx context.Context, options ManualShellOptions) error {
 	restoreRawTerminal, err := enableHostTerminalRawMode()
 	if err != nil {
 		cancelAccept()
+		_ = listener.Close()
 		cancelDiag()
 		acceptWG.Wait()
 		diagWG.Wait()
@@ -129,6 +130,7 @@ func RunManualShell(ctx context.Context, options ManualShellOptions) error {
 	ptyFile, err := pty.Start(command)
 	if err != nil {
 		cancelAccept()
+		_ = listener.Close()
 		cancelDiag()
 		acceptWG.Wait()
 		diagWG.Wait()
