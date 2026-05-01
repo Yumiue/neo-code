@@ -47,6 +47,7 @@ interface ChatState {
 
   // Actions
   addMessage: (msg: ChatMessage) => void
+  removeMessage: (id: string) => void
   appendChunk: (text: string) => void
   /** 原子操作：创建流式 assistant 消息 + 加入列表 + 设置 streamingMessageId */
   startStreamingMessage: () => string
@@ -132,6 +133,7 @@ export const useChatStore = create<ChatState>((set) => ({
   isTransitioning: false,
 
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
+  removeMessage: (id) => set((s) => ({ messages: s.messages.filter((m) => m.id !== id) })),
 
   appendChunk: (text) =>
     set((s) => {

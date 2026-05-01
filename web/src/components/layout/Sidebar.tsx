@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSessionStore } from '@/stores/useSessionStore'
+import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useGatewayStore } from '@/stores/useGatewayStore'
 import { useGatewayAPI } from '@/context/RuntimeProvider'
@@ -509,6 +510,7 @@ const formLabelStyle: React.CSSProperties = {
 function SkillModal({ onClose }: { onClose: () => void }) {
   const gatewayAPI = useGatewayAPI()
   const currentSessionId = useSessionStore((s) => s.currentSessionId)
+  const isGenerating = useChatStore((s) => s.isGenerating)
   const [availableSkills, setAvailableSkills] = useState<AvailableSkillState[]>([])
   const [sessionSkills, setSessionSkills] = useState<SessionSkillState[]>([])
   const [loading, setLoading] = useState(false)
@@ -545,6 +547,10 @@ function SkillModal({ onClose }: { onClose: () => void }) {
   const sessionSkillIds = new Set(sessionSkills.map((s) => s.skill_id))
 
   async function handleToggleSkill(skillId: string, enabled: boolean) {
+    if (isGenerating) {
+      setError('生成中无法切换技能，请等待当前对话完成')
+      return
+    }
     if (!currentSessionId) {
       setError('请先选择一个会话再操作 Skill')
       return
@@ -608,9 +614,10 @@ function SkillModal({ onClose }: { onClose: () => void }) {
                 <div style={modalStyles.description}>{skill.descriptor.description || ''}</div>
                 <div style={modalStyles.providerActions}>
                   <button
-                    style={{ ...modalStyles.actionBtn, background: enabled ? 'var(--error-bg, rgba(239,68,68,0.1))' : 'rgba(22,163,74,0.15)', color: enabled ? 'var(--error)' : 'var(--success)' }}
-                    onClick={() => handleToggleSkill(skillId, enabled)}
-                    disabled={!currentSessionId}
+                    style={{ ...modalStyles.actionBtn, background: enabled ? 'var(--error-bg, rgba(239,68,68,0.1))' : 'rgba(22,163,74,0.15)', color: enabled ? 'var(--error)' : 'var(--success)', opacity: isGenerating ? 0.5 : 1, cursor: isGenerating ? 'not-allowed' : 'pointer' }}
+                    onClick={() => !isGenerating && handleToggleSkill(skillId, enabled)}
+                    disabled={!currentSessionId || isGenerating}
+                    title={isGenerating ? '生成中无法切换技能' : undefined}
                   >
                     {enabled ? '停用' : '启用'}
                   </button>
@@ -641,6 +648,7 @@ function emptyProviderForm(): CreateProviderParams & { modelsJSON?: string } {
 
 function ProviderModal({ onClose }: { onClose: () => void }) {
   const gatewayAPI = useGatewayAPI()
+  const isGenerating = useChatStore((s) => s.isGenerating)
   const [providers, setProviders] = useState<ProviderOption[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -671,6 +679,10 @@ function ProviderModal({ onClose }: { onClose: () => void }) {
 
   async function handleSelect(providerId: string) {
     if (!gatewayAPI) return
+    if (isGenerating) {
+      useUIStore.getState().showToast('生成中无法切换供应商，请先停止当前对话', 'info')
+      return
+    }
     try {
       await gatewayAPI.selectProviderModel({ provider_id: providerId })
       useGatewayStore.getState().notifyProviderChanged()
@@ -861,9 +873,10 @@ function ProviderModal({ onClose }: { onClose: () => void }) {
               </div>
               <div style={modalStyles.providerActions}>
                 <button
-                  style={{ ...modalStyles.actionBtn, background: p.selected ? 'var(--bg-active)' : 'rgba(22,163,74,0.15)', color: p.selected ? 'var(--text-tertiary)' : 'var(--success)' }}
+                  style={{ ...modalStyles.actionBtn, background: p.selected ? 'var(--bg-active)' : 'rgba(22,163,74,0.15)', color: p.selected ? 'var(--text-tertiary)' : 'var(--success)', opacity: isGenerating ? 0.5 : 1, cursor: isGenerating ? 'not-allowed' : 'pointer' }}
                   onClick={() => handleSelect(p.id)}
-                  disabled={p.selected}
+                  disabled={p.selected || isGenerating}
+                  title={isGenerating ? '生成中无法切换供应商' : undefined}
                 >
                   {p.selected ? '当前使用' : '选择'}
                 </button>

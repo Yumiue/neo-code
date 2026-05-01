@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { type GatewayAPI } from '@/api/gateway'
 import { type AvailableSkillState } from '@/api/protocol'
+import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { X, Sparkles, Power, PowerOff, Loader2 } from 'lucide-react'
 
@@ -12,6 +13,7 @@ interface SkillPickerProps {
 
 /** 技能管理弹层 */
 export default function SkillPicker({ gatewayAPI, sessionId, onClose }: SkillPickerProps) {
+  const isGenerating = useChatStore((s) => s.isGenerating)
   const [skills, setSkills] = useState<AvailableSkillState[]>([])
   const [loading, setLoading] = useState(true)
   const [togglingId, setTogglingId] = useState<string | null>(null)
@@ -86,6 +88,7 @@ export default function SkillPicker({ gatewayAPI, sessionId, onClose }: SkillPic
           {!loading && skills.map((skill) => {
             const desc = skill.descriptor
             const isToggling = togglingId === desc.id
+            const anyToggling = !!togglingId
             return (
               <div key={desc.id} style={styles.skillRow}>
                 <div style={styles.skillInfo}>
@@ -102,10 +105,12 @@ export default function SkillPicker({ gatewayAPI, sessionId, onClose }: SkillPic
                     ...styles.toggleBtn,
                     background: skill.active ? 'var(--accent-muted)' : 'var(--bg-tertiary)',
                     color: skill.active ? 'var(--accent)' : 'var(--text-tertiary)',
+                    opacity: isGenerating || anyToggling ? 0.5 : 1,
+                    cursor: isGenerating || anyToggling ? 'not-allowed' : 'pointer',
                   }}
-                  onClick={() => handleToggle(desc.id, skill.active)}
-                  disabled={isToggling}
-                  title={skill.active ? '停用技能' : '激活技能'}
+                  onClick={() => !isGenerating && !anyToggling && handleToggle(desc.id, skill.active)}
+                  disabled={isToggling || isGenerating || anyToggling}
+                  title={isGenerating ? '生成中无法切换技能' : anyToggling ? '请等待当前操作完成' : skill.active ? '停用技能' : '激活技能'}
                 >
                   {isToggling ? (
                     <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' } as React.CSSProperties} />

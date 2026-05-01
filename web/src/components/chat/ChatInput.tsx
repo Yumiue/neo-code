@@ -24,6 +24,7 @@ export default function ChatInput() {
   const [rows, setRows] = useState(1)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const runCancelledRef = useRef(false)
   const isGenerating = useChatStore((s) => s.isGenerating)
   const addMessage = useChatStore((s) => s.addMessage)
   const addSystemMessage = useChatStore((s) => s.addSystemMessage)
@@ -196,6 +197,10 @@ export default function ChatInput() {
       }
 
       default: {
+        if (isGenerating) {
+          useUIStore.getState().showToast('生成中无法切换技能，请等待当前对话完成', 'info')
+          return true
+        }
         // 检查是否是技能快捷命令
         const skillCmd = availableSkillCommands.find((s) => s.usage === command)
         if (skillCmd && isValidSessionId(currentSessionId)) {
@@ -220,11 +225,17 @@ export default function ChatInput() {
         return false
       }
     }
-  }, [gatewayAPI, sessionId, addSystemMessage, availableSkillCommands])
+  }, [gatewayAPI, sessionId, addSystemMessage, availableSkillCommands, isGenerating])
 
   async function handleSubmit() {
     const input = text.trim()
-    if (!input || isGenerating) return
+    if (!input) return
+    if (isGenerating) {
+      if (isSlashCommand(input)) {
+        useUIStore.getState().showToast('生成中无法执行命令，请等待当前对话完成', 'info')
+      }
+      return
+    }
 
     // Slash command 拦截
     if (isSlashCommand(input)) {
@@ -236,8 +247,10 @@ export default function ChatInput() {
     }
 
     setText('')
-    addMessage(createUserMessage(input))
+    const userMsg = createUserMessage(input)
+    addMessage(userMsg)
     setGenerating(true)
+    runCancelledRef.current = false
 
     try {
       if (!gatewayAPI) return
@@ -246,18 +259,24 @@ export default function ChatInput() {
         input_text: input,
       })
 
-      // 从 ack 响应中回写 session_id 和 run_id
-      const gwStore = useGatewayStore.getState()
-      const sessStore = useSessionStore.getState()
-      if (ack.run_id) {
-        gwStore.setCurrentRunId(ack.run_id)
-      }
-      if (ack.session_id) {
-        sessStore.setCurrentSessionId(ack.session_id)
+      // 仅在未被取消时回写 session_id 和 run_id
+      if (!runCancelledRef.current) {
+        const gwStore = useGatewayStore.getState()
+        const sessStore = useSessionStore.getState()
+        if (ack.run_id) {
+          gwStore.setCurrentRunId(ack.run_id)
+        }
+        if (ack.session_id) {
+          sessStore.setCurrentSessionId(ack.session_id)
+        }
       }
     } catch (err) {
-      setGenerating(false)
-      console.error('Run failed:', err)
+      if (!runCancelledRef.current) {
+        setGenerating(false)
+        useChatStore.getState().removeMessage(userMsg.id)
+        console.error('Run failed:', err)
+        useUIStore.getState().showToast('消息发送失败，请重试', 'error')
+      }
     }
   }
 
@@ -330,6 +349,7 @@ export default function ChatInput() {
   }
 
   async function handleCancel() {
+    runCancelledRef.current = true
     const runId = useGatewayStore.getState().currentRunId
     if (runId && gatewayAPI) {
       try {

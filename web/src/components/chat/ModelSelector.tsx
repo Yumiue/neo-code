@@ -1,29 +1,36 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useGatewayAPI } from '@/context/RuntimeProvider'
 import { useSessionStore } from '@/stores/useSessionStore'
+import { useChatStore } from '@/stores/useChatStore'
 import { useGatewayStore } from '@/stores/useGatewayStore'
+import { useUIStore } from '@/stores/useUIStore'
 import { type ModelEntry } from '@/api/protocol'
 import { ChevronDown, Loader2 } from 'lucide-react'
 
 export default function ModelSelector() {
   const gatewayAPI = useGatewayAPI()
   const currentSessionId = useSessionStore((s) => s.currentSessionId)
+  const isGenerating = useChatStore((s) => s.isGenerating)
   const providerChangeTick = useGatewayStore((s) => s.providerChangeTick)
   const [open, setOpen] = useState(false)
   const [models, setModels] = useState<ModelEntry[]>([])
   const [selected, setSelected] = useState<ModelEntry | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [pendingModelChange, setPendingModelChange] = useState<ModelEntry | null>(null)
 
   // 追踪 provider 切换，避免闭包陷阱
   const providerTickRef = useRef(providerChangeTick)
+  const fetchGenerationRef = useRef(0)
 
   const loadModels = useCallback(async () => {
     if (!gatewayAPI) return
+    const generation = ++fetchGenerationRef.current
     setLoading(true)
     setError('')
     try {
       const result = await gatewayAPI.listModels(currentSessionId || undefined)
+      if (generation !== fetchGenerationRef.current) return
       const fetched = result.payload.models
       setModels(fetched)
 
@@ -48,11 +55,14 @@ export default function ModelSelector() {
         setSelected(null)
       }
     } catch (err) {
+      if (generation !== fetchGenerationRef.current) return
       const msg = err instanceof Error ? err.message : '加载模型列表失败'
       setError(msg)
       console.error('listModels failed:', err)
     } finally {
-      setLoading(false)
+      if (generation === fetchGenerationRef.current) {
+        setLoading(false)
+      }
     }
   }, [gatewayAPI, currentSessionId, providerChangeTick])
 
@@ -63,6 +73,11 @@ export default function ModelSelector() {
   async function handleSelect(m: ModelEntry) {
     setSelected(m)
     setOpen(false)
+    if (isGenerating) {
+      setPendingModelChange(m)
+      useUIStore.getState().showToast('模型切换将在下一轮对话生效', 'info')
+      return
+    }
     if (currentSessionId && gatewayAPI) {
       try {
         await gatewayAPI.setSessionModel(currentSessionId, m.id, m.provider)
@@ -71,6 +86,15 @@ export default function ModelSelector() {
       }
     }
   }
+
+  // 生成完成后补发延迟的模型切换
+  useEffect(() => {
+    if (!isGenerating && pendingModelChange && currentSessionId && gatewayAPI) {
+      gatewayAPI.setSessionModel(currentSessionId, pendingModelChange.id, pendingModelChange.provider)
+        .catch((err) => console.error('Deferred setSessionModel failed:', err))
+      setPendingModelChange(null)
+    }
+  }, [isGenerating, pendingModelChange, currentSessionId, gatewayAPI])
 
   if (!gatewayAPI) return null
 

@@ -163,6 +163,8 @@ function mapHistoryMessages(backendMessages: BackendMessage[]): Array<ReturnType
   return result
 }
 
+let _fetchSessionsPromise: Promise<void> | null = null
+
 export const useSessionStore = create<SessionState>((set, get) => ({
   projects: [],
   currentSessionId: '',
@@ -178,6 +180,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   switchSession: async (sessionId: string, gatewayAPI: GatewayAPI) => {
     if (!sessionId) return
+
+    // 生成中拒绝切换会话
+    if (useChatStore.getState().isGenerating) {
+      useUIStore.getState().showToast('生成中无法切换会话，请先停止当前对话', 'info')
+      return
+    }
 
     // Abort previous switchSession if still in progress
     const prevAbort = get()._switchAbort
@@ -233,6 +241,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   createSession: () => {
+    if (useChatStore.getState().isGenerating) {
+      useUIStore.getState().showToast('生成中无法新建会话，请先停止当前对话', 'info')
+      return
+    }
     useChatStore.getState().clearMessages()
     set({ currentSessionId: '', currentProjectId: '' })
   },
@@ -253,44 +265,57 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   prepareNewChat: () => {
+    if (useChatStore.getState().isGenerating) {
+      useUIStore.getState().showToast('生成中无法新建会话，请先停止当前对话', 'info')
+      return
+    }
     useChatStore.getState().clearMessages()
     set({ currentSessionId: '', currentProjectId: '' })
   },
 
   fetchSessions: async (gatewayAPI) => {
-    set({ loading: true })
-    try {
-      const result = await gatewayAPI.listSessions()
-      const sessions = result.payload.sessions
-      const projects = mapSessionsToProjects(sessions)
-      set({ projects, loading: false })
+    // 去重：若已有 fetch 在进行中，复用同一 promise
+    if (_fetchSessionsPromise) return _fetchSessionsPromise
 
-      const state = get()
-      if (!isValidSessionId(state.currentSessionId) && sessions.length > 0) {
-        const firstSession = sessions[0]
-        set({ currentSessionId: firstSession.id })
-        try {
-          await gatewayAPI.bindStream({ session_id: firstSession.id, channel: 'all' })
-          set({ _initialBindDone: true })
+    _fetchSessionsPromise = (async () => {
+      set({ loading: true })
+      try {
+        const result = await gatewayAPI.listSessions()
+        const sessions = result.payload.sessions
+        const projects = mapSessionsToProjects(sessions)
+        set({ projects, loading: false })
 
-          // Load historical messages for the auto-selected session
-          const sessionFrame = await gatewayAPI.loadSession(firstSession.id)
-          const sessionData = sessionFrame.payload as { messages?: BackendMessage[] }
-          if (sessionData.messages && sessionData.messages.length > 0) {
-            const mapped = mapHistoryMessages(sessionData.messages)
-            for (const msg of mapped) {
-              useChatStore.getState().addMessage(msg)
+        const state = get()
+        if (!isValidSessionId(state.currentSessionId) && sessions.length > 0) {
+          const firstSession = sessions[0]
+          set({ currentSessionId: firstSession.id })
+          try {
+            await gatewayAPI.bindStream({ session_id: firstSession.id, channel: 'all' })
+            set({ _initialBindDone: true })
+
+            // Load historical messages for the auto-selected session
+            const sessionFrame = await gatewayAPI.loadSession(firstSession.id)
+            const sessionData = sessionFrame.payload as { messages?: BackendMessage[] }
+            if (sessionData.messages && sessionData.messages.length > 0) {
+              const mapped = mapHistoryMessages(sessionData.messages)
+              for (const msg of mapped) {
+                useChatStore.getState().addMessage(msg)
+              }
             }
+          } catch (err) {
+            console.error('Auto bindStream or loadSession failed:', err)
+            useUIStore.getState().showToast('会话加载失败', 'error')
           }
-        } catch (err) {
-          console.error('Auto bindStream or loadSession failed:', err)
-          useUIStore.getState().showToast('会话加载失败', 'error')
         }
+      } catch (err) {
+        console.error('fetchSessions failed:', err)
+        set({ loading: false })
+        useUIStore.getState().showToast('会话列表加载失败', 'error')
+      } finally {
+        _fetchSessionsPromise = null
       }
-    } catch (err) {
-      console.error('fetchSessions failed:', err)
-      set({ loading: false })
-      useUIStore.getState().showToast('会话列表加载失败', 'error')
-    }
+    })()
+
+    return _fetchSessionsPromise
   },
 }))
