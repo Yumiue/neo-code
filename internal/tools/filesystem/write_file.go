@@ -17,8 +17,10 @@ type WriteFileTool struct {
 }
 
 type writeFileInput struct {
-	Path    string `json:"path"`
-	Content string `json:"content"`
+	Path              string `json:"path"`
+	Content           string `json:"content"`
+	VerifyAfterWrite  bool   `json:"verify_after_write,omitempty"`
+	VerificationScope string `json:"verification_scope,omitempty"`
 }
 
 func NewWrite(root string) *WriteFileTool {
@@ -30,7 +32,7 @@ func (t *WriteFileTool) Name() string {
 }
 
 func (t *WriteFileTool) Description() string {
-	return "Write a file inside the current workspace, creating parent directories when needed."
+	return "Write a file inside the current workspace, creating parent directories when needed. Set verify_after_write=true to emit verification facts in the same call."
 }
 
 func (t *WriteFileTool) Schema() map[string]any {
@@ -44,6 +46,14 @@ func (t *WriteFileTool) Schema() map[string]any {
 			"content": map[string]any{
 				"type":        "string",
 				"description": "Full file content to write.",
+			},
+			"verify_after_write": map[string]any{
+				"type":        "boolean",
+				"description": "When true, emit verification facts from write/read-back comparison in this same call.",
+			},
+			"verification_scope": map[string]any{
+				"type":        "string",
+				"description": "Optional verification scope label when verify_after_write is true. Defaults to artifact:<path>.",
 			},
 		},
 		"required": []string{"path", "content"},
@@ -85,7 +95,7 @@ func (t *WriteFileTool) Execute(ctx context.Context, input tools.ToolCallInput) 
 	}
 	existing, readErr := os.ReadFile(target)
 	if readErr == nil && string(existing) == args.Content {
-		return tools.ToolResult{
+		result := tools.ToolResult{
 			Name:    t.Name(),
 			Content: "ok",
 			Metadata: map[string]any{
@@ -94,7 +104,16 @@ func (t *WriteFileTool) Execute(ctx context.Context, input tools.ToolCallInput) 
 				"noop_write":        true,
 				"content_unchanged": true,
 			},
-		}, nil
+		}
+		if args.VerifyAfterWrite {
+			scope := resolveWriteVerificationScope(args.VerificationScope, target)
+			result.Facts.VerificationPerformed = true
+			result.Facts.VerificationPassed = true
+			result.Facts.VerificationScope = scope
+			result.Metadata["verification_reason"] = "write_content_match_noop"
+			result.Metadata["verification_scope"] = scope
+		}
+		return result, nil
 	}
 	if readErr != nil && !os.IsNotExist(readErr) {
 		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), readErr), "", nil), readErr
@@ -103,7 +122,7 @@ func (t *WriteFileTool) Execute(ctx context.Context, input tools.ToolCallInput) 
 		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
-	return tools.ToolResult{
+	result := tools.ToolResult{
 		Name:    t.Name(),
 		Content: "ok",
 		Metadata: map[string]any{
@@ -112,5 +131,33 @@ func (t *WriteFileTool) Execute(ctx context.Context, input tools.ToolCallInput) 
 			"noop_write":        false,
 			"content_unchanged": false,
 		},
-	}, nil
+	}
+	if args.VerifyAfterWrite {
+		scope := resolveWriteVerificationScope(args.VerificationScope, target)
+		result.Facts.VerificationPerformed = true
+		result.Facts.VerificationScope = scope
+		result.Metadata["verification_scope"] = scope
+		readBack, readBackErr := os.ReadFile(target)
+		if readBackErr != nil {
+			result.Facts.VerificationPassed = false
+			result.Metadata["verification_reason"] = "write_readback_error"
+			result.Metadata["verification_readback_error"] = readBackErr.Error()
+		} else if string(readBack) == args.Content {
+			result.Facts.VerificationPassed = true
+			result.Metadata["verification_reason"] = "write_readback_match"
+		} else {
+			result.Facts.VerificationPassed = false
+			result.Metadata["verification_reason"] = "write_readback_mismatch"
+		}
+	}
+	return result, nil
+}
+
+// resolveWriteVerificationScope 统一计算 write_file 写后验证 scope，避免上层缺省值不稳定。
+func resolveWriteVerificationScope(raw string, path string) string {
+	scope := strings.TrimSpace(raw)
+	if scope != "" {
+		return scope
+	}
+	return "artifact:" + strings.TrimSpace(path)
 }
