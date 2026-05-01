@@ -127,7 +127,7 @@ func TestFinalAcceptanceHelpers(t *testing.T) {
 		state.pendingFinalProgress = true
 		applyAcceptanceResultProgress(&state, acceptance.AcceptanceDecision{Status: acceptance.AcceptanceContinue})
 		if state.finalInterceptStreak != 0 || state.pendingFinalProgress {
-			t.Fatalf("unexpected state after progress reset: %+v", state)
+			t.Fatalf("unexpected state after progress reset: streak=%d, pending=%v", state.finalInterceptStreak, state.pendingFinalProgress)
 		}
 
 		applyAcceptanceResultProgress(&state, acceptance.AcceptanceDecision{Status: acceptance.AcceptanceContinue})
