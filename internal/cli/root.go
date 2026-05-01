@@ -98,6 +98,8 @@ func NewRootCommand() *cobra.Command {
 	cmd.AddCommand(
 		newGatewayCommand(),
 		newDaemonCommand(),
+		newShellCommand(),
+		newDiagCommand(),
 		newMigrateCommand(),
 		newVersionCommand(),
 		newUpdateCommand(),

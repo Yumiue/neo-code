@@ -124,7 +124,17 @@ neocode --workdir /path/to/your/project
 /skill off <id>       停用 skill
 ```
 
-### 5. url scheme使用
+### 5. 终端诊断（Manual）
+
+```bash
+# 进入代理 shell（Phase1 仅支持 Unix）
+neocode shell
+
+# 在代理 shell 内触发诊断（默认读取 NEOCODE_DIAG_SOCKET）
+neocode diag
+```
+
+### 6. url scheme使用
 详细指南链接： [HTTP URL 唤醒使用指南（用户故事版）](https://neocode-docs.pages.dev/guide/http-daemon-wake-user-guide)
 
 ```bash
