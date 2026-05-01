@@ -2319,6 +2319,102 @@ func TestHandleListModelsFrameSuccess(t *testing.T) {
 	}
 }
 
+func TestHandleListSessionTodosFrameSuccess(t *testing.T) {
+	runtime := &bootstrapRuntimeStub{
+		listSessionTodosFn: func(_ context.Context, input ListSessionTodosInput) (TodoSnapshot, error) {
+			if input.SubjectID != "subject-1" || input.SessionID != "session-1" {
+				t.Fatalf("input = %#v", input)
+			}
+			return TodoSnapshot{
+				Summary: TodoSummary{Total: 1, RequiredTotal: 1, RequiredCompleted: 1},
+				Items: []TodoViewItem{
+					{ID: "t-1", Content: "done", Status: "completed", Required: true, Revision: 3},
+				},
+			}, nil
+		},
+	}
+	authState := NewConnectionAuthState()
+	authState.MarkAuthenticated("subject-1")
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithConnectionAuthState(ctx, authState)
+	frame := MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionListSessionTodos,
+		RequestID: "req-todo-1",
+		Payload:   protocol.ListSessionTodosParams{SessionID: " session-1 "},
+	}
+	response := dispatchRequestFrame(ctx, frame, runtime)
+	if response.Type != FrameTypeAck || response.Action != FrameActionListSessionTodos {
+		t.Fatalf("response = %#v", response)
+	}
+	if response.SessionID != "session-1" {
+		t.Fatalf("session_id = %q, want %q", response.SessionID, "session-1")
+	}
+}
+
+func TestHandleGetRuntimeSnapshotFrameSuccess(t *testing.T) {
+	runtime := &bootstrapRuntimeStub{
+		getRuntimeSnapshotFn: func(_ context.Context, input GetRuntimeSnapshotInput) (RuntimeSnapshot, error) {
+			if input.SubjectID != "subject-1" || input.SessionID != "session-2" {
+				t.Fatalf("input = %#v", input)
+			}
+			return RuntimeSnapshot{
+				RunID:     "run-1",
+				SessionID: "session-2",
+				Phase:     "acceptance",
+				TaskKind:  "workspace_write",
+			}, nil
+		},
+	}
+	authState := NewConnectionAuthState()
+	authState.MarkAuthenticated("subject-1")
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithConnectionAuthState(ctx, authState)
+	frame := MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionGetRuntimeSnapshot,
+		RequestID: "req-snapshot-1",
+		Payload:   protocol.GetRuntimeSnapshotParams{SessionID: " session-2 "},
+	}
+	response := dispatchRequestFrame(ctx, frame, runtime)
+	if response.Type != FrameTypeAck || response.Action != FrameActionGetRuntimeSnapshot {
+		t.Fatalf("response = %#v", response)
+	}
+	if response.SessionID != "session-2" {
+		t.Fatalf("session_id = %q, want %q", response.SessionID, "session-2")
+	}
+}
+
+func TestDecodeRuntimeSnapshotAndTodoPayloadBranches(t *testing.T) {
+	if got := buildWakeReviewPrompt("  README.md "); got != "请审查文件 README.md" {
+		t.Fatalf("buildWakeReviewPrompt() = %q", got)
+	}
+	if params := normalizeListSessionTodosParams(" s-1 "); params.SessionID != "s-1" {
+		t.Fatalf("normalizeListSessionTodosParams() = %#v", params)
+	}
+	if params := normalizeGetRuntimeSnapshotParams(" s-2 "); params.SessionID != "s-2" {
+		t.Fatalf("normalizeGetRuntimeSnapshotParams() = %#v", params)
+	}
+
+	todoParams, todoErr := decodeListSessionTodosPayload(map[string]any{"session_id": " s-3 "})
+	if todoErr != nil || todoParams.SessionID != "s-3" {
+		t.Fatalf("decodeListSessionTodosPayload map = %#v, err=%v", todoParams, todoErr)
+	}
+	snapshotParams, snapshotErr := decodeGetRuntimeSnapshotPayload(map[string]any{"session_id": " s-4 "})
+	if snapshotErr != nil || snapshotParams.SessionID != "s-4" {
+		t.Fatalf("decodeGetRuntimeSnapshotPayload map = %#v, err=%v", snapshotParams, snapshotErr)
+	}
+
+	_, todoErr = decodeListSessionTodosPayload(invalidJSONMarshaler{})
+	if todoErr == nil || todoErr.Code != ErrorCodeInvalidAction.String() {
+		t.Fatalf("expected invalid action for todo payload, got %#v", todoErr)
+	}
+	_, snapshotErr = decodeGetRuntimeSnapshotPayload(invalidJSONMarshaler{})
+	if snapshotErr == nil || snapshotErr.Code != ErrorCodeInvalidAction.String() {
+		t.Fatalf("expected invalid action for runtime snapshot payload, got %#v", snapshotErr)
+	}
+}
+
 func TestHandleSetSessionModelFrameSuccess(t *testing.T) {
 	runtime := &bootstrapRuntimeStub{
 		setSessionModelFn: func(_ context.Context, input SetSessionModelInput) error {
