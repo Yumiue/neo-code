@@ -59,6 +59,57 @@ func TestListProviderModelsCustomProviderDoesNotFallbackWithoutDiscovery(t *test
 	}
 }
 
+func TestListProviderModelsBuiltinDiscoversAndMergesWithStaticModels(t *testing.T) {
+	t.Setenv(testAPIKeyEnv, "test-key")
+
+	registry := newRegistry(t, openaicompat.DriverName, func(ctx context.Context, cfg provider.RuntimeConfig) ([]providertypes.ModelDescriptor, error) {
+		return []providertypes.ModelDescriptor{
+			{ID: "gpt-5.4", Name: "GPT-5.4 (Live)"},
+			{ID: "gpt-new-model", Name: "GPT New Model"},
+		}, nil
+	})
+
+	service := NewService("", registry, newMemoryStore())
+	input := openAIProviderSource()
+	models, err := service.ListProviderModels(context.Background(), input)
+	if err != nil {
+		t.Fatalf("ListProviderModels() error = %v", err)
+	}
+	if len(models) != 7 {
+		t.Fatalf("expected 7 models (6 static + 1 new discovered), got %d: %+v", len(models), models)
+	}
+
+	// Discovered model not in static list should appear
+	if !containsModelDescriptorID(models, "gpt-new-model") {
+		t.Fatalf("expected discovered new model to be present, got %+v", models)
+	}
+	// Static model should still be present
+	if !containsModelDescriptorID(models, "gpt-5.4") {
+		t.Fatalf("expected static model to be present, got %+v", models)
+	}
+}
+
+func TestListProviderModelsBuiltinFallbackWhenDiscoveryFails(t *testing.T) {
+	t.Setenv(testAPIKeyEnv, "test-key")
+
+	registry := newRegistry(t, openaicompat.DriverName, func(ctx context.Context, cfg provider.RuntimeConfig) ([]providertypes.ModelDescriptor, error) {
+		return nil, errors.New("network unreachable")
+	})
+
+	service := NewService("", registry, newMemoryStore())
+	input := openAIProviderSource()
+	models, err := service.ListProviderModels(context.Background(), input)
+	if err != nil {
+		t.Fatalf("ListProviderModels() error = %v", err)
+	}
+	if len(models) != 6 {
+		t.Fatalf("expected 6 fallback static models when discovery fails, got %d: %+v", len(models), models)
+	}
+	if !containsModelDescriptorID(models, config.OpenAIDefaultModel) {
+		t.Fatalf("expected fallback default model to be present, got %+v", models)
+	}
+}
+
 func TestListProviderModelsMergesConfiguredMetadataAfterDiscovery(t *testing.T) {
 	t.Setenv(testAPIKeyEnv, "test-key")
 
@@ -574,20 +625,6 @@ func openAIProviderSource() provider.CatalogInput {
 	providerCfg := config.OpenAIProvider()
 	providerCfg.APIKeyEnv = testAPIKeyEnv
 	input := mustCatalogInput(nil, providerCfg)
-	if len(input.ConfiguredModels) == 0 {
-		input.ConfiguredModels = providertypes.DescriptorsFromIDs([]string{
-			config.OpenAIDefaultModel,
-			"gpt-5.4-mini",
-			"gpt-5.3-codex",
-			"gpt-4.1",
-			"gpt-4o",
-			"gpt-4o-mini",
-		})
-	}
-	if len(input.DefaultModels) == 0 {
-		input.DefaultModels = providertypes.CloneModelDescriptors(input.ConfiguredModels)
-	}
-	input.DisableDiscovery = true
 	return input
 }
 
@@ -611,8 +648,7 @@ func mustCatalogInput(t *testing.T, cfg config.ProviderConfig) provider.CatalogI
 	input := provider.CatalogInput{
 		Identity:         identity,
 		ConfiguredModels: providertypes.CloneModelDescriptors(cloned.Models),
-		DisableDiscovery: cloned.Source == config.ProviderSourceBuiltin ||
-			(cloned.Source == config.ProviderSourceCustom && config.NormalizeModelSource(cloned.ModelSource) == config.ModelSourceManual),
+		DisableDiscovery: config.NormalizeModelSource(cloned.ModelSource) == config.ModelSourceManual,
 		ResolveDiscoveryConfig: func() (provider.RuntimeConfig, error) {
 			resolved, err := cloned.Resolve()
 			if err != nil {

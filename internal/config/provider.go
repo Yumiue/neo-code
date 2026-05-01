@@ -580,6 +580,7 @@ func newBuiltinOpenAICompatProvider(name, baseURL, model, apiKeyEnv string) Prov
 		APIKeyEnv:        apiKeyEnv,
 		ChatAPIMode:      provider.ChatAPIModeChatCompletions,
 		ChatEndpointPath: "/chat/completions",
+		ModelSource:      ModelSourceDiscover,
 		Source:           ProviderSourceBuiltin,
 	}
 }
@@ -601,6 +602,7 @@ func GeminiProvider() ProviderConfig {
 		APIKeyEnv:        GeminiDefaultAPIKeyEnv,
 		ChatEndpointPath: "",
 		Models:           cloneBuiltinModels(geminiStaticModels),
+		ModelSource:      ModelSourceDiscover,
 		Source:           ProviderSourceBuiltin,
 	}
 }
