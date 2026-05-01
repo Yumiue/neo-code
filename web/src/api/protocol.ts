@@ -449,13 +449,22 @@ export interface DeleteMCPServerParams {
 /** gateway.deleteMCPServer 响应 */
 export type DeleteMCPServerResult = RPCResult<{ deleted: boolean; id: string }>
 
+/** 技能来源元信息 */
+export interface SkillSource {
+  kind: string
+  layer?: string
+  root_dir?: string
+  skill_dir?: string
+  file_path?: string
+}
+
 /** 技能描述元信息 */
 export interface SkillDescriptor {
   id: string
   name?: string
   description?: string
   version?: string
-  source?: string
+  source?: SkillSource
   scope?: string
 }
 

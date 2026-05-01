@@ -6,8 +6,8 @@ export interface ChatMessage {
   id: string
   /** 消息角色：user / assistant / tool */
   role: 'user' | 'assistant' | 'tool'
-  /** 消息类型：text / thinking / tool_call / code / welcome */
-  type: 'text' | 'thinking' | 'tool_call' | 'code' | 'welcome'
+  /** 消息类型：text / thinking / tool_call / code / welcome / system */
+  type: 'text' | 'thinking' | 'tool_call' | 'code' | 'welcome' | 'system'
   /** 文本内容 */
   content: string
   /** 工具调用信息 */
@@ -64,6 +64,7 @@ interface ChatState {
   setPhase: (phase: string) => void
   setStopReason: (reason: string) => void
   clearMessages: () => void
+  addSystemMessage: (content: string) => void
 }
 
 let msgIdCounter = 0
@@ -91,6 +92,17 @@ export function createAssistantMessage(): ChatMessage {
     content: '',
     timestamp: Date.now(),
     streaming: true,
+  }
+}
+
+/** 创建系统消息（用于展示 slash command 执行结果） */
+export function createSystemMessage(text: string): ChatMessage {
+  return {
+    id: nextMsgId(),
+    role: 'assistant',
+    type: 'system',
+    content: text,
+    timestamp: Date.now(),
   }
 }
 
@@ -197,6 +209,9 @@ export const useChatStore = create<ChatState>((set) => ({
   updateTokenUsage: (tokenUsage) => set({ tokenUsage }),
   setPhase: (phase) => set({ phase }),
   setStopReason: (stopReason) => set({ stopReason }),
+
+  addSystemMessage: (content) =>
+    set((s) => ({ messages: [...s.messages, createSystemMessage(content)] })),
 
   /** 清理全部聊天状态，包括权限请求、token用量等 */
   clearMessages: () => set({

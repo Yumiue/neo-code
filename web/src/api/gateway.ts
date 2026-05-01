@@ -96,7 +96,7 @@ export class GatewayAPI {
   }
 
   /** 执行系统工具 */
-  async executeSystemTool(sessionId: string, runId: string, toolName: string, args: string, workdir?: string) {
+  async executeSystemTool(sessionId: string, runId: string, toolName: string, args: any, workdir?: string) {
     return this.ws.call(Method.ExecuteSystemTool, {
       session_id: sessionId,
       run_id: runId,

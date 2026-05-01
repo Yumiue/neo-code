@@ -3,7 +3,7 @@ import { type ChatMessage } from '@/stores/useChatStore'
 import ToolCallCard from './ToolCallCard'
 import CodeBlock from './CodeBlock'
 import MarkdownContent from './MarkdownContent'
-import { Bot, ChevronRight } from 'lucide-react'
+import { Bot, ChevronRight, Info } from 'lucide-react'
 
 interface MessageItemProps {
   message: ChatMessage
@@ -12,6 +12,10 @@ interface MessageItemProps {
 
 /** 单条消息渲染 */
 const MessageItem = memo(function MessageItem({ message, isLast = false }: MessageItemProps) {
+  if (message.type === 'system') {
+    return <SystemMessage message={message} />
+  }
+
   if (message.type === 'welcome') {
     return <WelcomeMessage message={message} />
   }
@@ -96,6 +100,18 @@ function ThinkingMessage({ message }: { message: ChatMessage }) {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+function SystemMessage({ message }: { message: ChatMessage }) {
+  return (
+    <div style={styles.systemRow} className="animate-fade-in">
+      <div style={styles.systemBadge}>
+        <Info size={12} />
+        <span style={styles.systemLabel}>系统</span>
+      </div>
+      <pre style={styles.systemPre}>{message.content}</pre>
     </div>
   )
 }
@@ -210,6 +226,40 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 14,
     lineHeight: 1.7,
     color: 'var(--text-secondary)',
+    margin: 0,
+  },
+  systemRow: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 6,
+    padding: '10px 16px',
+    margin: '4px 0',
+  },
+  systemBadge: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 4,
+    padding: '3px 10px',
+    borderRadius: 'var(--radius-md)',
+    background: 'var(--bg-tertiary)',
+    color: 'var(--text-tertiary)',
+    fontSize: 11,
+    fontWeight: 600,
+  },
+  systemLabel: {
+    fontSize: 11,
+    fontWeight: 600,
+    letterSpacing: '0.5px',
+  },
+  systemPre: {
+    fontSize: 13,
+    lineHeight: 1.6,
+    color: 'var(--text-secondary)',
+    textAlign: 'left',
+    maxWidth: '85%',
+    whiteSpace: 'pre-wrap',
+    fontFamily: 'var(--font-mono)',
     margin: 0,
   },
 }
