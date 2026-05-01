@@ -73,12 +73,28 @@ func defaultBuildGatewayRuntimePort(ctx context.Context, workdir string) (gatewa
 	return bridge, cleanup, nil
 }
 
+// configManagerPort 定义桥接层对配置管理器的最小需求。
+type configManagerPort interface {
+	Get() config.Config
+	Load(ctx context.Context) (config.Config, error)
+	Update(ctx context.Context, mutate func(*config.Config) error) error
+	BaseDir() string
+}
+
+// providerSelectorPort 定义桥接层对 Provider 选择服务的最小需求。
+type providerSelectorPort interface {
+	ListProviderOptions(ctx context.Context) ([]configstate.ProviderOption, error)
+	CreateCustomProvider(ctx context.Context, input configstate.CreateCustomProviderInput) (configstate.Selection, error)
+	SelectProvider(ctx context.Context, providerName string) (configstate.Selection, error)
+	SetCurrentModel(ctx context.Context, modelID string) (configstate.Selection, error)
+}
+
 // gatewayRuntimePortBridge 将 runtime.Runtime 适配为 gateway.RuntimePort，并负责事件流桥接。
 type gatewayRuntimePortBridge struct {
 	runtime           agentruntime.Runtime
 	sessionStore      bridgeSessionStore
-	configManager     *config.Manager
-	providerSelection *configstate.Service
+	configManager     configManagerPort
+	providerSelection providerSelectorPort
 	events            chan gateway.RuntimeEvent
 
 	stopOnce sync.Once
@@ -98,22 +114,22 @@ func newGatewayRuntimePortBridge(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	var configManager *config.Manager
-	var providerSelection *configstate.Service
+	var cm configManagerPort
+	var ps providerSelectorPort
 	for _, extra := range extras {
 		switch typed := extra.(type) {
-		case *config.Manager:
-			configManager = typed
-		case *configstate.Service:
-			providerSelection = typed
+		case configManagerPort:
+			cm = typed
+		case providerSelectorPort:
+			ps = typed
 		}
 	}
 
 	bridge := &gatewayRuntimePortBridge{
 		runtime:           runtimeSvc,
 		sessionStore:      store,
-		configManager:     configManager,
-		providerSelection: providerSelection,
+		configManager:     cm,
+		providerSelection: ps,
 		events:            make(chan gateway.RuntimeEvent, 128),
 		stopCh:            make(chan struct{}),
 	}
