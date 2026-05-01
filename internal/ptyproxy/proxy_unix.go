@@ -202,7 +202,7 @@ func printProxyExitedBanner(writer io.Writer) {
 	if writer == nil {
 		return
 	}
-	writeProxyText(writer, "\r\n"+proxyExitedBanner+"\r\n")
+	_, _ = fmt.Fprint(writer, "\r\n[ NeoCode Proxy exited ]\r\n")
 }
 
 // enableHostTerminalRawMode 将宿主终端切换到原始模式，并返回可恢复终端状态的函数。
