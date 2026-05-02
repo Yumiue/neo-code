@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	providertypes "neo-code/internal/provider/types"
 	runtimehooks "neo-code/internal/runtime/hooks"
 )
 
@@ -291,11 +290,16 @@ func (s *Service) drainHookNotificationsForTurn(state *runState) string {
 		strings.Join(lines, "\n")
 }
 
-func buildEphemeralHookNotificationMessage(hint string) providertypes.Message {
-	return providertypes.Message{
-		Role: providertypes.RoleSystem,
-		Parts: []providertypes.ContentPart{
-			providertypes.NewTextPart(strings.TrimSpace(hint)),
-		},
+// mergeEphemeralHookNotificationIntoSystemPrompt 将异步通知提示临时拼接到本轮系统提示词中。
+// 该函数只影响当前 provider 请求，不写入会话历史或持久化存储。
+func mergeEphemeralHookNotificationIntoSystemPrompt(basePrompt string, hint string) string {
+	trimmedHint := strings.TrimSpace(hint)
+	if trimmedHint == "" {
+		return strings.TrimSpace(basePrompt)
 	}
+	trimmedBase := strings.TrimSpace(basePrompt)
+	if trimmedBase == "" {
+		return trimmedHint
+	}
+	return trimmedBase + "\n\n" + trimmedHint
 }

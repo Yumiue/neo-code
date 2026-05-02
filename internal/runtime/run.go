@@ -598,12 +598,12 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 	limit := resolveNoProgressStreakLimit(cfg.Runtime)
 	repeatLimit := resolveRepeatCycleStreakLimit(cfg.Runtime)
 	systemPrompt := withProgressReminder(builtContext.SystemPrompt, score)
+	if notificationHint := strings.TrimSpace(s.drainHookNotificationsForTurn(state)); notificationHint != "" {
+		systemPrompt = mergeEphemeralHookNotificationIntoSystemPrompt(systemPrompt, notificationHint)
+	}
 	promptBudget, budgetSource := s.resolvePromptBudget(ctx, cfg)
 	model := strings.TrimSpace(cfg.CurrentModel)
 	requestMessages := append([]providertypes.Message(nil), builtContext.Messages...)
-	if notificationHint := strings.TrimSpace(s.drainHookNotificationsForTurn(state)); notificationHint != "" {
-		requestMessages = append([]providertypes.Message{buildEphemeralHookNotificationMessage(notificationHint)}, requestMessages...)
-	}
 	request := providertypes.GenerateRequest{
 		Model:              model,
 		SystemPrompt:       systemPrompt,

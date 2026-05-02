@@ -281,12 +281,12 @@ func TestRunInjectsEphemeralHookNotificationWithoutPersistingHistory(t *testing.
 		t.Fatalf("provider requests = %d, want >=2", len(providerImpl.requests))
 	}
 	second := providerImpl.requests[1]
-	if len(second.Messages) == 0 || second.Messages[0].Role != providertypes.RoleSystem {
-		t.Fatalf("second request first message = %+v, want injected system message", second.Messages)
+	if len(second.Messages) == 0 || second.Messages[0].Role != providertypes.RoleUser {
+		t.Fatalf("second request messages = %+v, want original conversation messages", second.Messages)
 	}
-	injected := renderPartsForTest(second.Messages[0].Parts)
+	injected := strings.TrimSpace(second.SystemPrompt)
 	if !strings.Contains(injected, "[runtime_async_notifications]") {
-		t.Fatalf("injected hint = %q, want runtime_async_notifications marker", injected)
+		t.Fatalf("system prompt = %q, want runtime_async_notifications marker", injected)
 	}
 
 	saved := onlySession(t, store)
@@ -299,6 +299,20 @@ func TestRunInjectsEphemeralHookNotificationWithoutPersistingHistory(t *testing.
 	events := collectRuntimeEvents(service.Events())
 	if got := countEventType(events, EventHookNotification); got != 1 {
 		t.Fatalf("hook_notification events = %d, want exactly 1", got)
+	}
+}
+
+func TestMergeEphemeralHookNotificationIntoSystemPrompt(t *testing.T) {
+	t.Parallel()
+
+	if got := mergeEphemeralHookNotificationIntoSystemPrompt("base", "hint"); got != "base\n\nhint" {
+		t.Fatalf("merge result = %q, want base + blank line + hint", got)
+	}
+	if got := mergeEphemeralHookNotificationIntoSystemPrompt("  ", "hint"); got != "hint" {
+		t.Fatalf("merge blank base = %q, want hint", got)
+	}
+	if got := mergeEphemeralHookNotificationIntoSystemPrompt("base", "   "); got != "base" {
+		t.Fatalf("merge blank hint = %q, want base", got)
 	}
 }
 
