@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -30,10 +31,10 @@ import (
 )
 
 const (
-	diagSignalPayload      = "diagnose\n"
-	diagSignalAckPayload   = "1"
 	diagnoseCallTimeout    = 10 * time.Second
-	diagSocketReadDeadline = 2 * time.Second
+	diagSocketReadDeadline = 3 * time.Second
+	autoProbeTimeout       = 1500 * time.Millisecond
+
 	proxyInitializedBanner = "[ NeoCode Proxy initialized ]"
 	proxyExitedBanner      = "[ NeoCode Proxy exited ]"
 )
@@ -65,11 +66,30 @@ type diagnoseToolResult struct {
 	InvestigationCommands []string `json:"investigation_commands"`
 }
 
-type diagSignalRequest struct {
-	done chan struct{}
+type diagnoseTrigger struct {
+	CommandText string
+	ExitCode    int
+	OutputText  string
 }
 
-// RunManualShell 启动 Manual 模式终端代理，提供 PTY 透明透传与诊断触发能力。
+type diagnoseJob struct {
+	Trigger diagnoseTrigger
+	Done    chan diagIPCResponse
+	IsAuto  bool
+}
+
+type autoRuntimeState struct {
+	Enabled  atomic.Bool
+	OSCReady atomic.Bool
+}
+
+type commandTracker struct {
+	mu          sync.Mutex
+	lineBuffer  []byte
+	lastCommand string
+}
+
+// RunManualShell 启动 Phase2 终端代理，提供 Manual/Auto 诊断闭环与 OSC133 事件驱动能力。
 func RunManualShell(ctx context.Context, options ManualShellOptions) error {
 	normalized, err := NormalizeShellOptions(options)
 	if err != nil {
@@ -90,35 +110,12 @@ func RunManualShell(ctx context.Context, options ManualShellOptions) error {
 		_ = os.Remove(socketPath)
 	}()
 
-	var outputMu sync.Mutex
-	synchronizedOutput := &serializedWriter{writer: normalized.Stdout, lock: &outputMu}
-	buffer := NewUTF8RingBuffer(DefaultRingBufferCapacity)
-	outputSink := io.MultiWriter(synchronizedOutput, buffer)
-
-	triggerCh := make(chan diagSignalRequest, 1)
-	acceptCtx, cancelAccept := context.WithCancel(context.Background())
-	var acceptWG sync.WaitGroup
-	acceptWG.Add(1)
-	go func() {
-		defer acceptWG.Done()
-		serveDiagSocket(acceptCtx, listener, triggerCh, normalized.Stderr)
-	}()
-
-	diagCtx, cancelDiag := context.WithCancel(context.Background())
-	var diagWG sync.WaitGroup
-	diagWG.Add(1)
-	go func() {
-		defer diagWG.Done()
-		consumeDiagSignals(diagCtx, triggerCh, synchronizedOutput, buffer, normalized, socketPath)
-	}()
+	// 兜底恢复：即使后续流程异常退出，也尽量恢复宿主终端状态。
+	restoreGuard := installHostTerminalRestoreGuard()
+	defer restoreGuard()
 
 	restoreRawTerminal, err := enableHostTerminalRawMode()
 	if err != nil {
-		cancelAccept()
-		_ = listener.Close()
-		cancelDiag()
-		acceptWG.Wait()
-		diagWG.Wait()
 		return err
 	}
 	defer func() {
@@ -126,14 +123,8 @@ func RunManualShell(ctx context.Context, options ManualShellOptions) error {
 	}()
 
 	command := buildShellCommand(shellPath, normalized, socketPath)
-
 	ptyFile, err := pty.Start(command)
 	if err != nil {
-		cancelAccept()
-		_ = listener.Close()
-		cancelDiag()
-		acceptWG.Wait()
-		diagWG.Wait()
 		return fmt.Errorf("ptyproxy: start pty shell: %w", err)
 	}
 	defer func() {
@@ -146,13 +137,71 @@ func RunManualShell(ctx context.Context, options ManualShellOptions) error {
 	stopResizeWatcher := watchPTYWindowResize(normalized.Stderr, ptyFile)
 	defer stopResizeWatcher()
 
+	stopSignalForwarder := watchForwardSignals(command.Process, normalized.Stderr)
+	defer stopSignalForwarder()
+
+	var outputMu sync.Mutex
+	synchronizedOutput := &serializedWriter{writer: normalized.Stdout, lock: &outputMu}
 	printProxyInitializedBanner(synchronizedOutput)
 
+	logBuffer := NewUTF8RingBuffer(DefaultRingBufferCapacity)
+	outputSink := io.MultiWriter(synchronizedOutput, logBuffer)
+	commandLogBuffer := NewUTF8RingBuffer(DefaultRingBufferCapacity / 2)
+
+	autoState := &autoRuntimeState{}
+	autoState.Enabled.Store(true)
+	autoState.OSCReady.Store(false)
+
+	diagnoseJobCh := make(chan diagnoseJob, 4)
+	acceptCtx, cancelAccept := context.WithCancel(context.Background())
+	var acceptWG sync.WaitGroup
+	acceptWG.Add(1)
 	go func() {
-		_, _ = io.Copy(ptyFile, normalized.Stdin)
+		defer acceptWG.Done()
+		serveDiagSocket(acceptCtx, listener, diagnoseJobCh, autoState, normalized.Stderr)
 	}()
+
+	diagCtx, cancelDiag := context.WithCancel(context.Background())
+	var diagWG sync.WaitGroup
+	diagWG.Add(1)
 	go func() {
-		_, _ = io.Copy(outputSink, ptyFile)
+		defer diagWG.Done()
+		consumeDiagSignals(diagCtx, diagnoseJobCh, synchronizedOutput, logBuffer, normalized, socketPath, autoState)
+	}()
+
+	inputTracker := &commandTracker{}
+	go func() {
+		_, _ = copyInputWithTracker(ptyFile, normalized.Stdin, inputTracker)
+	}()
+
+	autoTriggerCh := make(chan diagnoseTrigger, 2)
+	go func() {
+		probeTimer := time.NewTimer(autoProbeTimeout)
+		defer probeTimer.Stop()
+		<-probeTimer.C
+		if !autoState.OSCReady.Load() {
+			writeProxyf(normalized.Stderr, "neocode shell: OSC133 probe timed out, fallback to manual mode\n")
+		}
+	}()
+
+	var streamWG sync.WaitGroup
+	streamWG.Add(1)
+	go func() {
+		defer streamWG.Done()
+		streamPTYOutput(ptyFile, outputSink, commandLogBuffer, inputTracker, autoTriggerCh, autoState)
+	}()
+
+	var triggerWG sync.WaitGroup
+	triggerWG.Add(1)
+	go func() {
+		defer triggerWG.Done()
+		for trigger := range autoTriggerCh {
+			select {
+			case <-diagCtx.Done():
+				return
+			case diagnoseJobCh <- diagnoseJob{Trigger: trigger, IsAuto: true}:
+			}
+		}
 	}()
 
 	waitDone := make(chan error, 1)
@@ -171,12 +220,16 @@ func RunManualShell(ctx context.Context, options ManualShellOptions) error {
 	}
 
 	printProxyExitedBanner(synchronizedOutput)
-
 	_ = ptyFile.Close()
+
 	cancelAccept()
 	_ = listener.Close()
 	acceptWG.Wait()
+
 	cancelDiag()
+	streamWG.Wait()
+	close(autoTriggerCh)
+	triggerWG.Wait()
 	diagWG.Wait()
 
 	if waitErr != nil {
@@ -230,6 +283,24 @@ func enableHostTerminalRawMode() (func() error, error) {
 	}, nil
 }
 
+// installHostTerminalRestoreGuard 提前抓取终端状态并在退出时兜底恢复。
+func installHostTerminalRestoreGuard() func() {
+	if hostTerminalInput == nil {
+		return func() {}
+	}
+	fd := int(hostTerminalInput.Fd())
+	if !isTerminalFD(fd) {
+		return func() {}
+	}
+	state, err := term.GetState(fd)
+	if err != nil {
+		return func() {}
+	}
+	return func() {
+		_ = restoreTerminal(fd, state)
+	}
+}
+
 // syncPTYWindowSize 将宿主终端窗口尺寸同步到 PTY，避免默认 80 列导致的提示符错位。
 func syncPTYWindowSize(errWriter io.Writer, ptyFile *os.File) {
 	if ptyFile == nil {
@@ -277,6 +348,46 @@ func watchPTYWindowResize(errWriter io.Writer, ptyFile *os.File) func() {
 	}
 }
 
+// watchForwardSignals 拦截关键信号并透传给 shell 进程组，确保作业控制语义一致。
+func watchForwardSignals(process *os.Process, errWriter io.Writer) func() {
+	if process == nil {
+		return func() {}
+	}
+	proxySignals := make(chan os.Signal, 1)
+	signal.Notify(proxySignals, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTSTP, syscall.SIGCONT)
+	stopCh := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stopCh:
+				return
+			case signalValue, ok := <-proxySignals:
+				if !ok {
+					return
+				}
+				sysSignal, ok := signalValue.(syscall.Signal)
+				if !ok {
+					continue
+				}
+				if process.Pid <= 0 {
+					continue
+				}
+				if err := syscall.Kill(-process.Pid, sysSignal); err != nil && errWriter != nil {
+					writeProxyf(errWriter, "neocode shell: forward signal %d failed: %v\n", sysSignal, err)
+				}
+			}
+		}
+	}()
+	return func() {
+		signal.Stop(proxySignals)
+		close(stopCh)
+		wg.Wait()
+	}
+}
+
 // writeProxyText 统一将代理自输出的换行规范化为 CRLF，适配 Raw Mode 下的终端显示。
 func writeProxyText(writer io.Writer, text string) {
 	if writer == nil || text == "" {
@@ -295,43 +406,127 @@ func writeProxyf(writer io.Writer, format string, args ...any) {
 	writeProxyText(writer, fmt.Sprintf(format, args...))
 }
 
-// SendDiagnoseSignal 连接 shell 代理暴露的本地 socket，并发送一次诊断触发信令。
+// SendDiagnoseSignal 连接本地 socket 并触发一次手动诊断请求。
 func SendDiagnoseSignal(ctx context.Context, socketPath string) error {
-	normalizedSocket := strings.TrimSpace(socketPath)
-	if normalizedSocket == "" {
-		return errors.New("ptyproxy: diagnose socket path is empty")
+	_, err := sendDiagIPCCommand(ctx, socketPath, diagIPCRequest{Cmd: diagCommandDiagnose})
+	return err
+}
+
+// SendAutoModeSignal 向代理 shell 发送 Auto 模式开关信令。
+func SendAutoModeSignal(ctx context.Context, socketPath string, enabled bool) error {
+	command := diagCommandAutoOff
+	if enabled {
+		command = diagCommandAutoOn
+	}
+	_, err := sendDiagIPCCommand(ctx, socketPath, diagIPCRequest{Cmd: command})
+	return err
+}
+
+// sendDiagIPCCommand 通过 JSON-Lines 发送控制命令，并在必要时回退到旧版 tmp socket。
+func sendDiagIPCCommand(ctx context.Context, socketPath string, request diagIPCRequest) (diagIPCResponse, error) {
+	primaryPath := filepath.Clean(strings.TrimSpace(socketPath))
+	if primaryPath == "." || strings.TrimSpace(primaryPath) == "" {
+		return diagIPCResponse{}, errors.New("ptyproxy: diagnose socket path is empty")
 	}
 
+	response, err := sendDiagIPCCommandToPath(ctx, primaryPath, request)
+	if err == nil {
+		return response, nil
+	}
+	if !strings.Contains(filepath.ToSlash(primaryPath), "/.neocode/run/") {
+		return diagIPCResponse{}, err
+	}
+
+	legacyPath, fallbackErr := ResolveLegacyTmpDiagSocketPath()
+	if fallbackErr != nil {
+		return diagIPCResponse{}, err
+	}
+	if strings.EqualFold(filepath.Clean(legacyPath), primaryPath) {
+		return diagIPCResponse{}, err
+	}
+	fallbackResponse, fallbackCallErr := sendDiagIPCCommandToPath(ctx, legacyPath, request)
+	if fallbackCallErr != nil {
+		return diagIPCResponse{}, err
+	}
+	_, _ = fmt.Fprintf(
+		os.Stderr,
+		"warning: diagnose socket fallback to legacy tmp path: %s (from %s)\n",
+		strings.TrimSpace(legacyPath),
+		strings.TrimSpace(primaryPath),
+	)
+	return fallbackResponse, nil
+}
+
+// sendDiagIPCCommandToPath 在指定 socket 路径上执行一次 JSON-Lines 请求响应。
+func sendDiagIPCCommandToPath(ctx context.Context, socketPath string, request diagIPCRequest) (diagIPCResponse, error) {
 	dialer := net.Dialer{}
-	connection, err := dialer.DialContext(ctx, "unix", normalizedSocket)
+	connection, err := dialer.DialContext(ctx, "unix", strings.TrimSpace(socketPath))
 	if err != nil {
-		return fmt.Errorf("ptyproxy: connect diagnose socket: %w", err)
+		return diagIPCResponse{}, fmt.Errorf("ptyproxy: connect diagnose socket: %w", err)
 	}
 	defer connection.Close()
 
-	_ = connection.SetWriteDeadline(time.Now().Add(diagSocketReadDeadline))
-	_, err = connection.Write([]byte(diagSignalPayload))
+	payload, err := json.Marshal(request)
 	if err != nil {
-		return fmt.Errorf("ptyproxy: send diagnose signal: %w", err)
+		return diagIPCResponse{}, fmt.Errorf("ptyproxy: encode diag request: %w", err)
 	}
+	payload = append(payload, '\n')
+	_ = connection.SetWriteDeadline(time.Now().Add(diagSocketReadDeadline))
+	if _, err := connection.Write(payload); err != nil {
+		return diagIPCResponse{}, fmt.Errorf("ptyproxy: send diag request: %w", err)
+	}
+	_ = connection.SetWriteDeadline(time.Time{})
 
-	waitDone := make(chan error, 1)
+	readDone := make(chan struct {
+		response diagIPCResponse
+		err      error
+	}, 1)
 	go func() {
-		_, readErr := io.ReadAll(connection)
-		waitDone <- readErr
+		reader := bufio.NewReader(connection)
+		line, readErr := reader.ReadBytes('\n')
+		if readErr != nil {
+			readDone <- struct {
+				response diagIPCResponse
+				err      error
+			}{err: readErr}
+			return
+		}
+		var response diagIPCResponse
+		if unmarshalErr := json.Unmarshal(line, &response); unmarshalErr != nil {
+			readDone <- struct {
+				response diagIPCResponse
+				err      error
+			}{err: fmt.Errorf("decode diag response: %w", unmarshalErr)}
+			return
+		}
+		if !response.OK {
+			message := strings.TrimSpace(response.Message)
+			if message == "" {
+				message = "diagnose command rejected"
+			}
+			readDone <- struct {
+				response diagIPCResponse
+				err      error
+			}{response: response, err: errors.New("ptyproxy: " + message)}
+			return
+		}
+		readDone <- struct {
+			response diagIPCResponse
+			err      error
+		}{response: response}
 	}()
 
 	select {
 	case <-ctx.Done():
 		_ = connection.SetReadDeadline(time.Now())
-		<-waitDone
-		return fmt.Errorf("ptyproxy: wait diagnose completion: %w", ctx.Err())
-	case readErr := <-waitDone:
-		if readErr != nil && !isClosedNetworkError(readErr) {
-			return fmt.Errorf("ptyproxy: wait diagnose completion: %w", readErr)
+		<-readDone
+		return diagIPCResponse{}, fmt.Errorf("ptyproxy: wait diagnose completion: %w", ctx.Err())
+	case result := <-readDone:
+		if result.err != nil && !isClosedNetworkError(result.err) {
+			return diagIPCResponse{}, fmt.Errorf("ptyproxy: wait diagnose completion: %w", result.err)
 		}
+		return result.response, nil
 	}
-	return nil
 }
 
 // buildShellCommand 构建真实 shell 进程，并在子进程环境中注入诊断 socket 变量。
@@ -339,6 +534,7 @@ func buildShellCommand(shellPath string, options ManualShellOptions, socketPath 
 	command := exec.Command(shellPath)
 	command.Dir = options.Workdir
 	command.Env = MergeEnvVar(os.Environ(), DiagSocketEnv, socketPath)
+	//command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	return command
 }
 
@@ -353,11 +549,15 @@ func resolveShellPath(shellOption string) string {
 	return "/bin/bash"
 }
 
-// listenDiagSocket 创建并监听 Unix socket；路径为空时按进程生成默认地址。
+// listenDiagSocket 创建并监听 Unix socket；路径为空时使用 ~/.neocode/run 的统一地址。
 func listenDiagSocket(socketOption string) (net.Listener, string, error) {
 	socketPath := strings.TrimSpace(socketOption)
 	if socketPath == "" {
-		socketPath = filepath.Join(os.TempDir(), fmt.Sprintf("neocode-diag-%d.sock", os.Getpid()))
+		resolved, err := ResolveDefaultDiagSocketPath()
+		if err != nil {
+			return nil, "", err
+		}
+		socketPath = resolved
 	}
 	socketPath = filepath.Clean(socketPath)
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
@@ -396,8 +596,14 @@ func cleanupStaleSocket(socketPath string) error {
 	return nil
 }
 
-// serveDiagSocket 接收本地诊断触发连接，并向消费协程投递触发信号。
-func serveDiagSocket(ctx context.Context, listener net.Listener, triggerCh chan<- diagSignalRequest, errWriter io.Writer) {
+// serveDiagSocket 接收 JSON-Lines 信令，转发手动诊断或即时切换 Auto 开关。
+func serveDiagSocket(
+	ctx context.Context,
+	listener net.Listener,
+	jobCh chan<- diagnoseJob,
+	autoState *autoRuntimeState,
+	errWriter io.Writer,
+) {
 	for {
 		connection, err := listener.Accept()
 		if err != nil {
@@ -409,87 +615,155 @@ func serveDiagSocket(ctx context.Context, listener net.Listener, triggerCh chan<
 			}
 			continue
 		}
-		handleDiagSocketConnection(ctx, connection, triggerCh)
+		handleDiagSocketConnection(ctx, connection, jobCh, autoState)
 	}
 }
 
-// handleDiagSocketConnection 处理单个诊断请求连接，并在对应诊断渲染结束后返回 ACK 后断开连接。
-func handleDiagSocketConnection(ctx context.Context, connection net.Conn, triggerCh chan<- diagSignalRequest) {
+// handleDiagSocketConnection 处理单连接请求并返回单行 JSON 响应。
+func handleDiagSocketConnection(
+	ctx context.Context,
+	connection net.Conn,
+	jobCh chan<- diagnoseJob,
+	autoState *autoRuntimeState,
+) {
 	if connection == nil {
 		return
 	}
 	defer connection.Close()
 
 	_ = connection.SetReadDeadline(time.Now().Add(diagSocketReadDeadline))
-	reader := bufio.NewReader(io.LimitReader(connection, 1024))
-	_, _ = reader.ReadString('\n')
+	reader := bufio.NewReader(io.LimitReader(connection, 8*1024))
+	line, err := reader.ReadBytes('\n')
+	if err != nil {
+		writeDiagIPCResponse(connection, diagIPCResponse{OK: false, Message: "read request failed"})
+		return
+	}
 	_ = connection.SetReadDeadline(time.Time{})
 
-	request := diagSignalRequest{
-		done: make(chan struct{}),
-	}
-	select {
-	case <-ctx.Done():
+	var request diagIPCRequest
+	if unmarshalErr := json.Unmarshal(line, &request); unmarshalErr != nil {
+		writeDiagIPCResponse(connection, diagIPCResponse{OK: false, Message: "invalid request"})
 		return
-	case triggerCh <- request:
 	}
 
-	select {
-	case <-ctx.Done():
-		return
-	case <-request.done:
-		_, _ = connection.Write([]byte(diagSignalAckPayload))
+	switch normalizeDiagIPCCommand(request.Cmd) {
+	case diagCommandDiagnose:
+		done := make(chan diagIPCResponse, 1)
+		job := diagnoseJob{Done: done, IsAuto: false}
+		select {
+		case <-ctx.Done():
+			writeDiagIPCResponse(connection, diagIPCResponse{OK: false, Message: "proxy shutting down"})
+			return
+		case jobCh <- job:
+		}
+		select {
+		case <-ctx.Done():
+			writeDiagIPCResponse(connection, diagIPCResponse{OK: false, Message: "proxy shutting down"})
+		case response := <-done:
+			writeDiagIPCResponse(connection, response)
+		}
+	case diagCommandAutoOn:
+		autoState.Enabled.Store(true)
+		writeDiagIPCResponse(connection, diagIPCResponse{OK: true, AutoEnabled: true, Message: "auto mode enabled"})
+	case diagCommandAutoOff:
+		autoState.Enabled.Store(false)
+		writeDiagIPCResponse(connection, diagIPCResponse{OK: true, AutoEnabled: false, Message: "auto mode disabled"})
+	default:
+		writeDiagIPCResponse(connection, diagIPCResponse{OK: false, Message: "unsupported command"})
 	}
 }
 
-// consumeDiagSignals 串行消费触发信号并执行诊断调用，避免并发请求互相覆盖终端输出。
+// writeDiagIPCResponse 写入单行 JSON 响应。
+func writeDiagIPCResponse(connection net.Conn, response diagIPCResponse) {
+	if connection == nil {
+		return
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		encoded = []byte(`{"ok":false,"message":"encode response failed"}`)
+	}
+	encoded = append(encoded, '\n')
+	_, _ = connection.Write(encoded)
+}
+
+// consumeDiagSignals 串行消费诊断任务，避免输出相互覆盖。
 func consumeDiagSignals(
 	ctx context.Context,
-	triggerCh <-chan diagSignalRequest,
+	jobCh <-chan diagnoseJob,
 	output io.Writer,
 	buffer *UTF8RingBuffer,
 	options ManualShellOptions,
 	socketPath string,
+	autoState *autoRuntimeState,
 ) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case request, ok := <-triggerCh:
+		case job, ok := <-jobCh:
 			if !ok {
 				return
 			}
-			runSingleDiagnosis(output, buffer, options, socketPath)
-			if request.done != nil {
-				close(request.done)
+			runSingleDiagnosis(output, buffer, options, socketPath, job.Trigger, job.IsAuto, autoState)
+			if job.Done != nil {
+				job.Done <- diagIPCResponse{OK: true, AutoEnabled: autoState.Enabled.Load(), Message: "diagnosis completed"}
 			}
 		}
 	}
 }
 
-// runSingleDiagnosis 读取最近日志并调用 gateway.executeSystemTool(diagnose) 获取诊断结果。
-func runSingleDiagnosis(output io.Writer, buffer *UTF8RingBuffer, options ManualShellOptions, socketPath string) {
+// runSingleDiagnosis 执行一次诊断调用，并根据 Auto 开关决定是否渲染结果。
+func runSingleDiagnosis(
+	output io.Writer,
+	buffer *UTF8RingBuffer,
+	options ManualShellOptions,
+	socketPath string,
+	trigger diagnoseTrigger,
+	isAuto bool,
+	autoState *autoRuntimeState,
+) {
 	if output == nil {
 		return
 	}
 
+	result, err := callDiagnoseTool(buffer, options, socketPath, trigger)
+	if err != nil {
+		writeProxyf(output, "\n\033[31m[NeoCode Diagnosis]\033[0m %s\n", strings.TrimSpace(err.Error()))
+		return
+	}
+	if isAuto && autoState != nil && !autoState.Enabled.Load() {
+		return
+	}
+	renderDiagnosis(output, result.Content, result.IsError)
+}
+
+// callDiagnoseTool 组装参数并调用 gateway.executeSystemTool(diagnose)。
+func callDiagnoseTool(
+	buffer *UTF8RingBuffer,
+	options ManualShellOptions,
+	socketPath string,
+	trigger diagnoseTrigger,
+) (tools.ToolResult, error) {
 	logSnapshot := buffer.SnapshotString()
+	if strings.TrimSpace(trigger.OutputText) != "" {
+		logSnapshot = trigger.OutputText
+	}
+
 	requestArgs := diagnoseToolArgs{
-		ErrorLog: logSnapshot,
+		ErrorLog: SanitizeDiagnosisText(logSnapshot, defaultDiagnosisPayloadMaxBytes),
 		OSEnv: map[string]string{
 			"os":     runtime.GOOS,
 			"shell":  resolveShellPath(options.Shell),
 			"cwd":    options.Workdir,
 			"socket": socketPath,
 		},
-		CommandText: "",
-		ExitCode:    0,
+		CommandText: SanitizeDiagnosisText(trigger.CommandText, 1024),
+		ExitCode:    trigger.ExitCode,
 	}
 
 	requestPayload, err := json.Marshal(requestArgs)
 	if err != nil {
-		writeProxyf(output, "\n\033[31m[NeoCode Diagnosis]\033[0m 请求构建失败: %v\n", err)
-		return
+		return tools.ToolResult{}, fmt.Errorf("请求构建失败: %w", err)
 	}
 
 	rpcClient, err := gatewayclient.NewGatewayRPCClient(gatewayclient.GatewayRPCClientOptions{
@@ -497,8 +771,7 @@ func runSingleDiagnosis(output io.Writer, buffer *UTF8RingBuffer, options Manual
 		TokenFile:     options.GatewayTokenFile,
 	})
 	if err != nil {
-		writeProxyf(output, "\n\033[31m[NeoCode Diagnosis]\033[0m 网关客户端初始化失败: %v\n", err)
-		return
+		return tools.ToolResult{}, fmt.Errorf("网关客户端初始化失败: %w", err)
 	}
 	defer rpcClient.Close()
 
@@ -506,8 +779,7 @@ func runSingleDiagnosis(output io.Writer, buffer *UTF8RingBuffer, options Manual
 	defer cancel()
 
 	if err := rpcClient.Authenticate(callContext); err != nil {
-		writeProxyf(output, "\n\033[31m[NeoCode Diagnosis]\033[0m 网关认证失败: %v\n", err)
-		return
+		return tools.ToolResult{}, fmt.Errorf("网关认证失败: %w", err)
 	}
 
 	var frame gateway.MessageFrame
@@ -525,30 +797,25 @@ func runSingleDiagnosis(output io.Writer, buffer *UTF8RingBuffer, options Manual
 			Retries: 0,
 		},
 	); err != nil {
-		writeProxyf(output, "\n\033[31m[NeoCode Diagnosis]\033[0m 诊断调用失败: %v\n", err)
-		return
+		return tools.ToolResult{}, fmt.Errorf("诊断调用失败: %w", err)
 	}
 
 	if frame.Type == gateway.FrameTypeError && frame.Error != nil {
-		writeProxyf(
-			output,
-			"\n\033[31m[NeoCode Diagnosis]\033[0m 网关返回错误 (%s): %s\n",
+		return tools.ToolResult{}, fmt.Errorf(
+			"网关返回错误 (%s): %s",
 			strings.TrimSpace(frame.Error.Code),
 			strings.TrimSpace(frame.Error.Message),
 		)
-		return
 	}
 	if frame.Type != gateway.FrameTypeAck {
-		writeProxyf(output, "\n\033[31m[NeoCode Diagnosis]\033[0m 网关返回未知帧: %s\n", frame.Type)
-		return
+		return tools.ToolResult{}, fmt.Errorf("网关返回未知帧: %s", frame.Type)
 	}
 
 	toolResult, err := decodeToolResult(frame.Payload)
 	if err != nil {
-		writeProxyf(output, "\n\033[31m[NeoCode Diagnosis]\033[0m 诊断结果解析失败: %v\n", err)
-		return
+		return tools.ToolResult{}, fmt.Errorf("诊断结果解析失败: %w", err)
 	}
-	renderDiagnosis(output, toolResult.Content, toolResult.IsError)
+	return toolResult, nil
 }
 
 // decodeToolResult 将网关 payload 反序列化为统一的 ToolResult 结构。
@@ -598,6 +865,137 @@ func renderDiagnosis(output io.Writer, content string, isError bool) {
 			writeProxyf(output, "- %s\n", strings.TrimSpace(command))
 		}
 	}
+}
+
+// streamPTYOutput 解析 PTY 输出并分离 OSC133 事件，按规则触发 Auto 诊断任务。
+func streamPTYOutput(
+	ptyFile *os.File,
+	outputSink io.Writer,
+	commandLogBuffer *UTF8RingBuffer,
+	tracker *commandTracker,
+	autoTriggerCh chan<- diagnoseTrigger,
+	autoState *autoRuntimeState,
+) {
+	if ptyFile == nil || outputSink == nil || commandLogBuffer == nil {
+		return
+	}
+	parser := &OSC133Parser{}
+	collectingCommand := false
+	pendingTrigger := (*diagnoseTrigger)(nil)
+
+	buffer := make([]byte, 4096)
+	for {
+		readBytes, err := ptyFile.Read(buffer)
+		if readBytes > 0 {
+			cleanOutput, events := parser.Feed(buffer[:readBytes])
+			if len(cleanOutput) > 0 {
+				_, _ = outputSink.Write(cleanOutput)
+				if collectingCommand {
+					_, _ = commandLogBuffer.Write(cleanOutput)
+				}
+			}
+			for _, event := range events {
+				switch event.Type {
+				case ShellEventPromptReady:
+					autoState.OSCReady.Store(true)
+					if pendingTrigger != nil && autoState.Enabled.Load() {
+						select {
+						case autoTriggerCh <- *pendingTrigger:
+						default:
+							// 渠道拥塞时直接丢弃本次触发，避免阻塞 PTY 输出主循环。
+						}
+						pendingTrigger = nil
+					}
+				case ShellEventCommandStart:
+					collectingCommand = true
+					commandLogBuffer = NewUTF8RingBuffer(DefaultRingBufferCapacity / 2)
+				case ShellEventCommandDone:
+					collectingCommand = false
+					commandText := ""
+					if tracker != nil {
+						commandText = tracker.LastCommand()
+					}
+					outputText := commandLogBuffer.SnapshotString()
+					if ShouldTriggerAutoDiagnosis(event.ExitCode, commandText, outputText) {
+						pendingTrigger = &diagnoseTrigger{
+							CommandText: commandText,
+							ExitCode:    event.ExitCode,
+							OutputText:  outputText,
+						}
+					}
+				}
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// copyInputWithTracker 在转发用户输入到 PTY 的同时提取最近命令文本。
+func copyInputWithTracker(dst io.Writer, src io.Reader, tracker *commandTracker) (int64, error) {
+	if dst == nil || src == nil {
+		return 0, nil
+	}
+	written := int64(0)
+	buffer := make([]byte, 4096)
+	for {
+		n, err := src.Read(buffer)
+		if n > 0 {
+			payload := buffer[:n]
+			if tracker != nil {
+				tracker.Observe(payload)
+			}
+			m, writeErr := dst.Write(payload)
+			written += int64(m)
+			if writeErr != nil {
+				return written, writeErr
+			}
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return written, nil
+			}
+			return written, err
+		}
+	}
+}
+
+// Observe 观察输入字节流并维护最新完整命令行。
+func (t *commandTracker) Observe(payload []byte) {
+	if t == nil || len(payload) == 0 {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, b := range payload {
+		switch b {
+		case '\r', '\n':
+			current := strings.TrimSpace(string(t.lineBuffer))
+			if current != "" {
+				t.lastCommand = current
+			}
+			t.lineBuffer = t.lineBuffer[:0]
+		case 0x08, 0x7f:
+			if len(t.lineBuffer) > 0 {
+				t.lineBuffer = t.lineBuffer[:len(t.lineBuffer)-1]
+			}
+		default:
+			if b >= 0x20 {
+				t.lineBuffer = append(t.lineBuffer, b)
+			}
+		}
+	}
+}
+
+// LastCommand 返回最近一次完成输入的命令文本。
+func (t *commandTracker) LastCommand() string {
+	if t == nil {
+		return ""
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return strings.TrimSpace(t.lastCommand)
 }
 
 // isClosedNetworkError 识别网络连接已关闭类错误，避免重复打印无效噪声。
