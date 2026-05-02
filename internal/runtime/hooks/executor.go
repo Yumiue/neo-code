@@ -194,30 +194,14 @@ func (e *Executor) runAsync(ctx context.Context, spec HookSpec, input HookContex
 		return
 	}
 	go func() {
-		result := e.runOne(ctx, spec, input)
-		result = normalizeHookResultByCapability(spec.Point, result)
-		if spec.Mode == HookModeAsyncRewake && shouldEmitAsyncRewakeNotification(result) {
-			e.emitBestEffort(ctx, HookEvent{
-				Type:          HookEventNotification,
-				HookID:        spec.ID,
-				Point:         spec.Point,
-				Scope:         spec.Scope,
-				Source:        spec.Source,
-				Kind:          spec.Kind,
-				Mode:          spec.Mode,
-				Status:        result.Status,
-				StartedAt:     result.StartedAt,
-				DurationMS:    result.DurationMS,
-				Message:       strings.TrimSpace(result.Message),
-				Error:         strings.TrimSpace(result.Error),
-				RewakeReason:  strings.TrimSpace(result.Metadata.RewakeReason),
-				RewakeSummary: strings.TrimSpace(result.Metadata.RewakeSummary),
-				DedupeKey:     buildAsyncNotificationDedupeKey(spec, result),
-			})
-		}
+		// rawResult 保留 handler 原始意图（例如 async_rewake 的 block），
+		// normalizedResult 仅用于能力矩阵约束下的可观测一致性，不参与主链阻断。
+		rawResult := e.runOne(ctx, spec, input)
+		normalizedResult := normalizeHookResultByCapability(spec.Point, rawResult)
 		if e.asyncSink != nil {
-			e.asyncSink.HandleAsyncHookResult(ctx, spec, input, result)
+			e.asyncSink.HandleAsyncHookResult(ctx, spec, input, rawResult)
 		}
+		_ = normalizedResult
 	}()
 }
 
@@ -420,30 +404,4 @@ func (e *Executor) emitBestEffort(ctx context.Context, event HookEvent) {
 		return
 	}
 	_ = e.emitter.EmitHookEvent(ctx, event)
-}
-
-func shouldEmitAsyncRewakeNotification(result HookResult) bool {
-	if result.Status == HookResultFailed || result.Status == HookResultBlock {
-		return true
-	}
-	return result.Metadata.Rewake
-}
-
-func buildAsyncNotificationDedupeKey(spec HookSpec, result HookResult) string {
-	status := strings.TrimSpace(string(result.Status))
-	reason := strings.TrimSpace(result.Metadata.RewakeReason)
-	summary := strings.TrimSpace(result.Metadata.RewakeSummary)
-	message := strings.TrimSpace(result.Message)
-	if len(message) > 256 {
-		message = message[:256]
-	}
-	return strings.ToLower(strings.Join([]string{
-		strings.TrimSpace(string(spec.Source)),
-		strings.TrimSpace(spec.ID),
-		strings.TrimSpace(string(spec.Point)),
-		status,
-		reason,
-		summary,
-		message,
-	}, "|"))
 }

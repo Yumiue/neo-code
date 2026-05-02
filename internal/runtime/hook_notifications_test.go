@@ -198,6 +198,10 @@ func TestHookAsyncResultSinkHonorsRunLifecycle(t *testing.T) {
 	if firstLen != 1 {
 		t.Fatalf("first queue len = %d, want 1", firstLen)
 	}
+	firstEvents := collectRuntimeEvents(service.Events())
+	if got := countEventType(firstEvents, EventHookNotification); got != 1 {
+		t.Fatalf("hook_notification events after first enqueue = %d, want 1", got)
+	}
 
 	service.finishRun(token)
 	sink.HandleAsyncHookResult(context.Background(), spec, input, result)
@@ -206,6 +210,10 @@ func TestHookAsyncResultSinkHonorsRunLifecycle(t *testing.T) {
 	state.mu.Unlock()
 	if secondLen != 1 {
 		t.Fatalf("second queue len = %d, want unchanged 1 after run finished", secondLen)
+	}
+	secondEvents := collectRuntimeEvents(service.Events())
+	if got := countEventType(secondEvents, EventHookNotification); got != 0 {
+		t.Fatalf("hook_notification events after finished run = %d, want 0", got)
 	}
 }
 
@@ -287,4 +295,19 @@ func TestRunInjectsEphemeralHookNotificationWithoutPersistingHistory(t *testing.
 			t.Fatalf("ephemeral hint should not persist in session history: %+v", saved.Messages)
 		}
 	}
+
+	events := collectRuntimeEvents(service.Events())
+	if got := countEventType(events, EventHookNotification); got != 1 {
+		t.Fatalf("hook_notification events = %d, want exactly 1", got)
+	}
+}
+
+func countEventType(events []RuntimeEvent, target EventType) int {
+	count := 0
+	for _, event := range events {
+		if event.Type == target {
+			count++
+		}
+	}
+	return count
 }

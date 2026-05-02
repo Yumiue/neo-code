@@ -166,7 +166,7 @@ func TestExecutorRunAsyncFailedDoesNotAffectMainPath(t *testing.T) {
 	}
 }
 
-func TestExecutorRunAsyncRewakeEmitsNotificationAndSink(t *testing.T) {
+func TestExecutorRunAsyncRewakeRoutesToSink(t *testing.T) {
 	t.Parallel()
 
 	registry := NewRegistry()
@@ -210,21 +210,14 @@ func TestExecutorRunAsyncRewakeEmitsNotificationAndSink(t *testing.T) {
 		t.Fatal("async_rewake hook not executed within timeout")
 	}
 
-	// 给 emitter/sink 回调一点时间，避免并发可见性抖动。
+	// 给 sink 回调一点时间，避免并发可见性抖动。
 	time.Sleep(20 * time.Millisecond)
 
 	events := emitter.snapshot()
-	var hasNotification bool
 	for _, event := range events {
 		if event.Type == HookEventNotification {
-			hasNotification = true
-			if strings.TrimSpace(event.RewakeReason) != "need_follow_up" {
-				t.Fatalf("RewakeReason = %q, want need_follow_up", event.RewakeReason)
-			}
+			t.Fatalf("unexpected hook_notification from executor, got %+v", event)
 		}
-	}
-	if !hasNotification {
-		t.Fatalf("expected hook_notification event, got %+v", events)
 	}
 
 	calls, specs, results := sink.snapshot()
@@ -236,6 +229,52 @@ func TestExecutorRunAsyncRewakeEmitsNotificationAndSink(t *testing.T) {
 	}
 	if len(results) != 1 || !results[0].Metadata.Rewake {
 		t.Fatalf("sink results = %+v, want rewake result", results)
+	}
+}
+
+func TestExecutorRunAsyncRewakeBlockOnObserveOnlyPointPreservesRawBlockForSink(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	sink := &recordingAsyncSink{}
+	executor := NewExecutor(registry, nil, 200*time.Millisecond)
+	executor.SetAsyncResultSink(sink)
+	done := make(chan struct{}, 1)
+	if err := registry.Register(HookSpec{
+		ID:    "hook-async-rewake-observe-block",
+		Point: HookPointBeforeCompletionDecision,
+		Mode:  HookModeAsyncRewake,
+		Handler: func(context.Context, HookContext) HookResult {
+			defer func() { done <- struct{}{} }()
+			return HookResult{Status: HookResultBlock, Message: "block-for-rewake"}
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	output := executor.Run(context.Background(), HookPointBeforeCompletionDecision, HookContext{})
+	if output.Blocked {
+		t.Fatalf("Blocked = true, want false for async_rewake on observe-only point")
+	}
+	if len(output.Results) != 0 {
+		t.Fatalf("len(output.Results) = %d, want 0 for async_rewake", len(output.Results))
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("async_rewake observe-only block hook not executed")
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	calls, specs, results := sink.snapshot()
+	if calls != 1 || len(specs) != 1 || len(results) != 1 {
+		t.Fatalf("sink snapshot unexpected: calls=%d specs=%d results=%d", calls, len(specs), len(results))
+	}
+	if specs[0].Point != HookPointBeforeCompletionDecision {
+		t.Fatalf("sink spec point = %q, want %q", specs[0].Point, HookPointBeforeCompletionDecision)
+	}
+	if results[0].Status != HookResultBlock {
+		t.Fatalf("sink result status = %q, want raw block", results[0].Status)
 	}
 }
 
