@@ -103,6 +103,8 @@ func NewRootCommand() *cobra.Command {
 		newMigrateCommand(),
 		newVersionCommand(),
 		newUpdateCommand(),
+		newProviderCommand(),
+		newUseCommand(),
 	)
 
 	return cmd
