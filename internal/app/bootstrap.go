@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"neo-code/internal/checkpoint"
 	"neo-code/internal/config"
 	configstate "neo-code/internal/config/state"
 	agentcontext "neo-code/internal/context"
@@ -228,6 +229,20 @@ func BuildGatewayServerDeps(ctx context.Context, opts BootstrapOptions) (Runtime
 			sharedDeps.ConfigManager,
 			memo.NewAutoExtractor(nil, memoSvc, time.Duration(cfg.Memo.ExtractTimeoutSec)*time.Second),
 		))
+	}
+
+	// Checkpoint 基础设施：影子仓库 + SQLite checkpoint 存储
+	if gitAvail, _ := checkpoint.CheckGitAvailability(ctx); gitAvail {
+		projectDir := agentsession.HashWorkspaceRoot(cfg.Workdir)
+		shadowDir := filepath.Join(sharedDeps.ConfigManager.BaseDir(), "projects", projectDir)
+		shadowRepo := checkpoint.NewShadowRepo(shadowDir, cfg.Workdir)
+		if err := shadowRepo.Init(ctx); err != nil {
+			log.Printf("checkpoint shadow repo init warning: %v", err)
+		} else {
+			dbPath := agentsession.DatabasePath(sharedDeps.ConfigManager.BaseDir(), cfg.Workdir)
+			checkpointStore := checkpoint.NewSQLiteCheckpointStore(dbPath)
+			runtimeSvc.SetCheckpointDependencies(checkpointStore, shadowRepo)
+		}
 	}
 
 	runtimeImpl := agentruntime.Runtime(runtimeSvc)

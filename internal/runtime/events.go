@@ -400,6 +400,11 @@ const (
 	EventSubAgentSnapshotUpdated EventType = "subagent_snapshot_updated"
 	// EventTodoSnapshotUpdated 表示 todo 快照已更新。
 	EventTodoSnapshotUpdated EventType = "todo_snapshot_updated"
+
+	// EventCheckpointCreated 表示 pre-write checkpoint 已创建。
+	EventCheckpointCreated EventType = "checkpoint_created"
+	// EventCheckpointWarning 表示 checkpoint 创建过程中出现非致命告警。
+	EventCheckpointWarning EventType = "checkpoint_warning"
 )
 
 // TokenUsagePayload 承载单轮 token 用量统计。
@@ -411,4 +416,19 @@ type TokenUsagePayload struct {
 	HasUnknownUsage     bool   `json:"has_unknown_usage,omitempty"`
 	SessionInputTokens  int    `json:"session_input_tokens"`
 	SessionOutputTokens int    `json:"session_output_tokens"`
+}
+
+// CheckpointCreatedPayload 描述 checkpoint 创建成功事件。
+type CheckpointCreatedPayload struct {
+	CheckpointID         string `json:"checkpoint_id"`
+	CodeCheckpointRef    string `json:"code_checkpoint_ref"`
+	SessionCheckpointRef string `json:"session_checkpoint_ref"`
+	CommitHash           string `json:"commit_hash"`
+	Reason               string `json:"reason"`
+}
+
+// CheckpointWarningPayload 描述 checkpoint 创建过程中非致命告警。
+type CheckpointWarningPayload struct {
+	Error string `json:"error"`
+	Phase string `json:"phase"`
 }

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"neo-code/internal/checkpoint"
 	"neo-code/internal/config"
 	agentcontext "neo-code/internal/context"
 	contextcompact "neo-code/internal/context/compact"
@@ -150,6 +151,8 @@ type Service struct {
 	skillsRegistry    skills.Registry
 	budgetResolver    BudgetResolver
 	hookExecutor      HookExecutor
+	checkpointStore   checkpoint.CheckpointStore
+	shadowRepo        *checkpoint.ShadowRepo
 
 	events             chan RuntimeEvent
 	runtimeSnapshotMu  sync.Mutex
@@ -444,4 +447,10 @@ func (s *Service) SetBudgetResolver(resolver BudgetResolver) {
 // SetHookExecutor 设置 runtime 生命周期 hook 执行器；传入 nil 可禁用 hook 执行。
 func (s *Service) SetHookExecutor(executor HookExecutor) {
 	s.hookExecutor = executor
+}
+
+// SetCheckpointDependencies 注入 checkpoint 存储与影子仓库，用于 pre-write checkpoint gate。
+func (s *Service) SetCheckpointDependencies(store checkpoint.CheckpointStore, repo *checkpoint.ShadowRepo) {
+	s.checkpointStore = store
+	s.shadowRepo = repo
 }
