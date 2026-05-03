@@ -2,10 +2,12 @@ package rules
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestGlobalRulePathUsesBaseDir(t *testing.T) {
@@ -182,5 +184,80 @@ func TestReadProjectRuleReturnsReadError(t *testing.T) {
 	_, err := ReadProjectRule(context.Background(), projectRoot)
 	if err == nil || !strings.Contains(err.Error(), "rules: read") {
 		t.Fatalf("expected read error, got %v", err)
+	}
+}
+
+func TestReadGlobalRuleRejectsInvalidUTF8(t *testing.T) {
+	baseDir := filepath.Join(t.TempDir(), ".neocode")
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		t.Fatalf("mkdir baseDir: %v", err)
+	}
+	rulePath := filepath.Join(baseDir, agentsFileName)
+	if err := os.WriteFile(rulePath, []byte{0xff, 0xfe}, 0o644); err != nil {
+		t.Fatalf("write invalid utf8 rule: %v", err)
+	}
+
+	_, err := ReadGlobalRule(context.Background(), baseDir)
+	if err == nil || !strings.Contains(err.Error(), "valid UTF-8") {
+		t.Fatalf("expected invalid UTF-8 read error, got %v", err)
+	}
+}
+
+func TestCommitWithRetryRetriesTransientRenameFailure(t *testing.T) {
+	oldRenameFile := renameFile
+	oldSleepFn := sleepFn
+	t.Cleanup(func() {
+		renameFile = oldRenameFile
+		sleepFn = oldSleepFn
+	})
+
+	attempts := 0
+	renameFile = func(_, _ string) error {
+		attempts++
+		if attempts < 3 {
+			return errors.New("busy")
+		}
+		return nil
+	}
+	sleepFn = func(_ time.Duration) {}
+
+	if err := commitWithRetry("temp", "target", false); err != nil {
+		t.Fatalf("commitWithRetry() error = %v", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("expected 3 rename attempts, got %d", attempts)
+	}
+}
+
+func TestRenameWithReplaceRemovesExistingTargetWhenAllowed(t *testing.T) {
+	oldRenameFile := renameFile
+	oldRemoveFile := removeFile
+	t.Cleanup(func() {
+		renameFile = oldRenameFile
+		removeFile = oldRemoveFile
+	})
+
+	attempts := 0
+	removed := 0
+	renameFile = func(_, _ string) error {
+		attempts++
+		if attempts == 1 {
+			return errors.New("access denied")
+		}
+		return nil
+	}
+	removeFile = func(_ string) error {
+		removed++
+		return nil
+	}
+
+	if err := renameWithReplace("temp", "target", true); err != nil {
+		t.Fatalf("renameWithReplace() error = %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("expected 2 rename attempts, got %d", attempts)
+	}
+	if removed != 1 {
+		t.Fatalf("expected target removal before second rename, got %d", removed)
 	}
 }

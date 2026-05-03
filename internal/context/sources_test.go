@@ -77,6 +77,42 @@ func TestRulesPromptSourceSectionsRendersRules(t *testing.T) {
 	}
 }
 
+func TestRulesPromptSourceSectionsReflectRuleFileUpdatesOnNextBuild(t *testing.T) {
+	root := t.TempDir()
+	baseDir := filepath.Join(t.TempDir(), ".neocode")
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		t.Fatalf("mkdir baseDir: %v", err)
+	}
+	if _, err := rules.WriteGlobalRule(context.Background(), baseDir, "global-v1"); err != nil {
+		t.Fatalf("WriteGlobalRule(v1) error = %v", err)
+	}
+
+	source := newRulesPromptSource(rules.NewLoader(baseDir))
+	buildInput := BuildInput{Metadata: Metadata{ProjectRoot: root, Workdir: root}}
+
+	firstSections, err := source.Sections(context.Background(), buildInput)
+	if err != nil {
+		t.Fatalf("Sections(first) error = %v", err)
+	}
+	firstPrompt := renderPromptSection(firstSections[0])
+	if !strings.Contains(firstPrompt, "global-v1") {
+		t.Fatalf("expected first prompt to include global-v1, got %q", firstPrompt)
+	}
+
+	if _, err := rules.WriteGlobalRule(context.Background(), baseDir, "global-v2"); err != nil {
+		t.Fatalf("WriteGlobalRule(v2) error = %v", err)
+	}
+
+	secondSections, err := source.Sections(context.Background(), buildInput)
+	if err != nil {
+		t.Fatalf("Sections(second) error = %v", err)
+	}
+	secondPrompt := renderPromptSection(secondSections[0])
+	if !strings.Contains(secondPrompt, "global-v2") || strings.Contains(secondPrompt, "global-v1") {
+		t.Fatalf("expected second prompt to reflect latest global rule, got %q", secondPrompt)
+	}
+}
+
 func TestCorePromptSourceSectionsHonorsCancellation(t *testing.T) {
 	t.Parallel()
 

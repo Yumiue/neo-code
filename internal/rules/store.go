@@ -5,11 +5,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
 const rulesFilePermission = 0o644
+
+var (
+	renameFile = os.Rename
+	removeFile = os.Remove
+	sleepFn    = time.Sleep
+)
 
 // GlobalRulePath 返回全局规则文件 AGENTS.md 的固定路径。
 func GlobalRulePath(baseDir string) string {
@@ -103,8 +111,11 @@ func readRuleDocument(path string) (Document, error) {
 		}
 		return Document{}, fmt.Errorf("rules: read %s: %w", path, err)
 	}
+	if !utf8.Valid(data) {
+		return Document{}, fmt.Errorf("rules: read %s: content is not valid UTF-8", path)
+	}
 
-	content, truncated := truncateRunes(strings.TrimSpace(string(data)), documentRuneLimit)
+	content, truncated := truncateRunes(strings.TrimSpace(string(data)), documentReadRuneLimit)
 	return Document{
 		Path:      path,
 		Content:   content,
@@ -142,8 +153,36 @@ func writeRuleFile(path string, content string) error {
 	if err := os.Chmod(tempPath, rulesFilePermission); err != nil {
 		return fmt.Errorf("rules: chmod temp file for %s: %w", path, err)
 	}
-	if err := os.Rename(tempPath, path); err != nil {
-		return fmt.Errorf("rules: commit file %s: %w", path, err)
+	if err := commitWithRetry(tempPath, path, runtime.GOOS == "windows"); err != nil {
+		return err
 	}
 	return nil
+}
+
+// commitWithRetry 在最终提交规则文件时处理临时占用导致的瞬时失败。
+func commitWithRetry(tempPath, path string, allowReplace bool) error {
+	var last error
+	for attempt := 0; attempt < 5; attempt++ {
+		if err := renameWithReplace(tempPath, path, allowReplace); err == nil {
+			return nil
+		} else {
+			last = err
+		}
+		sleepFn(time.Duration(25*(1<<attempt)) * time.Millisecond)
+	}
+	return fmt.Errorf("rules: commit file %s: %w", path, last)
+}
+
+// renameWithReplace 在需要时先删除旧文件，再提交新的规则文件内容。
+func renameWithReplace(tempPath, path string, allowReplace bool) error {
+	if err := renameFile(tempPath, path); err == nil {
+		return nil
+	} else if !allowReplace {
+		return err
+	}
+
+	if err := removeFile(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return renameFile(tempPath, path)
 }
