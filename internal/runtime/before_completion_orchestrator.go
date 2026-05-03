@@ -17,7 +17,10 @@ type beforeCompletionHookSignals struct {
 }
 
 // runBeforeCompletionDecisionAcceptance 执行 before_completion_decision 专用编排：
-// 1) 先执行 user/repo hooks 收集 signal；2) 再执行 internal hooks；3) 由 internal acceptance hook 产出唯一裁决。
+// 1) 先执行 user/repo hooks 收集 annotation/guard signal；
+// 2) 再执行普通 internal hooks 用于观测；
+// 3) 最后由 runtime 内部 AcceptanceService 进入收口裁决阶段，产出唯一 AcceptanceDecision。
+// 当前 AcceptanceService 走强类型 runtime 内部路径，不通过通用 HookResult metadata 承载。
 func (s *Service) runBeforeCompletionDecisionAcceptance(
 	ctx context.Context,
 	state *runState,
@@ -82,7 +85,7 @@ func (s *Service) runBeforeCompletionDecisionAcceptance(
 		CompletionPassed:        completionPassed,
 		CompletionBlockedReason: strings.TrimSpace(string(state.completion.CompletionBlockedReason)),
 	})
-	// internal acceptance hook：消费 completion/facts/todo/verification/user-repo signals，生成唯一终态裁决。
+	// 收口裁决阶段：消费 completion/facts/todo/verification/user-repo signals，生成唯一终态裁决。
 	return s.beforeAcceptFinal(ctx, state, snapshot, assistant, completionPassed, signals)
 }
 

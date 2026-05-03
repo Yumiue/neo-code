@@ -251,6 +251,14 @@ func toControlplaneStopReason(reason string) controlplane.StopReason {
 		return controlplane.StopReasonRequiredTodoFailed
 	case string(controlplane.StopReasonVerificationFailed):
 		return controlplane.StopReasonVerificationFailed
+	case string(controlplane.StopReasonTodoWaitingExternal):
+		return controlplane.StopReasonTodoWaitingExternal
+	case string(controlplane.StopReasonVerificationConfigMissing):
+		return controlplane.StopReasonVerificationConfigMissing
+	case string(controlplane.StopReasonVerificationExecutionDenied):
+		return controlplane.StopReasonVerificationExecutionDenied
+	case string(controlplane.StopReasonVerificationExecutionError):
+		return controlplane.StopReasonVerificationExecutionError
 	default:
 		return ""
 	}
@@ -296,7 +304,8 @@ func buildDeciderContinueHint(decision decider.Decision) string {
 	return strings.TrimSpace(builder.String())
 }
 
-// beforeAcceptFinalLegacy 保留历史 acceptance/verify 执行逻辑，作为兼容后备路径。
+// beforeAcceptFinalLegacy 是历史 acceptance/verify 实现，仅用于回滚对照与测试覆盖。
+// Deprecated: P7 主链不再调用该路径，最终裁决统一走 beforeAcceptFinal -> AcceptanceService。
 func (s *Service) beforeAcceptFinalLegacy(
 	ctx context.Context,
 	state *runState,

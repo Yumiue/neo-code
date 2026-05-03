@@ -119,6 +119,7 @@ func (s *acceptanceService) Decide(ctx context.Context, input acceptanceServiceI
 	if output.Status == acceptance.AcceptanceContinue && output.ContinueHint == "" {
 		output.ContinueHint = finalContinueReminder
 	}
+	output.ErrorClass = normalizeAcceptanceErrorClass(output.ErrorClass, input, output)
 	return output, nil
 }
 
@@ -208,7 +209,66 @@ func mergeVerificationFailure(
 			out.ErrorClass = verify.ErrorClassUnknown
 		}
 	}
+	out.ErrorClass = normalizeAcceptanceErrorClass(out.ErrorClass, acceptanceServiceInput{}, out)
 	return out
+}
+
+// normalizeAcceptanceErrorClass 统一补齐终态 error_class，避免 TUI/Gateway 出现 unknown/empty 推断歧义。
+func normalizeAcceptanceErrorClass(
+	current verify.ErrorClass,
+	input acceptanceServiceInput,
+	decision acceptance.AcceptanceDecision,
+) verify.ErrorClass {
+	if current != "" {
+		return current
+	}
+	switch decision.StopReason {
+	case controlplane.StopReasonVerificationConfigMissing:
+		return verify.ErrorClassEnvMissing
+	case controlplane.StopReasonVerificationExecutionDenied:
+		return verify.ErrorClassPermissionDenied
+	case controlplane.StopReasonVerificationExecutionError:
+		return verify.ErrorClassUnknown
+	case controlplane.StopReasonRequiredTodoFailed:
+		return verify.ErrorClassUnknown
+	case controlplane.StopReasonNoProgressAfterFinalIntercept:
+		return verify.ErrorClassUnknown
+	case controlplane.StopReasonVerificationFailed:
+		if input.TaskKind == decider.TaskKindSubAgent && len(input.Facts.SubAgents.Failed) > 0 {
+			return verify.ErrorClass("subagent_failed")
+		}
+		if input.TaskKind == decider.TaskKindWorkspaceWrite {
+			if errClass := latestToolErrorClass(input.Facts.Errors.ToolErrors, "filesystem_write_file"); errClass != "" {
+				return verify.ErrorClass(errClass)
+			}
+		}
+		if errClass := latestToolErrorClass(input.Facts.Errors.ToolErrors, "spawn_subagent"); errClass != "" {
+			return verify.ErrorClass(errClass)
+		}
+		if errClass := latestToolErrorClass(input.Facts.Errors.ToolErrors, "filesystem_write_file"); errClass != "" {
+			return verify.ErrorClass(errClass)
+		}
+	}
+	if decision.Status == acceptance.AcceptanceFailed || decision.Status == acceptance.AcceptanceIncomplete {
+		return verify.ErrorClassUnknown
+	}
+	return ""
+}
+
+// latestToolErrorClass 返回目标工具最近一次非空错误分类。
+func latestToolErrorClass(errors []runtimefacts.ToolErrorFact, tool string) string {
+	target := strings.TrimSpace(tool)
+	for i := len(errors) - 1; i >= 0; i-- {
+		entry := errors[i]
+		if target != "" && !strings.EqualFold(strings.TrimSpace(entry.Tool), target) {
+			continue
+		}
+		errClass := strings.TrimSpace(entry.ErrorClass)
+		if errClass != "" {
+			return errClass
+		}
+	}
+	return ""
 }
 
 func firstNonPassVerifierResult(results []verify.VerificationResult) *verify.VerificationResult {
