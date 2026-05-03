@@ -146,7 +146,7 @@ func runDiagnoseWithSpawnSubAgent(
 		Workdir:               workdir,
 		MaxSteps:              diagnoseSubAgentSteps,
 		Timeout:               diagnoseSubAgentTimeout,
-		AllowedTools:          []string{tools.ToolNameFilesystemReadFile},
+		AllowedTools:          []string{tools.ToolNameFilesystemReadFile, tools.ToolNameFilesystemGlob},
 		AllowedPaths:          allowedPaths,
 	})
 	if runErr != nil {

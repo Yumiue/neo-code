@@ -31,7 +31,7 @@ import (
 )
 
 const (
-	diagnoseCallTimeout    = 10 * time.Second
+	diagnoseCallTimeout    = 60 * time.Second
 	diagSocketReadDeadline = 3 * time.Second
 	autoProbeTimeout       = 1500 * time.Millisecond
 
@@ -122,7 +122,8 @@ func RunManualShell(ctx context.Context, options ManualShellOptions) error {
 		_ = restoreRawTerminal()
 	}()
 
-	command := buildShellCommand(shellPath, normalized, socketPath)
+	command, cleanupRC := buildShellCommand(shellPath, normalized, socketPath)
+	defer cleanupRC()
 	ptyFile, err := pty.Start(command)
 	if err != nil {
 		return fmt.Errorf("ptyproxy: start pty shell: %w", err)
@@ -143,6 +144,25 @@ func RunManualShell(ctx context.Context, options ManualShellOptions) error {
 	var outputMu sync.Mutex
 	synchronizedOutput := &serializedWriter{writer: normalized.Stdout, lock: &outputMu}
 	printProxyInitializedBanner(synchronizedOutput)
+	printWelcomeBanner(synchronizedOutput)
+
+	// 预建立 Gateway RPC 长连接：若 gateway 已运行则直接复用，否则自动拉起。
+	gwRPCClient, gwErr := gatewayclient.NewGatewayRPCClient(gatewayclient.GatewayRPCClientOptions{
+		ListenAddress: normalized.GatewayListenAddress,
+		TokenFile:     normalized.GatewayTokenFile,
+	})
+	if gwErr != nil {
+		writeProxyf(normalized.Stderr, "neocode shell: gateway client init failed: %v\n", gwErr)
+	} else {
+		authCtx, authCancel := context.WithTimeout(context.Background(), diagnoseCallTimeout)
+		if authErr := gwRPCClient.Authenticate(authCtx); authErr != nil {
+			writeProxyf(normalized.Stderr, "neocode shell: gateway auth failed: %v\n", authErr)
+		}
+		authCancel()
+	}
+	if gwRPCClient != nil {
+		defer gwRPCClient.Close()
+	}
 
 	logBuffer := NewUTF8RingBuffer(DefaultRingBufferCapacity)
 	outputSink := io.MultiWriter(synchronizedOutput, logBuffer)
@@ -151,6 +171,8 @@ func RunManualShell(ctx context.Context, options ManualShellOptions) error {
 	autoState := &autoRuntimeState{}
 	autoState.Enabled.Store(true)
 	autoState.OSCReady.Store(false)
+
+	printAutoModeBanner(synchronizedOutput, autoState)
 
 	diagnoseJobCh := make(chan diagnoseJob, 4)
 	acceptCtx, cancelAccept := context.WithCancel(context.Background())
@@ -166,7 +188,7 @@ func RunManualShell(ctx context.Context, options ManualShellOptions) error {
 	diagWG.Add(1)
 	go func() {
 		defer diagWG.Done()
-		consumeDiagSignals(diagCtx, diagnoseJobCh, synchronizedOutput, logBuffer, normalized, socketPath, autoState)
+		consumeDiagSignals(diagCtx, gwRPCClient, diagnoseJobCh, synchronizedOutput, logBuffer, normalized, socketPath, autoState)
 	}()
 
 	inputTracker := &commandTracker{}
@@ -180,6 +202,7 @@ func RunManualShell(ctx context.Context, options ManualShellOptions) error {
 		defer probeTimer.Stop()
 		<-probeTimer.C
 		if !autoState.OSCReady.Load() {
+			autoState.Enabled.Store(false)
 			writeProxyf(normalized.Stderr, "neocode shell: OSC133 probe timed out, fallback to manual mode\n")
 		}
 	}()
@@ -250,6 +273,37 @@ func printProxyInitializedBanner(writer io.Writer) {
 		return
 	}
 	writeProxyLine(writer, proxyInitializedBanner)
+}
+
+// printWelcomeBanner 在 PTY 会话启动后输出指引与提示，帮助用户了解诊断功能的使用方式。
+func printWelcomeBanner(writer io.Writer) {
+	if writer == nil {
+		return
+	}
+	lines := []string{
+		"[ 💡 欢迎使用终端诊断代理！您可以像往常一样在终端里工作。 ]",
+		"[ 常用指引: ]",
+		"[ - 自动诊断: 报错时原位自动输出解析。开关控制: `neocode diag auto off` / `neocode diag auto on` ]",
+		"[ - 手动诊断: 报错后输入 `neocode diag` 随时分析。 ]",
+		"[ - 沙盒排查: 输入 `neocode diag -i` 进入 IDM 模式，排查完毕后输入 `exit` 退出沙盒。 ]",
+		"[ - 帮助手册: 输入 `neocode -h` 查看所有命令与配置项。 ]",
+		"[ - 退出代理: 输入 `exit` 或按 `Ctrl+D` 退出 NeoCode 代理外壳，回到系统原生 Shell。 ]",
+	}
+	for _, line := range lines {
+		writeProxyLine(writer, line)
+	}
+}
+
+// printAutoModeBanner 根据当前 auto 诊断开关状态输出对应提示。
+func printAutoModeBanner(writer io.Writer, autoState *autoRuntimeState) {
+	if writer == nil {
+		return
+	}
+	if autoState != nil && autoState.Enabled.Load() {
+		writeProxyLine(writer, "[ ✅ 自动诊断模式已开启，执行命令出错时将自动分析根因。 ]")
+	} else {
+		writeProxyLine(writer, "[ ⚠ 自动诊断模式未开启，报错后请手动输入 `neocode diag` 进行分析。 ]")
+	}
 }
 
 // printProxyExitedBanner 在 PTY 会话结束后输出代理退出提示。
@@ -539,12 +593,71 @@ func sendDiagIPCCommandToPath(ctx context.Context, socketPath string, request di
 }
 
 // buildShellCommand 构建真实 shell 进程，并在子进程环境中注入诊断 socket 变量。
-func buildShellCommand(shellPath string, options ManualShellOptions, socketPath string) *exec.Cmd {
+// 对 bash 自动注入 OSC133 init 脚本（--rcfile），使 shell 集成立即可用。
+// 返回的 cleanup 函数必须在调用方 defer 中执行，用于清理临时 RC 文件。
+func buildShellCommand(shellPath string, options ManualShellOptions, socketPath string) (*exec.Cmd, func()) {
 	command := exec.Command(shellPath)
 	command.Dir = options.Workdir
 	command.Env = MergeEnvVar(os.Environ(), DiagSocketEnv, socketPath)
-	//command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	return command
+	cleanup := func() {}
+	if rcFile := prepareBashInitRC(shellPath); rcFile != "" {
+		command.Args = append(command.Args, "--rcfile", rcFile)
+		cleanup = func() { deleteBashInitRCFile(rcFile) }
+	}
+	return command, cleanup
+}
+
+// prepareBashInitRC 当 shell 为 bash 时创建包含 OSC133 init 脚本 + 用户 ~/.bashrc 的临时文件。
+// 返回空字符串表示跳过（非 bash 或创建失败）。
+// 调用方需确保在进程退出后用 deleteBashInitRC 清理。
+var (
+	createBashInitRCFile = defaultCreateBashInitRCFile
+	deleteBashInitRCFile = defaultDeleteBashInitRCFile
+)
+
+func prepareBashInitRC(shellPath string) string {
+	if !isBashShell(shellPath) {
+		return ""
+	}
+	path, err := createBashInitRCFile()
+	if err != nil {
+		return ""
+	}
+	return path
+}
+
+func isBashShell(shellPath string) bool {
+	base := strings.ToLower(filepath.Base(shellPath))
+	return base == "bash"
+}
+
+func defaultCreateBashInitRCFile() (string, error) {
+	content := shellInitScript + `
+# Load user's original bashrc to preserve custom prompt, aliases, etc.
+if [ -f ~/.bashrc ]; then
+	. ~/.bashrc
+fi
+`
+	tmpFile, err := os.CreateTemp("", "neocode-bash-rc-*.sh")
+	if err != nil {
+		return "", fmt.Errorf("ptyproxy: create bash rc file: %w", err)
+	}
+	if _, err := tmpFile.WriteString(content); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpFile.Name())
+		return "", fmt.Errorf("ptyproxy: write bash rc file: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpFile.Name())
+		return "", fmt.Errorf("ptyproxy: close bash rc file: %w", err)
+	}
+	return tmpFile.Name(), nil
+}
+
+func defaultDeleteBashInitRCFile(path string) {
+	if path != "" {
+		_ = os.Remove(path)
+	}
 }
 
 // resolveShellPath 按“显式参数 -> SHELL 环境变量 -> /bin/bash”顺序选择实际 shell。
@@ -701,9 +814,10 @@ func writeDiagIPCResponse(connection net.Conn, response diagIPCResponse) {
 	_, _ = connection.Write(encoded)
 }
 
-// consumeDiagSignals 串行消费诊断任务，避免输出相互覆盖。
+// consumeDiagSignals 串行消费诊断任务，复用预建立的 Gateway RPC 长连接。
 func consumeDiagSignals(
 	ctx context.Context,
+	rpcClient *gatewayclient.GatewayRPCClient,
 	jobCh <-chan diagnoseJob,
 	output io.Writer,
 	buffer *UTF8RingBuffer,
@@ -719,7 +833,7 @@ func consumeDiagSignals(
 			if !ok {
 				return
 			}
-			runSingleDiagnosis(output, buffer, options, socketPath, job.Trigger, job.IsAuto, autoState)
+			runSingleDiagnosis(rpcClient, output, buffer, options, socketPath, job.Trigger, job.IsAuto, autoState)
 			if job.Done != nil {
 				job.Done <- diagIPCResponse{OK: true, AutoEnabled: autoState.Enabled.Load(), Message: "diagnosis completed"}
 			}
@@ -729,6 +843,7 @@ func consumeDiagSignals(
 
 // runSingleDiagnosis 执行一次诊断调用，并根据 Auto 开关决定是否渲染结果。
 func runSingleDiagnosis(
+	rpcClient *gatewayclient.GatewayRPCClient,
 	output io.Writer,
 	buffer *UTF8RingBuffer,
 	options ManualShellOptions,
@@ -741,7 +856,7 @@ func runSingleDiagnosis(
 		return
 	}
 
-	result, err := callDiagnoseTool(buffer, options, socketPath, trigger)
+	result, err := callDiagnoseTool(rpcClient, buffer, options, socketPath, trigger)
 	if err != nil {
 		writeProxyf(output, "\n\033[31m[NeoCode Diagnosis]\033[0m %s\n", strings.TrimSpace(err.Error()))
 		return
@@ -752,13 +867,18 @@ func runSingleDiagnosis(
 	renderDiagnosis(output, result.Content, result.IsError)
 }
 
-// callDiagnoseTool 组装参数并调用 gateway.executeSystemTool(diagnose)。
+// callDiagnoseTool 使用 RunManualShell 预建立的 Gateway RPC 长连接调用 executeSystemTool(diagnose)。
 func callDiagnoseTool(
+	rpcClient *gatewayclient.GatewayRPCClient,
 	buffer *UTF8RingBuffer,
 	options ManualShellOptions,
 	socketPath string,
 	trigger diagnoseTrigger,
 ) (tools.ToolResult, error) {
+	if rpcClient == nil {
+		return tools.ToolResult{}, fmt.Errorf("网关客户端未就绪，请检查 gateway 服务状态")
+	}
+
 	logSnapshot := buffer.SnapshotString()
 	if strings.TrimSpace(trigger.OutputText) != "" {
 		logSnapshot = trigger.OutputText
@@ -781,21 +901,8 @@ func callDiagnoseTool(
 		return tools.ToolResult{}, fmt.Errorf("请求构建失败: %w", err)
 	}
 
-	rpcClient, err := gatewayclient.NewGatewayRPCClient(gatewayclient.GatewayRPCClientOptions{
-		ListenAddress: options.GatewayListenAddress,
-		TokenFile:     options.GatewayTokenFile,
-	})
-	if err != nil {
-		return tools.ToolResult{}, fmt.Errorf("网关客户端初始化失败: %w", err)
-	}
-	defer rpcClient.Close()
-
 	callContext, cancel := context.WithTimeout(context.Background(), diagnoseCallTimeout)
 	defer cancel()
-
-	if err := rpcClient.Authenticate(callContext); err != nil {
-		return tools.ToolResult{}, fmt.Errorf("网关认证失败: %w", err)
-	}
 
 	var frame gateway.MessageFrame
 	if err := rpcClient.CallWithOptions(
@@ -913,6 +1020,7 @@ func streamPTYOutput(
 				switch event.Type {
 				case ShellEventPromptReady:
 					autoState.OSCReady.Store(true)
+					autoState.Enabled.Store(true)
 					if pendingTrigger != nil && autoState.Enabled.Load() {
 						select {
 						case autoTriggerCh <- *pendingTrigger:
