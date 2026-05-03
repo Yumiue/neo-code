@@ -6,9 +6,10 @@ import (
 )
 
 const (
-	diagCommandDiagnose = "diagnose"
-	diagCommandAutoOn   = "auto_on"
-	diagCommandAutoOff  = "auto_off"
+	diagCommandDiagnose   = "diagnose"
+	diagCommandAutoOn     = "auto_on"
+	diagCommandAutoOff    = "auto_off"
+	diagCommandAutoStatus = "auto_status"
 )
 
 type diagIPCRequest struct {

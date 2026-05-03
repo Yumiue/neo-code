@@ -14,16 +14,18 @@ import (
 )
 
 var (
-	runShellCommand       = defaultShellCommandRunner
-	runShellInitCommand   = defaultShellInitCommandRunner
-	runDiagCommand        = defaultDiagCommandRunner
-	runDiagAutoCommand    = defaultDiagAutoCommandRunner
-	runManualShellProxy   = ptyproxy.RunManualShell
-	sendDiagnoseSignalFn  = ptyproxy.SendDiagnoseSignal
-	sendAutoModeSignalFn  = ptyproxy.SendAutoModeSignal
-	buildShellInitScript  = ptyproxy.BuildShellInitScript
-	readDiagEnvValue      = os.Getenv
-	resolveLatestDiagPath = ptyproxy.ResolveLatestRunDiagSocketPath
+	runShellCommand        = defaultShellCommandRunner
+	runShellInitCommand    = defaultShellInitCommandRunner
+	runDiagCommand         = defaultDiagCommandRunner
+	runDiagAutoCommand     = defaultDiagAutoCommandRunner
+	runDiagDiagnoseCommand = defaultDiagCommandRunner
+	runManualShellProxy    = ptyproxy.RunManualShell
+	sendDiagnoseSignalFn   = ptyproxy.SendDiagnoseSignal
+	sendAutoModeSignalFn   = ptyproxy.SendAutoModeSignal
+	queryAutoModeFn        = ptyproxy.QueryAutoMode
+	buildShellInitScript   = ptyproxy.BuildShellInitScript
+	readDiagEnvValue       = os.Getenv
+	resolveLatestDiagPath  = ptyproxy.ResolveLatestRunDiagSocketPath
 )
 
 type shellCommandOptions struct {
@@ -42,6 +44,7 @@ type diagCommandOptions struct {
 type diagAutoCommandOptions struct {
 	SocketPath string
 	Enabled    bool
+	QueryOnly  bool
 }
 
 // newShellCommand 创建终端代理入口：支持启动代理或输出 shell integration 初始化脚本。
@@ -51,15 +54,27 @@ func newShellCommand() *cobra.Command {
 		Use:          "shell",
 		Short:        "Start terminal proxy shell for neocode diagnose",
 		SilenceUsage: true,
-		Args:         cobra.NoArgs,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return nil
+			}
+			if len(args) == 1 && options.Init {
+				return nil
+			}
+			return cobra.NoArgs(cmd, args)
+		},
 		Annotations: map[string]string{
 			commandAnnotationSkipGlobalPreload:     "true",
 			commandAnnotationSkipSilentUpdateCheck: "true",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			shellPath := strings.TrimSpace(options.Shell)
+			if options.Init && shellPath == "" && len(args) == 1 {
+				shellPath = strings.TrimSpace(args[0])
+			}
 			normalized := shellCommandOptions{
 				Workdir:              strings.TrimSpace(mustReadInheritedWorkdir(cmd)),
-				Shell:                strings.TrimSpace(options.Shell),
+				Shell:                shellPath,
 				SocketPath:           strings.TrimSpace(options.SocketPath),
 				GatewayListenAddress: strings.TrimSpace(options.GatewayListenAddress),
 				GatewayTokenFile:     strings.TrimSpace(options.GatewayTokenFile),
@@ -107,7 +122,10 @@ func newDiagCommand() *cobra.Command {
 		},
 	}
 	command.Flags().StringVar(&options.SocketPath, "socket", "", "diagnose unix socket path override")
-	command.AddCommand(newDiagAutoCommand())
+	command.AddCommand(
+		newDiagAutoCommand(),
+		newDiagDiagnoseCommand(),
+	)
 	return command
 }
 
@@ -115,19 +133,22 @@ func newDiagCommand() *cobra.Command {
 func newDiagAutoCommand() *cobra.Command {
 	options := &diagAutoCommandOptions{}
 	command := &cobra.Command{
-		Use:          "auto <on|off>",
+		Use:          "auto <on|off|status>",
 		Short:        "Set auto diagnosis mode in current neocode shell",
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			mode := strings.ToLower(strings.TrimSpace(args[0]))
+			options.QueryOnly = false
 			switch mode {
 			case "on":
 				options.Enabled = true
 			case "off":
 				options.Enabled = false
+			case "status":
+				options.QueryOnly = true
 			default:
-				return fmt.Errorf("unsupported auto mode %q: use on/off", mode)
+				return fmt.Errorf("unsupported auto mode %q: use on/off/status", mode)
 			}
 			socketPath, err := resolveDiagSocketPath(options.SocketPath)
 			if err != nil {
@@ -136,7 +157,28 @@ func newDiagAutoCommand() *cobra.Command {
 			return runDiagAutoCommand(cmd.Context(), diagAutoCommandOptions{
 				SocketPath: socketPath,
 				Enabled:    options.Enabled,
+				QueryOnly:  options.QueryOnly,
 			}, cmd.OutOrStdout())
+		},
+	}
+	command.Flags().StringVar(&options.SocketPath, "socket", "", "diagnose unix socket path override")
+	return command
+}
+
+// newDiagDiagnoseCommand 创建 diagnose 子命令，便于显式表达一次手动诊断请求。
+func newDiagDiagnoseCommand() *cobra.Command {
+	options := &diagCommandOptions{}
+	command := &cobra.Command{
+		Use:          "diagnose",
+		Short:        "Trigger one manual diagnosis in current neocode shell",
+		SilenceUsage: true,
+		Args:         cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			socketPath, err := resolveDiagSocketPath(options.SocketPath)
+			if err != nil {
+				return err
+			}
+			return runDiagDiagnoseCommand(cmd.Context(), diagCommandOptions{SocketPath: socketPath})
 		},
 	}
 	command.Flags().StringVar(&options.SocketPath, "socket", "", "diagnose unix socket path override")
@@ -179,6 +221,21 @@ func defaultDiagCommandRunner(ctx context.Context, options diagCommandOptions) e
 
 // defaultDiagAutoCommandRunner 向 shell 代理发送 auto 模式切换信令。
 func defaultDiagAutoCommandRunner(ctx context.Context, options diagAutoCommandOptions, stdout io.Writer) error {
+	if options.QueryOnly {
+		enabled, err := queryAutoModeFn(ctx, strings.TrimSpace(options.SocketPath))
+		if err != nil {
+			return err
+		}
+		if stdout != nil {
+			if enabled {
+				_, _ = io.WriteString(stdout, "auto mode enabled\n")
+			} else {
+				_, _ = io.WriteString(stdout, "auto mode disabled\n")
+			}
+		}
+		return nil
+	}
+
 	if err := sendAutoModeSignalFn(ctx, strings.TrimSpace(options.SocketPath), options.Enabled); err != nil {
 		return err
 	}

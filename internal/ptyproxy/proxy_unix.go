@@ -422,6 +422,15 @@ func SendAutoModeSignal(ctx context.Context, socketPath string, enabled bool) er
 	return err
 }
 
+// QueryAutoMode 查询当前代理 shell 的 Auto 诊断模式开关状态。
+func QueryAutoMode(ctx context.Context, socketPath string) (bool, error) {
+	response, err := sendDiagIPCCommand(ctx, socketPath, diagIPCRequest{Cmd: diagCommandAutoStatus})
+	if err != nil {
+		return false, err
+	}
+	return response.AutoEnabled, nil
+}
+
 // sendDiagIPCCommand 通过 JSON-Lines 发送控制命令，并在必要时回退到旧版 tmp socket。
 func sendDiagIPCCommand(ctx context.Context, socketPath string, request diagIPCRequest) (diagIPCResponse, error) {
 	primaryPath := filepath.Clean(strings.TrimSpace(socketPath))
@@ -668,6 +677,12 @@ func handleDiagSocketConnection(
 	case diagCommandAutoOff:
 		autoState.Enabled.Store(false)
 		writeDiagIPCResponse(connection, diagIPCResponse{OK: true, AutoEnabled: false, Message: "auto mode disabled"})
+	case diagCommandAutoStatus:
+		writeDiagIPCResponse(connection, diagIPCResponse{
+			OK:          true,
+			AutoEnabled: autoState.Enabled.Load(),
+			Message:     "auto mode status",
+		})
 	default:
 		writeDiagIPCResponse(connection, diagIPCResponse{OK: false, Message: "unsupported command"})
 	}

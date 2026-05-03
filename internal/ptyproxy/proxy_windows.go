@@ -23,3 +23,8 @@ func SendDiagnoseSignal(context.Context, string) error {
 func SendAutoModeSignal(context.Context, string, bool) error {
 	return errUnsupportedPlatform
 }
+
+// QueryAutoMode 在 Windows 平台返回明确不支持错误。
+func QueryAutoMode(context.Context, string) (bool, error) {
+	return false, errUnsupportedPlatform
+}
