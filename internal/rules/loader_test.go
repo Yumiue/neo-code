@@ -66,7 +66,7 @@ func TestLoaderLoadTruncatesLongDocument(t *testing.T) {
 	if err := os.MkdirAll(baseDir, 0o755); err != nil {
 		t.Fatalf("mkdir baseDir: %v", err)
 	}
-	large := strings.Repeat("规", documentRuneLimit+12)
+	large := strings.Repeat("规", snapshotRuneLimit+12)
 	if err := os.WriteFile(filepath.Join(baseDir, agentsFileName), []byte(large), 0o644); err != nil {
 		t.Fatalf("write AGENTS.md: %v", err)
 	}
@@ -78,8 +78,37 @@ func TestLoaderLoadTruncatesLongDocument(t *testing.T) {
 	if !snapshot.GlobalAGENTS.Truncated {
 		t.Fatalf("expected truncated global document")
 	}
-	if runeCount(snapshot.GlobalAGENTS.Content) != documentRuneLimit {
+	if runeCount(snapshot.GlobalAGENTS.Content) != snapshotRuneLimit {
 		t.Fatalf("unexpected truncated length = %d", runeCount(snapshot.GlobalAGENTS.Content))
+	}
+}
+
+func TestLoaderLoadEnforcesCombinedRulesBudget(t *testing.T) {
+	baseDir := filepath.Join(t.TempDir(), ".neocode")
+	projectRoot := t.TempDir()
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		t.Fatalf("mkdir baseDir: %v", err)
+	}
+
+	projectContent := strings.Repeat("甲", snapshotRuneLimit-10)
+	globalContent := strings.Repeat("乙", 32)
+	if err := os.WriteFile(filepath.Join(projectRoot, agentsFileName), []byte(projectContent), 0o644); err != nil {
+		t.Fatalf("write project AGENTS.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(baseDir, agentsFileName), []byte(globalContent), 0o644); err != nil {
+		t.Fatalf("write global AGENTS.md: %v", err)
+	}
+
+	snapshot, err := NewLoader(baseDir).Load(context.Background(), projectRoot)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !snapshot.GlobalAGENTS.Truncated {
+		t.Fatalf("expected global rules to be truncated by combined budget")
+	}
+	total := runeCount(snapshot.ProjectAGENTS.Content) + runeCount(snapshot.GlobalAGENTS.Content)
+	if total != snapshotRuneLimit {
+		t.Fatalf("combined rule length = %d, want %d", total, snapshotRuneLimit)
 	}
 }
 
@@ -153,6 +182,17 @@ func TestResolveBaseDirCleansExplicitBaseDir(t *testing.T) {
 	}
 	if filepath.Base(got) != defaultRulesDir {
 		t.Fatalf("expected %q suffix, got %q", defaultRulesDir, got)
+	}
+}
+
+func TestTruncateRuleMarkdownClosesCodeFence(t *testing.T) {
+	input := "before\n```go\nfmt.Println(\"x\")\n"
+	got, truncated := truncateRuleMarkdown(input, len([]rune("before\n```go\nfmt.Pri")))
+	if !truncated {
+		t.Fatalf("expected truncated markdown")
+	}
+	if !strings.HasSuffix(got, "\n```") {
+		t.Fatalf("expected closing fence, got %q", got)
 	}
 }
 

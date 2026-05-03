@@ -10,13 +10,14 @@ import (
 )
 
 const (
-	agentsFileName    = "AGENTS.md"
-	documentRuneLimit = 4000
-	defaultRulesDir   = ".neocode"
+	agentsFileName        = "AGENTS.md"
+	documentReadRuneLimit = 16000
+	snapshotRuneLimit     = 4000
+	defaultRulesDir       = ".neocode"
 )
 
-// DefaultTruncationNotice 是规则文件超出注入预算时附加的统一提示。
-const DefaultTruncationNotice = "\n[truncated to fit rule file limit]\n"
+// DefaultTruncationNotice 是规则内容超出注入预算时附加的统一提示。
+const DefaultTruncationNotice = "\n[truncated to fit rules budget]\n"
 
 // Document 表示单个规则文件的已加载内容快照。
 type Document struct {
@@ -62,10 +63,11 @@ func (l *fileLoader) Load(ctx context.Context, projectRoot string) (Snapshot, er
 		return Snapshot{}, err
 	}
 
-	return Snapshot{
+	snapshot := Snapshot{
 		GlobalAGENTS:  globalDoc,
 		ProjectAGENTS: projectDoc,
-	}, nil
+	}
+	return enforceSnapshotBudget(snapshot), nil
 }
 
 // loadProjectDocument 读取项目根下的 AGENTS.md 作为项目规则。
@@ -102,15 +104,59 @@ func resolveBaseDir(baseDir string) string {
 		return filepath.Clean(trimmed)
 	}
 
-	home := strings.TrimSpace(os.Getenv("HOME"))
-	if !filepath.IsAbs(home) {
-		var err error
-		home, err = os.UserHomeDir()
-		if err != nil || !filepath.IsAbs(strings.TrimSpace(home)) {
-			return ""
-		}
+	home, err := os.UserHomeDir()
+	if err != nil || !filepath.IsAbs(strings.TrimSpace(home)) {
+		return ""
 	}
 	return filepath.Join(home, defaultRulesDir)
+}
+
+// enforceSnapshotBudget 按项目规则优先级裁剪合并后的规则快照总预算。
+func enforceSnapshotBudget(snapshot Snapshot) Snapshot {
+	remaining := snapshotRuneLimit
+
+	snapshot.ProjectAGENTS, remaining = truncateDocumentToBudget(snapshot.ProjectAGENTS, remaining)
+	snapshot.GlobalAGENTS, remaining = truncateDocumentToBudget(snapshot.GlobalAGENTS, remaining)
+
+	return snapshot
+}
+
+// truncateDocumentToBudget 按剩余预算裁剪单个规则文档，并尽量保持 Markdown 结构闭合。
+func truncateDocumentToBudget(document Document, budget int) (Document, int) {
+	content := strings.TrimSpace(document.Content)
+	if content == "" {
+		document.Content = ""
+		return document, maxInt(budget, 0)
+	}
+
+	if budget <= 0 {
+		document.Content = ""
+		document.Truncated = true
+		return document, 0
+	}
+
+	trimmed, truncated := truncateRuleMarkdown(content, budget)
+	document.Content = trimmed
+	document.Truncated = document.Truncated || truncated
+	return document, maxInt(budget-runeCount(trimmed), 0)
+}
+
+// truncateRuleMarkdown 按 rune 数量裁剪规则文本，并在需要时补齐未闭合的代码块围栏。
+func truncateRuleMarkdown(input string, max int) (string, bool) {
+	trimmed, truncated := truncateRunes(strings.TrimSpace(input), max)
+	if !truncated {
+		return trimmed, false
+	}
+
+	trimmed = strings.TrimRight(trimmed, "\n")
+	if strings.Count(trimmed, "```")%2 == 1 {
+		if max > len([]rune("\n```")) {
+			trimmed, _ = truncateRunes(trimmed, max-len([]rune("\n```")))
+			trimmed = strings.TrimRight(trimmed, "\n")
+		}
+		trimmed += "\n```"
+	}
+	return trimmed, true
 }
 
 // truncateRunes 按 rune 数量裁剪文本，避免破坏 UTF-8 多字节字符。
@@ -129,4 +175,12 @@ func truncateRunes(input string, max int) (string, bool) {
 // runeCount 统一按 rune 数量统计文本体积。
 func runeCount(input string) int {
 	return utf8.RuneCountInString(input)
+}
+
+// maxInt 返回两个整数中的较大值，用于避免预算结果出现负数。
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

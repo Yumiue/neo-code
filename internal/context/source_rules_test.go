@@ -70,7 +70,7 @@ func TestRenderRulesDocumentBlockIncludesTruncationMarker(t *testing.T) {
 		Content:   "trimmed",
 		Truncated: true,
 	})
-	if !strings.Contains(block, "[truncated to fit rule file limit]") {
+	if !strings.Contains(block, "[truncated to fit rules budget]") {
 		t.Fatalf("expected truncation marker, got %q", block)
 	}
 }
