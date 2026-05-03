@@ -66,7 +66,9 @@ type NetworkServerOptions struct {
 	AllowedOrigins               []string
 	// ConnectionCountChanged 在活跃长连接数变化时回调当前总数，用于空闲退出治理。
 	ConnectionCountChanged func(active int)
-	listenFn               func(network, address string) (net.Listener, error)
+	// StaticFileDir 可选：如果非空，从该目录提供 SPA 静态文件服务。
+	StaticFileDir string
+	listenFn      func(network, address string) (net.Listener, error)
 }
 
 // NetworkServer 提供 HTTP/WebSocket/SSE 网络访问面的统一入口服务。
@@ -87,7 +89,8 @@ type NetworkServer struct {
 	metrics              *GatewayMetrics
 	allowedOrigins       []string
 	connectionCountChanged func(active int)
-	startedAt            time.Time
+	staticFileDir         string
+	startedAt             time.Time
 
 	mu         sync.Mutex
 	server     *http.Server
@@ -185,7 +188,8 @@ func NewNetworkServer(options NetworkServerOptions) (*NetworkServer, error) {
 		metrics:              metrics,
 		allowedOrigins:       allowedOrigins,
 		connectionCountChanged: options.ConnectionCountChanged,
-		startedAt:            time.Now().UTC(),
+		staticFileDir:         options.StaticFileDir,
+		startedAt:              time.Now().UTC(),
 		wsConns:              make(map[*websocket.Conn]context.CancelFunc),
 		sseCancels:           make(map[int]context.CancelFunc),
 	}, nil
@@ -361,6 +365,9 @@ func (s *NetworkServer) buildHandler(runtimePort RuntimePort) http.Handler {
 	mux.HandleFunc("/sse", func(writer http.ResponseWriter, request *http.Request) {
 		s.handleSSERequest(writer, request, runtimePort)
 	})
+	if s.staticFileDir != "" {
+		return WithStaticFileHandler(mux, s.staticFileDir, s.logger)
+	}
 	return mux
 }
 

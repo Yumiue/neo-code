@@ -56,6 +56,7 @@ type gatewayCommandOptions struct {
 
 	MetricsEnabled           bool
 	MetricsEnabledOverridden bool
+	SkipIPC                 bool
 }
 
 // defaultNewAuthManager 创建默认网关认证器，并把具体持久化实现收敛在 CLI 装配层内部。
@@ -181,8 +182,18 @@ func mustReadInheritedWorkdir(cmd *cobra.Command) string {
 
 // defaultGatewayCommandRunner 使用网关服务骨架启动本地 IPC 监听并处理中断退出。
 func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOptions) error {
+	return startGatewayServer(ctx, options, "", nil)
+}
+
+// startGatewayServer 启动网关服务的共享实现，staticFileDir 非空时同时提供 SPA 静态文件服务。
+// onNetworkReady 在网络服务器开始监听后回调，传出实际监听地址。
+func startGatewayServer(ctx context.Context, options gatewayCommandOptions, staticFileDir string, onNetworkReady func(address string)) error {
 	logger := log.New(os.Stderr, "neocode-gateway: ", log.LstdFlags)
-	logger.Printf("starting gateway (log-level=%s)", options.LogLevel)
+	logPrefix := "starting gateway"
+	if staticFileDir != "" {
+		logPrefix = "starting gateway with web UI"
+	}
+	logger.Printf("%s (log-level=%s)", logPrefix, options.LogLevel)
 
 	signalContext, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -233,24 +244,34 @@ func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOpti
 	idleCloser := newGatewayIdleShutdownController(logger, cancelRuntime)
 	defer idleCloser.close()
 
-	ipcServer, err := newGatewayServer(gateway.ServerOptions{
-		ListenAddress:  options.ListenAddress,
-		Logger:         logger,
-		MaxConnections: gatewayConfig.Limits.IPCMaxConnections,
-		MaxFrameSize:   int64(gatewayConfig.Limits.MaxFrameBytes),
-		ReadTimeout:    time.Duration(gatewayConfig.Timeouts.IPCReadSec) * time.Second,
-		WriteTimeout:   time.Duration(gatewayConfig.Timeouts.IPCWriteSec) * time.Second,
-		Relay:          relay,
-		Authenticator:  authManager,
-		ACL:            acl,
-		Metrics:        metrics,
-		ConnectionCountChanged: func(active int) {
-			idleCloser.observe(active)
-		},
-	})
-	if err != nil {
-		return err
+	type transportAdapterEntry struct {
+		name    string
+		adapter gateway.TransportAdapter
 	}
+	var transportAdapters []transportAdapterEntry
+
+	if !options.SkipIPC {
+		ipcServer, err := newGatewayServer(gateway.ServerOptions{
+			ListenAddress:  options.ListenAddress,
+			Logger:         logger,
+			MaxConnections: gatewayConfig.Limits.IPCMaxConnections,
+			MaxFrameSize:   int64(gatewayConfig.Limits.MaxFrameBytes),
+			ReadTimeout:    time.Duration(gatewayConfig.Timeouts.IPCReadSec) * time.Second,
+			WriteTimeout:   time.Duration(gatewayConfig.Timeouts.IPCWriteSec) * time.Second,
+			Relay:          relay,
+			Authenticator:  authManager,
+			ACL:            acl,
+			Metrics:        metrics,
+			ConnectionCountChanged: func(active int) {
+				idleCloser.observe(active)
+			},
+		})
+		if err != nil {
+			return err
+		}
+		transportAdapters = append(transportAdapters, transportAdapterEntry{name: "ipc", adapter: ipcServer})
+	}
+
 	networkServer, err := newGatewayNetwork(gateway.NetworkServerOptions{
 		ListenAddress:        options.HTTPAddress,
 		Logger:               logger,
@@ -264,22 +285,19 @@ func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOpti
 		ACL:                  acl,
 		Metrics:              metrics,
 		AllowedOrigins:       gatewayConfig.Security.AllowOrigins,
+		StaticFileDir:        staticFileDir,
 		ConnectionCountChanged: func(active int) {
 			idleCloser.observe(active)
 		},
 	})
 	if err != nil {
-		_ = ipcServer.Close(context.Background())
+		for _, entry := range transportAdapters {
+			_ = entry.adapter.Close(context.Background())
+		}
 		return err
 	}
-	type transportAdapterEntry struct {
-		name    string
-		adapter gateway.TransportAdapter
-	}
-	transportAdapters := []transportAdapterEntry{
-		{name: "ipc", adapter: ipcServer},
-		{name: "network", adapter: networkServer},
-	}
+	transportAdapters = append(transportAdapters, transportAdapterEntry{name: "network", adapter: networkServer})
+
 	defer func() {
 		relay.Stop()
 		for index := len(transportAdapters) - 1; index >= 0; index-- {
@@ -291,6 +309,11 @@ func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOpti
 		logger.Printf("gateway %s listen address: %s", entry.name, entry.adapter.ListenAddress())
 	}
 
+	// 网络服务器就绪后通知调用方（用于打开浏览器）
+	if onNetworkReady != nil {
+		onNetworkReady(networkServer.ListenAddress())
+	}
+
 	for index, entry := range transportAdapters {
 		if index == 0 {
 			continue
@@ -299,8 +322,9 @@ func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOpti
 			serveErr := networkAdapter.Serve(runtimeContext, runtimePort)
 			if serveErr != nil && runtimeContext.Err() == nil {
 				logger.Printf(
-					"warning: HTTP server failed to start on %s (port in use?), but IPC server is still running: %v",
+					"warning: %s server failed to start on %s: %v",
 					networkAdapter.ListenAddress(),
+					entry.name,
 					serveErr,
 				)
 			}

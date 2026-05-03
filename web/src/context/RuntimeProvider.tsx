@@ -442,7 +442,23 @@ function formatRuntimeError(err: unknown) {
 
 /** tryAutoDetectLocalGateway 尝试自动检测本地 Gateway 连接配置。 */
 async function tryAutoDetectLocalGateway(): Promise<{ config: RuntimeConfig | null; pluginAvailable: boolean }> {
-  const maxRetries = 60 // 最多等 60 秒（Go 编译在 Windows 上可能较慢）
+  const urlToken = readTokenFromURL()
+
+  // 同源模式：页面从 Gateway 自身提供（非 Vite dev server），直接使用当前 origin
+  if (!isViteDevServer()) {
+    const origin = window.location.origin
+    try {
+      const res = await fetch(origin + '/healthz', { signal: AbortSignal.timeout(3000) })
+      if (res.ok) {
+        return { config: { mode: 'browser', gatewayBaseURL: origin, token: urlToken || '' }, pluginAvailable: false }
+      }
+    } catch { /* 忽略 */ }
+    // 同源模式下 healthz 也失败，返回 needs_config
+    return { config: null, pluginAvailable: false }
+  }
+
+  // Vite 开发模式：轮询 dev plugin 端点
+  const maxRetries = 60
   let sawPluginResponse = false
 
   for (let i = 0; i < maxRetries; i++) {
@@ -455,15 +471,12 @@ async function tryAutoDetectLocalGateway(): Promise<{ config: RuntimeConfig | nu
           return { config: { mode: 'browser', gatewayBaseURL: data.gatewayBaseURL, token: data.token || '' }, pluginAvailable: true }
         }
       }
-      // 503 = 插件在位但 gateway 尚未就绪，继续等待
       if (res.status === 503) {
         await new Promise((r) => setTimeout(r, 1000))
         continue
       }
-      // 其他非 ok 响应，插件可能不兼容，退出轮询
       if (!res.ok) break
     } catch {
-      // fetch 失败（Vite 还没启动 / 网络错误），短暂等待后重试
       await new Promise((r) => setTimeout(r, 1000))
     }
   }
@@ -471,9 +484,28 @@ async function tryAutoDetectLocalGateway(): Promise<{ config: RuntimeConfig | nu
   try {
     const res = await fetch('http://127.0.0.1:8080/healthz', { signal: AbortSignal.timeout(3000) })
     if (res.ok) {
-      return { config: { mode: 'browser', gatewayBaseURL: 'http://127.0.0.1:8080', token: '' }, pluginAvailable: false }
+      return { config: { mode: 'browser', gatewayBaseURL: 'http://127.0.0.1:8080', token: urlToken || '' }, pluginAvailable: false }
     }
   } catch { /* gateway 未运行，忽略 */ }
 
   return { config: null, pluginAvailable: sawPluginResponse }
+}
+
+/** isViteDevServer 检测当前页面是否由 Vite dev server 提供。 */
+function isViteDevServer(): boolean {
+  return window.location.port === '5173'
+}
+
+/** readTokenFromURL 从 URL query params 中读取 token 参数。 */
+function readTokenFromURL(): string {
+  const params = new URLSearchParams(window.location.search)
+  const token = params.get('token')
+  if (token) {
+    // 清除 URL 中的 token 参数，避免泄露
+    params.delete('token')
+    const remaining = params.toString()
+    const newSearch = remaining ? `?${remaining}` : ''
+    window.history.replaceState({}, '', window.location.pathname + newSearch + window.location.hash)
+  }
+  return token || ''
 }
