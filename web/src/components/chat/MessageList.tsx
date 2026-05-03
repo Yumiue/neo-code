@@ -45,17 +45,46 @@ function reorderForAITurn(messages: ChatMessage[]): ChatMessage[] {
   return out
 }
 
-/** 消息列表，自动滚动到底部 */
+/** 消息列表，自动滚动到底部（仅在用户位于底部时） */
 export default function MessageList() {
   const messages = useChatStore((s) => s.messages)
   const isGenerating = useChatStore((s) => s.isGenerating)
+  const containerRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const nearBottomRef = useRef<boolean>(true)
+  const prevMessagesLengthRef = useRef<number>(0)
 
   const ordered = useMemo(() => reorderForAITurn(messages), [messages])
 
+  // 找到外层滚动容器
+  const scrollContainerRef = useRef<HTMLElement | null>(null)
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [ordered, isGenerating])
+    if (containerRef.current) {
+      scrollContainerRef.current = containerRef.current.closest('[data-scroll-root]') as HTMLElement | null
+    }
+  }, [])
+
+  // 监听滚动,判断是否靠近底部
+  useEffect(() => {
+    const el = scrollContainerRef.current
+    if (!el) return
+    const onScroll = () => {
+      const threshold = 80
+      nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < threshold
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [])
+
+  // 条件滚动到底部
+  useEffect(() => {
+    const userJustSent = messages.length > prevMessagesLengthRef.current
+    prevMessagesLengthRef.current = messages.length
+
+    if (nearBottomRef.current || userJustSent) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [ordered, isGenerating, messages.length])
 
   const styles: Record<string, React.CSSProperties> = {
     container: {
@@ -140,7 +169,7 @@ export default function MessageList() {
   }
 
   return (
-    <div style={styles.container}>
+    <div ref={containerRef} style={styles.container}>
       {ordered.map((msg, i) => {
         const prev = i > 0 ? ordered[i - 1] : null
         const groupedWithPrev = !!prev && inAITurn(prev) && inAITurn(msg)

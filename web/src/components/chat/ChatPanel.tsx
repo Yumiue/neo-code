@@ -180,7 +180,7 @@ export default function ChatPanel() {
       </div>
 
       {/* Messages */}
-      <div style={styles.messagesArea}>
+      <div style={styles.messagesArea} data-scroll-root="1">
         <MessageList />
       </div>
 

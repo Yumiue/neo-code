@@ -21,8 +21,14 @@ interface CodeBlockProps {
   filename?: string
 }
 
+/**
+ * 代码块组件:`filename` 决定形态。
+ * - inline:无 filename,叙述性代码,极简样式;hover 出现复制按钮。
+ * - file:显式文件代码,保留 header(图标 + 文件名 + 语言徽章 + 复制/下载)与行号。footer 已下线。
+ */
 export default function CodeBlock({ code, language = 'text', filename }: CodeBlockProps) {
   const [copied, setCopied] = useState(false)
+  const [hovered, setHovered] = useState(false)
 
   const handleCopy = () => {
     navigator.clipboard.writeText(code)
@@ -30,48 +36,103 @@ export default function CodeBlock({ code, language = 'text', filename }: CodeBlo
     setTimeout(() => setCopied(false), 2000)
   }
 
+  if (!filename) {
+    return (
+      <div
+        style={inlineStyles.container}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+      >
+        <pre style={inlineStyles.pre}>
+          <code style={inlineStyles.code}>{code}</code>
+        </pre>
+        {hovered && (
+          <button style={inlineStyles.copyBtn} onClick={handleCopy} title="复制">
+            {copied ? <Check size={12} /> : <Copy size={12} />}
+          </button>
+        )}
+      </div>
+    )
+  }
+
   const lines = code.split('\n')
 
   return (
-    <div style={styles.container}>
-      <div style={styles.header}>
-        <div style={styles.headerLeft}>
+    <div style={fileStyles.container}>
+      <div style={fileStyles.header}>
+        <div style={fileStyles.headerLeft}>
           <FileText size={12} />
-          <span style={styles.filename}>{filename || language}</span>
-          <span style={{ ...styles.langBadge, background: langColors[language] || 'var(--border-primary)' }}>
+          <span style={fileStyles.filename}>{filename}</span>
+          <span style={{ ...fileStyles.langBadge, background: langColors[language] || 'var(--border-primary)' }}>
             {language}
           </span>
         </div>
-        <div style={styles.headerRight}>
-          <button style={styles.headerBtn} onClick={handleCopy} title="复制">
+        <div style={fileStyles.headerRight}>
+          <button style={fileStyles.headerBtn} onClick={handleCopy} title="复制">
             {copied ? <Check size={14} /> : <Copy size={14} />}
           </button>
-          <button style={styles.headerBtn} title="下载">
+          <button style={fileStyles.headerBtn} title="下载">
             <Download size={14} />
           </button>
         </div>
       </div>
-      <div style={styles.codeWrap}>
-        <pre style={styles.pre}>
-          <code style={styles.code}>
+      <div style={fileStyles.codeWrap}>
+        <pre style={fileStyles.pre}>
+          <code style={fileStyles.code}>
             {lines.map((line, i) => (
-              <div key={i} style={styles.line}>
-                <span style={styles.lineNum}>{i + 1}</span>
-                <span style={styles.lineContent}>{line || ' '}</span>
+              <div key={i} style={fileStyles.line}>
+                <span style={fileStyles.lineNum}>{i + 1}</span>
+                <span style={fileStyles.lineContent}>{line || ' '}</span>
               </div>
             ))}
           </code>
         </pre>
       </div>
-      <div style={styles.footer}>
-        <button style={styles.actionBtn}>应用到文件</button>
-        <button style={styles.actionBtn}>在 Diff 中查看</button>
-      </div>
     </div>
   )
 }
 
-const styles: Record<string, React.CSSProperties> = {
+const inlineStyles: Record<string, React.CSSProperties> = {
+  container: {
+    position: 'relative',
+    margin: '6px 0',
+    borderRadius: 'var(--radius-md)',
+    background: 'var(--code-bg)',
+    overflow: 'hidden',
+  },
+  pre: {
+    margin: 0,
+    padding: '10px 14px',
+    fontFamily: 'var(--font-mono)',
+    fontSize: 12.5,
+    lineHeight: 1.7,
+    overflowX: 'auto',
+    background: 'transparent',
+  },
+  code: {
+    color: 'var(--text-primary)',
+    whiteSpace: 'pre',
+    tabSize: 2,
+  },
+  copyBtn: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    width: 24,
+    height: 24,
+    borderRadius: 'var(--radius-sm)',
+    border: '1px solid var(--border-primary)',
+    background: 'var(--bg-secondary)',
+    color: 'var(--text-tertiary)',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    transition: 'all 0.15s',
+  },
+}
+
+const fileStyles: Record<string, React.CSSProperties> = {
   container: {
     margin: '8px 0',
     borderRadius: 'var(--radius-lg)',
@@ -156,24 +217,5 @@ const styles: Record<string, React.CSSProperties> = {
     color: 'var(--text-primary)',
     whiteSpace: 'pre',
     tabSize: 2,
-  },
-  footer: {
-    display: 'flex',
-    gap: 8,
-    padding: '8px 12px',
-    borderTop: '1px solid var(--border-primary)',
-    background: 'var(--bg-tertiary)',
-  },
-  actionBtn: {
-    padding: '5px 12px',
-    borderRadius: 'var(--radius-md)',
-    border: '1px solid var(--border-primary)',
-    background: 'var(--bg-secondary)',
-    color: 'var(--text-secondary)',
-    fontSize: 11,
-    fontWeight: 500,
-    cursor: 'pointer',
-    fontFamily: 'var(--font-ui)',
-    transition: 'all 0.15s',
   },
 }
