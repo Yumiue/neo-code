@@ -165,6 +165,7 @@ type Service struct {
 	activeRunCancels   map[uint64]context.CancelFunc
 	activeRunByID      map[string]uint64
 	activeRunTokenIDs  map[uint64]string
+	activeRunStates    map[uint64]*runState
 	permissionAskMapMu sync.Mutex
 	permissionAskLocks map[string]*permissionAskLockEntry
 }
@@ -221,8 +222,11 @@ func NewWithFactory(
 		activeRunCancels:   make(map[uint64]context.CancelFunc),
 		activeRunByID:      make(map[string]uint64),
 		activeRunTokenIDs:  make(map[uint64]string),
+		activeRunStates:    make(map[uint64]*runState),
 	}
-	service.hookExecutor = runtimehooks.NewExecutor(runtimehooks.NewRegistry(), newHookRuntimeEventEmitter(service), runtimehooks.DefaultHookTimeout)
+	baseHookExecutor := runtimehooks.NewExecutor(runtimehooks.NewRegistry(), newHookRuntimeEventEmitter(service), runtimehooks.DefaultHookTimeout)
+	baseHookExecutor.SetAsyncResultSink(newHookAsyncResultSink(service))
+	service.hookExecutor = baseHookExecutor
 	return service
 }
 
@@ -446,6 +450,10 @@ func (s *Service) SetBudgetResolver(resolver BudgetResolver) {
 
 // SetHookExecutor 设置 runtime 生命周期 hook 执行器；传入 nil 可禁用 hook 执行。
 func (s *Service) SetHookExecutor(executor HookExecutor) {
+	if base, ok := executor.(*runtimehooks.Executor); ok {
+		// 保证外部注入执行器后仍然具备 async_rewake -> runtime 队列回灌能力。
+		base.SetAsyncResultSink(newHookAsyncResultSink(s))
+	}
 	s.hookExecutor = executor
 }
 
