@@ -3,6 +3,7 @@ package checkpoint
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -30,6 +31,14 @@ func NewShadowRepo(projectDir string, workdir string) *ShadowRepo {
 	}
 }
 
+// ConflictResult 描述目标 commit 与当前工作区之间的差异。
+type ConflictResult struct {
+	HasConflict   bool
+	AddedFiles    []string
+	DeletedFiles  []string
+	ModifiedFiles []string
+}
+
 // CheckGitAvailability 检查系统是否可用 git 命令。
 func CheckGitAvailability(ctx context.Context) (available bool, version string) {
 	ctx, cancel := context.WithTimeout(ctx, gitCommandTimeout)
@@ -43,12 +52,26 @@ func CheckGitAvailability(ctx context.Context) (available bool, version string) 
 }
 
 // Init 初始化 bare 仓库，设置 core.worktree 指向用户工作区。
+// 如果仓库已存在但损坏，会先 Rebuild 再初始化。
 func (r *ShadowRepo) Init(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(ctx, gitCommandTimeout)
 	defer cancel()
+
+	// 如果目录已存在，先做健康检查
+	if _, err := os.Stat(r.shadowDir); err == nil {
+		healthCtx, healthCancel := context.WithTimeout(context.Background(), gitCommandTimeout)
+		defer healthCancel()
+		checkCmd := r.buildGitCommand(healthCtx, "rev-parse", "--git-dir")
+		if err := checkCmd.Run(); err != nil {
+			// 损坏的仓库，尝试重建
+			if rebuildErr := r.rebuildLocked(context.Background()); rebuildErr != nil {
+				return fmt.Errorf("checkpoint: rebuild damaged repo: %w", rebuildErr)
+			}
+		}
+	}
 
 	if err := exec.CommandContext(ctx, "git", "init", "--bare", r.shadowDir).Run(); err != nil {
 		return fmt.Errorf("checkpoint: init bare repo at %s: %w", r.shadowDir, err)
@@ -130,6 +153,25 @@ func (r *ShadowRepo) Restore(ctx context.Context, commitHash string) error {
 	return nil
 }
 
+// ResolveRef 解析 ref 对应的 commit hash。
+func (r *ShadowRepo) ResolveRef(ctx context.Context, ref string) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if !r.gitAvailable {
+		return "", fmt.Errorf("checkpoint: shadow repo not available")
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, gitCommandTimeout)
+	defer cancel()
+
+	hash, err := r.gitOutput(ctx, "rev-parse", ref)
+	if err != nil {
+		return "", fmt.Errorf("checkpoint: resolve ref %s: %w", ref, err)
+	}
+	return strings.TrimSpace(hash), nil
+}
+
 // DeleteRef 删除指定的 ref 引用，用于补偿失败的 checkpoint 创建。
 func (r *ShadowRepo) DeleteRef(ctx context.Context, ref string) error {
 	r.mu.Lock()
@@ -183,6 +225,67 @@ func (r *ShadowRepo) buildGitCommand(ctx context.Context, args ...string) *exec.
 	fullArgs = append(fullArgs, "--work-tree="+r.workdir)
 	fullArgs = append(fullArgs, args...)
 	return exec.CommandContext(ctx, "git", fullArgs...)
+}
+
+// DetectConflicts 比较目标 commit 与当前工作区差异。
+func (r *ShadowRepo) DetectConflicts(ctx context.Context, commitHash string) (ConflictResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if !r.gitAvailable {
+		return ConflictResult{}, fmt.Errorf("checkpoint: shadow repo not available")
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, gitCommandTimeout)
+	defer cancel()
+
+	out, err := r.gitOutput(ctx, "diff", "--name-status", commitHash, "--", ".")
+	if err != nil {
+		return ConflictResult{}, fmt.Errorf("checkpoint: git diff: %w", err)
+	}
+
+	var result ConflictResult
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		status := parts[0]
+		file := parts[1]
+		switch {
+		case status == "A":
+			result.AddedFiles = append(result.AddedFiles, file)
+			result.HasConflict = true
+		case status == "D":
+			result.DeletedFiles = append(result.DeletedFiles, file)
+			result.HasConflict = true
+		case strings.HasPrefix(status, "M"):
+			result.ModifiedFiles = append(result.ModifiedFiles, file)
+			result.HasConflict = true
+		}
+	}
+	return result, nil
+}
+
+// Rebuild 重建损坏的影子仓库。
+func (r *ShadowRepo) Rebuild(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.rebuildLocked(ctx)
+}
+
+// rebuildLocked 在持有锁的情况下重建影子仓库。
+func (r *ShadowRepo) rebuildLocked(ctx context.Context) error {
+	backupDir := r.shadowDir + ".bak." + fmt.Sprintf("%d", time.Now().UnixNano())
+	if err := os.Rename(r.shadowDir, backupDir); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("checkpoint: rename old shadow dir: %w", err)
+	}
+	return nil
 }
 
 // RefForCheckpoint 构造 checkpoint 的 git ref 路径。

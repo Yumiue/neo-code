@@ -90,6 +90,9 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		s.finishRun(runToken)
 	}()
 	defer func() {
+		if statePtr != nil {
+			s.updateResumeCheckpoint(runCtx, statePtr, "stopped", "completed")
+		}
 		s.emitRunTermination(runCtx, input, statePtr, err)
 	}()
 	ctx = runCtx
@@ -170,6 +173,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		return s.handleRunError(err)
 	}
 	s.emitRuntimeSnapshotUpdated(ctx, &state, "session_start")
+	s.updateResumeCheckpoint(ctx, &state, "plan", "")
 
 	maxTurns := resolveRuntimeMaxTurns(initialCfg.Runtime)
 	for turn := 0; ; turn++ {
@@ -344,6 +348,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				if err := s.setBaseRunState(ctx, &state, controlplane.RunStateVerify); err != nil {
 					return s.handleRunError(err)
 				}
+				s.updateResumeCheckpoint(ctx, &state, "verify", "completed")
 				completionHookOutput := s.runHookPoint(
 					ctx,
 					&state,
@@ -485,6 +490,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			if err := s.setBaseRunState(ctx, &state, controlplane.RunStateExecute); err != nil {
 				return s.handleRunError(err)
 			}
+			s.updateResumeCheckpoint(ctx, &state, "execute", "")
 			summary, err := s.executeAssistantToolCalls(ctx, &state, snapshot, turnOutput.assistant)
 			if err != nil {
 				return s.handleRunError(err)
@@ -524,6 +530,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			if err := s.setBaseRunState(ctx, &state, controlplane.RunStateVerify); err != nil {
 				return s.handleRunError(err)
 			}
+			s.updateResumeCheckpoint(ctx, &state, "verify", "completed")
 			break
 		}
 	}

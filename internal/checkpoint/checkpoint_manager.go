@@ -3,11 +3,13 @@ package checkpoint
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
 	"time"
 
+	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/session"
 )
 
@@ -18,6 +20,10 @@ type CheckpointStore interface {
 	GetCheckpoint(ctx context.Context, checkpointID string) (session.CheckpointRecord, *session.SessionCheckpoint, error)
 	UpdateCheckpointStatus(ctx context.Context, checkpointID string, status session.CheckpointStatus) error
 	GetLatestResumeCheckpoint(ctx context.Context, sessionID string) (*session.ResumeCheckpoint, error)
+	RestoreCheckpoint(ctx context.Context, input RestoreCheckpointInput) error
+	SetResumeCheckpoint(ctx context.Context, rc session.ResumeCheckpoint) error
+	PruneExpiredCheckpoints(ctx context.Context, sessionID string, maxAutoKeep int) (int, error)
+	RepairCreatingCheckpoints(ctx context.Context) (int, error)
 }
 
 // CreateCheckpointInput 描述一次 checkpoint 创建的完整输入。
@@ -30,6 +36,16 @@ type CreateCheckpointInput struct {
 type ListCheckpointOpts struct {
 	Limit          int
 	RestorableOnly bool
+}
+
+// RestoreCheckpointInput 描述一次 restore 操作的完整输入。
+type RestoreCheckpointInput struct {
+	SessionID        string
+	Head             session.SessionHead
+	Messages         []providertypes.Message
+	UpdatedAt        time.Time
+	MarkAvailableIDs []string
+	MarkRestoredIDs  []string
 }
 
 // SQLiteCheckpointStore 基于 SQLite 实现 checkpoint 持久化。
@@ -337,6 +353,260 @@ LIMIT 1
 	}
 	rc.UpdatedAt = fromUnixMillis(updatedAtMS)
 	return &rc, nil
+}
+
+// RestoreCheckpoint 在单一事务内恢复会话消息和头状态，并批量更新 checkpoint 状态。
+func (s *SQLiteCheckpointStore) RestoreCheckpoint(ctx context.Context, input RestoreCheckpointInput) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	db, err := s.ensureDB(ctx)
+	if err != nil {
+		return err
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("checkpoint: begin restore tx: %w", err)
+	}
+	defer rollbackTx(tx)
+
+	// DELETE existing messages
+	if _, err := tx.ExecContext(ctx, `DELETE FROM messages WHERE session_id = ?`, input.SessionID); err != nil {
+		return fmt.Errorf("checkpoint: delete messages %s: %w", input.SessionID, err)
+	}
+
+	// Re-insert messages
+	now := input.UpdatedAt
+	for i, msg := range input.Messages {
+		seq := i + 1
+		toolCallsJSON := "[]"
+		if len(msg.ToolCalls) > 0 {
+			if data, err := json.Marshal(msg.ToolCalls); err == nil {
+				toolCallsJSON = string(data)
+			}
+		}
+		toolMetadataJSON := "{}"
+		if msg.ToolMetadata != nil {
+			if data, err := json.Marshal(msg.ToolMetadata); err == nil {
+				toolMetadataJSON = string(data)
+			}
+		}
+		partsJSON := "[]"
+		if len(msg.Parts) > 0 {
+			if data, err := json.Marshal(msg.Parts); err == nil {
+				partsJSON = string(data)
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO messages (session_id, seq, role, parts_json, tool_calls_json, tool_call_id, is_error, tool_metadata_json, created_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			input.SessionID, seq, msg.Role, partsJSON, toolCallsJSON, msg.ToolCallID, boolToInt(msg.IsError), toolMetadataJSON, toUnixMillis(now),
+		); err != nil {
+			return fmt.Errorf("checkpoint: insert message %s/%d: %w", input.SessionID, seq, err)
+		}
+	}
+
+	// UPDATE session head
+	h := input.Head
+	result, err := tx.ExecContext(ctx, `UPDATE sessions SET updated_at_ms=?, provider=?, model=?, workdir=?, task_state_json=?, todos_json=?, activated_skills_json=?, token_input_total=?, token_output_total=?, has_unknown_usage=?, agent_mode=?, current_plan_json=?, last_full_plan_revision=?, plan_approval_pending_full_align=?, plan_completion_pending_full_review=?, plan_context_dirty=?, plan_restore_pending_align=?, last_seq=?, message_count=? WHERE id=?`,
+		toUnixMillis(input.UpdatedAt), h.Provider, h.Model, h.Workdir,
+		marshalHeadField(h.TaskState), marshalHeadField(h.Todos), marshalHeadField(h.ActivatedSkills),
+		h.TokenInputTotal, h.TokenOutputTotal, boolToInt(h.HasUnknownUsage), h.AgentMode,
+		marshalHeadField(h.CurrentPlan), h.LastFullPlanRevision,
+		boolToInt(h.PlanApprovalPendingFullAlign), boolToInt(h.PlanCompletionPendingFullReview),
+		boolToInt(h.PlanContextDirty), boolToInt(h.PlanRestorePendingAlign),
+		len(input.Messages), len(input.Messages), input.SessionID,
+	)
+	if err != nil {
+		return fmt.Errorf("checkpoint: update session %s: %w", input.SessionID, err)
+	}
+	if affected, _ := result.RowsAffected(); affected == 0 {
+		return fmt.Errorf("checkpoint: session %s not found", input.SessionID)
+	}
+
+	// Mark available
+	for _, id := range input.MarkAvailableIDs {
+		if _, err := tx.ExecContext(ctx, `UPDATE checkpoint_records SET status=? WHERE id=?`, string(session.CheckpointStatusAvailable), id); err != nil {
+			return fmt.Errorf("checkpoint: mark available %s: %w", id, err)
+		}
+	}
+
+	// Mark restored
+	for _, id := range input.MarkRestoredIDs {
+		if _, err := tx.ExecContext(ctx, `UPDATE checkpoint_records SET status=? WHERE id=?`, string(session.CheckpointStatusRestored), id); err != nil {
+			return fmt.Errorf("checkpoint: mark restored %s: %w", id, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("checkpoint: commit restore %s: %w", input.SessionID, err)
+	}
+	return nil
+}
+
+func marshalHeadField(value any) string {
+	if value == nil {
+		return "{}"
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
+}
+
+// SetResumeCheckpoint 写入或更新 ResumeCheckpoint（一个 session 只保留一条）。
+func (s *SQLiteCheckpointStore) SetResumeCheckpoint(ctx context.Context, rc session.ResumeCheckpoint) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	db, err := s.ensureDB(ctx)
+	if err != nil {
+		return err
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("checkpoint: begin set resume tx: %w", err)
+	}
+	defer rollbackTx(tx)
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM resume_checkpoints WHERE session_id=?`, rc.SessionID); err != nil {
+		return fmt.Errorf("checkpoint: delete old resume cp %s: %w", rc.SessionID, err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `INSERT INTO resume_checkpoints (id, workspace_key, run_id, session_id, turn, phase, completion_state, transcript_revision, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		rc.ID, rc.WorkspaceKey, rc.RunID, rc.SessionID, rc.Turn, rc.Phase, rc.CompletionState, rc.TranscriptRevision, toUnixMillis(rc.UpdatedAt),
+	); err != nil {
+		return fmt.Errorf("checkpoint: insert resume cp %s: %w", rc.SessionID, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("checkpoint: commit set resume cp %s: %w", rc.SessionID, err)
+	}
+	return nil
+}
+
+// PruneExpiredCheckpoints 窗口裁剪，将超出 maxAutoKeep 的旧自动 checkpoint 标记为 pruned。
+func (s *SQLiteCheckpointStore) PruneExpiredCheckpoints(ctx context.Context, sessionID string, maxAutoKeep int) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	db, err := s.ensureDB(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	rows, err := db.QueryContext(ctx, `SELECT id, session_checkpoint_ref FROM checkpoint_records WHERE session_id=? AND restorable=1 AND status=? AND reason NOT IN (?, ?) ORDER BY created_at_ms DESC`,
+		sessionID, string(session.CheckpointStatusAvailable), string(session.CheckpointReasonManual), string(session.CheckpointReasonGuard),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("checkpoint: query prune candidates %s: %w", sessionID, err)
+	}
+	defer rows.Close()
+
+	type pruneTarget struct {
+		ID           string
+		SessionCPRef string
+	}
+	var targets []pruneTarget
+	idx := 0
+	for rows.Next() {
+		var t pruneTarget
+		if err := rows.Scan(&t.ID, &t.SessionCPRef); err != nil {
+			return 0, fmt.Errorf("checkpoint: scan prune candidate: %w", err)
+		}
+		if idx >= maxAutoKeep {
+			targets = append(targets, t)
+		}
+		idx++
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("checkpoint: iterate prune candidates: %w", err)
+	}
+	if len(targets) == 0 {
+		return 0, nil
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("checkpoint: begin prune tx: %w", err)
+	}
+	defer rollbackTx(tx)
+
+	for _, t := range targets {
+		if _, err := tx.ExecContext(ctx, `UPDATE checkpoint_records SET restorable=0, status=? WHERE id=?`, string(session.CheckpointStatusPruned), t.ID); err != nil {
+			return 0, fmt.Errorf("checkpoint: prune record %s: %w", t.ID, err)
+		}
+		if t.SessionCPRef != "" {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM session_checkpoints WHERE id=?`, t.SessionCPRef); err != nil {
+				return 0, fmt.Errorf("checkpoint: delete session cp %s: %w", t.SessionCPRef, err)
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("checkpoint: commit prune %s: %w", sessionID, err)
+	}
+	return len(targets), nil
+}
+
+// RepairCreatingCheckpoints 修复残留的 creating 状态 checkpoint。
+func (s *SQLiteCheckpointStore) RepairCreatingCheckpoints(ctx context.Context) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	db, err := s.ensureDB(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	rows, err := db.QueryContext(ctx, `SELECT id, session_checkpoint_ref FROM checkpoint_records WHERE status=?`, string(session.CheckpointStatusCreating))
+	if err != nil {
+		return 0, fmt.Errorf("checkpoint: query creating records: %w", err)
+	}
+	defer rows.Close()
+
+	type repairTarget struct {
+		ID           string
+		SessionCPRef string
+	}
+	var targets []repairTarget
+	for rows.Next() {
+		var t repairTarget
+		if err := rows.Scan(&t.ID, &t.SessionCPRef); err != nil {
+			return 0, fmt.Errorf("checkpoint: scan creating record: %w", err)
+		}
+		targets = append(targets, t)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("checkpoint: iterate creating records: %w", err)
+	}
+	if len(targets) == 0 {
+		return 0, nil
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("checkpoint: begin repair tx: %w", err)
+	}
+	defer rollbackTx(tx)
+
+	for _, t := range targets {
+		if t.SessionCPRef != "" {
+			if _, err := tx.ExecContext(ctx, `UPDATE checkpoint_records SET status=? WHERE id=?`, string(session.CheckpointStatusAvailable), t.ID); err != nil {
+				return 0, fmt.Errorf("checkpoint: repair available %s: %w", t.ID, err)
+			}
+		} else {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM checkpoint_records WHERE id=?`, t.ID); err != nil {
+				return 0, fmt.Errorf("checkpoint: delete orphan %s: %w", t.ID, err)
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("checkpoint: commit repair: %w", err)
+	}
+	return len(targets), nil
 }
 
 func toUnixMillis(value time.Time) int64 {

@@ -232,6 +232,7 @@ func BuildGatewayServerDeps(ctx context.Context, opts BootstrapOptions) (Runtime
 	}
 
 	// Checkpoint 基础设施：影子仓库 + SQLite checkpoint 存储
+	dbPath := agentsession.DatabasePath(sharedDeps.ConfigManager.BaseDir(), cfg.Workdir)
 	if gitAvail, _ := checkpoint.CheckGitAvailability(ctx); gitAvail {
 		projectDir := agentsession.HashWorkspaceRoot(cfg.Workdir)
 		shadowDir := filepath.Join(sharedDeps.ConfigManager.BaseDir(), "projects", projectDir)
@@ -239,10 +240,23 @@ func BuildGatewayServerDeps(ctx context.Context, opts BootstrapOptions) (Runtime
 		if err := shadowRepo.Init(ctx); err != nil {
 			log.Printf("checkpoint shadow repo init warning: %v", err)
 		} else {
-			dbPath := agentsession.DatabasePath(sharedDeps.ConfigManager.BaseDir(), cfg.Workdir)
 			checkpointStore := checkpoint.NewSQLiteCheckpointStore(dbPath)
 			runtimeSvc.SetCheckpointDependencies(checkpointStore, shadowRepo)
 		}
+	} else {
+		// 降级模式：git 不可用时仍可创建 session-only checkpoint
+		checkpointStore := checkpoint.NewSQLiteCheckpointStore(dbPath)
+		runtimeSvc.SetCheckpointDependencies(checkpointStore, nil)
+	}
+	// 启动时修复残留的 creating 状态 checkpoint
+	{
+		repairStore := checkpoint.NewSQLiteCheckpointStore(dbPath)
+		if repaired, err := repairStore.RepairCreatingCheckpoints(ctx); err != nil {
+			log.Printf("checkpoint repair warning: %v", err)
+		} else if repaired > 0 {
+			log.Printf("checkpoint repair: fixed %d stale checkpoints", repaired)
+		}
+		_ = repairStore.Close()
 	}
 
 	runtimeImpl := agentruntime.Runtime(runtimeSvc)

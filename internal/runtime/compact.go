@@ -2,10 +2,12 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
 
+	"neo-code/internal/checkpoint"
 	"neo-code/internal/config"
 	contextcompact "neo-code/internal/context/compact"
 	providertypes "neo-code/internal/provider/types"
@@ -155,6 +157,8 @@ func (s *Service) runCompactForSession(
 		return failCompact(errors.New(reason))
 	}
 
+	s.createCompactCheckpoint(ctx, runID, session)
+
 	s.emit(ctx, EventCompactStart, runID, session.ID, string(mode))
 
 	result, err := runner.Run(ctx, contextcompact.Input{
@@ -247,4 +251,60 @@ func resolveCompactProviderSelection(session agentsession.Session, cfg config.Co
 		return config.ResolvedProviderConfig{}, "", err
 	}
 	return resolved, strings.TrimSpace(cfg.CurrentModel), nil
+}
+
+// createCompactCheckpoint 为 compact 操作创建 session-only checkpoint。
+func (s *Service) createCompactCheckpoint(ctx context.Context, runID string, session agentsession.Session) {
+	if s.checkpointStore == nil {
+		return
+	}
+
+	checkpointID := agentsession.NewID("checkpoint")
+	now := time.Now()
+
+	head := session.HeadSnapshot()
+	headJSON, err := json.Marshal(head)
+	if err != nil {
+		return
+	}
+	messagesJSON, err := json.Marshal(session.Messages)
+	if err != nil {
+		return
+	}
+
+	record := agentsession.CheckpointRecord{
+		CheckpointID: checkpointID,
+		WorkspaceKey: agentsession.WorkspacePathKey(session.Workdir),
+		SessionID:    session.ID,
+		RunID:        runID,
+		Workdir:      session.Workdir,
+		CreatedAt:    now,
+		Reason:       agentsession.CheckpointReasonCompact,
+		Restorable:   true,
+		Status:       agentsession.CheckpointStatusCreating,
+	}
+
+	// Shadow snapshot if available
+	if s.shadowRepo != nil && s.shadowRepo.IsAvailable() {
+		ref := checkpoint.RefForCheckpoint(session.ID, checkpointID)
+		if commitHash, err := s.shadowRepo.Snapshot(ctx, ref, "compact checkpoint"); err == nil {
+			record.CodeCheckpointRef = ref
+			_ = commitHash
+		}
+	}
+
+	sessionCP := agentsession.SessionCheckpoint{
+		ID:           agentsession.NewID("sc"),
+		SessionID:    session.ID,
+		HeadJSON:     string(headJSON),
+		MessagesJSON: string(messagesJSON),
+		CreatedAt:    now,
+	}
+
+	if _, err := s.checkpointStore.CreateCheckpoint(ctx, checkpoint.CreateCheckpointInput{
+		Record:    record,
+		SessionCP: sessionCP,
+	}); err != nil {
+		return
+	}
 }

@@ -1363,3 +1363,24 @@ type manualModelPayload struct {
 }
 
 var _ gateway.RuntimePort = (*gatewayRuntimePortBridge)(nil)
+
+func (b *gatewayRuntimePortBridge) ListCheckpoints(ctx context.Context, input gateway.ListCheckpointsInput) ([]gateway.CheckpointEntry, error) {
+	if b == nil {
+		return nil, fmt.Errorf(bridgeRuntimeUnavailableErrMsg)
+	}
+	return nil, fmt.Errorf("checkpoint list: not yet implemented in CLI bridge")
+}
+
+func (b *gatewayRuntimePortBridge) RestoreCheckpoint(ctx context.Context, input gateway.CheckpointRestoreInput) (gateway.CheckpointRestoreResult, error) {
+	if b == nil {
+		return gateway.CheckpointRestoreResult{}, fmt.Errorf(bridgeRuntimeUnavailableErrMsg)
+	}
+	return gateway.CheckpointRestoreResult{}, fmt.Errorf("checkpoint restore: not yet implemented in CLI bridge")
+}
+
+func (b *gatewayRuntimePortBridge) UndoRestore(ctx context.Context, input gateway.UndoRestoreInput) (gateway.CheckpointRestoreResult, error) {
+	if b == nil {
+		return gateway.CheckpointRestoreResult{}, fmt.Errorf(bridgeRuntimeUnavailableErrMsg)
+	}
+	return gateway.CheckpointRestoreResult{}, fmt.Errorf("checkpoint undo restore: not yet implemented in CLI bridge")
+}

@@ -420,6 +420,10 @@ const (
 	EventCheckpointCreated EventType = "checkpoint_created"
 	// EventCheckpointWarning 表示 checkpoint 创建过程中出现非致命告警。
 	EventCheckpointWarning EventType = "checkpoint_warning"
+	// EventCheckpointRestored 表示 checkpoint 已成功恢复。
+	EventCheckpointRestored EventType = "checkpoint_restored"
+	// EventCheckpointUndoRestore 表示 restore 已撤销。
+	EventCheckpointUndoRestore EventType = "checkpoint_undo_restore"
 )
 
 // TokenUsagePayload 承载单轮 token 用量统计。
@@ -446,4 +450,17 @@ type CheckpointCreatedPayload struct {
 type CheckpointWarningPayload struct {
 	Error string `json:"error"`
 	Phase string `json:"phase"`
+}
+
+// CheckpointRestoredPayload 描述 checkpoint 恢复成功事件。
+type CheckpointRestoredPayload struct {
+	CheckpointID      string `json:"checkpoint_id"`
+	SessionID         string `json:"session_id"`
+	GuardCheckpointID string `json:"guard_checkpoint_id"`
+}
+
+// CheckpointUndoRestorePayload 描述 restore 撤销事件。
+type CheckpointUndoRestorePayload struct {
+	GuardCheckpointID string `json:"guard_checkpoint_id"`
+	SessionID         string `json:"session_id"`
 }
