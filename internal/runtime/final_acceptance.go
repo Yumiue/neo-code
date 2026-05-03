@@ -167,7 +167,8 @@ func toDeciderDecisionFromAcceptance(decision acceptance.AcceptanceDecision) dec
 	}
 }
 
-// mapDeciderDecisionToAcceptance 把 FinalDecider 裁决映射到现有 acceptance 协议，保证主链兼容。
+// mapDeciderDecisionToAcceptance 把 FinalDecider 裁决映射到 acceptance 协议。
+// Deprecated: 仅保留给 legacy 回滚对照与测试使用；P7 主链直接消费 AcceptanceService.Decide 产物。
 func mapDeciderDecisionToAcceptance(decision decider.Decision) acceptance.AcceptanceDecision {
 	out := acceptance.AcceptanceDecision{
 		StopReason:         toControlplaneStopReason(decision.StopReason),

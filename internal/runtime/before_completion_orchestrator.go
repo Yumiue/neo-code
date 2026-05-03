@@ -19,8 +19,8 @@ type beforeCompletionHookSignals struct {
 // runBeforeCompletionDecisionAcceptance 执行 before_completion_decision 专用编排：
 // 1) 先执行 user/repo hooks 收集 annotation/guard signal；
 // 2) 再执行普通 internal hooks 用于观测；
-// 3) 最后由 runtime 内部 AcceptanceService 进入收口裁决阶段，产出唯一 AcceptanceDecision。
-// 当前 AcceptanceService 走强类型 runtime 内部路径，不通过通用 HookResult metadata 承载。
+// 3) 最后由 runtime 内部 AcceptanceService 作为 before_completion_decision 的收口裁决阶段，生成唯一 AcceptanceDecision。
+// AcceptanceDecision 走强类型 runtime 内部路径，不通过通用 HookResult metadata 承载。
 func (s *Service) runBeforeCompletionDecisionAcceptance(
 	ctx context.Context,
 	state *runState,

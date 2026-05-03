@@ -391,3 +391,33 @@ func TestNormalizeAcceptanceErrorClassCoverage(t *testing.T) {
 		})
 	}
 }
+
+func TestNoProgressThresholdProducesIncomplete(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{events: make(chan RuntimeEvent, 16)}
+	state := newRunState("run-no-progress", agentsession.New("no-progress"))
+	state.session.TaskState.VerificationProfile = agentsession.VerificationProfileTaskOnly
+	state.finalInterceptStreak = 3
+	state.mustUseToolAfterFinalContinue = true
+	state.noToolAfterFinalContinueStreak = 3
+
+	snapshot := TurnBudgetSnapshot{Config: config.StaticDefaults().Clone(), Workdir: t.TempDir()}
+	decision, err := service.beforeAcceptFinal(
+		context.Background(),
+		&state,
+		snapshot,
+		providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("已完成")}},
+		false,
+		beforeCompletionHookSignals{},
+	)
+	if err != nil {
+		t.Fatalf("beforeAcceptFinal error = %v", err)
+	}
+	if decision.Status != acceptance.AcceptanceIncomplete {
+		t.Fatalf("status=%q want incomplete", decision.Status)
+	}
+	if decision.StopReason != controlplane.StopReasonNoProgressAfterFinalIntercept {
+		t.Fatalf("stop_reason=%q want no_progress_after_final_intercept", decision.StopReason)
+	}
+}
