@@ -279,6 +279,41 @@ func TestSelectionServiceSelectProviderAndSetCurrentModel(t *testing.T) {
 	}
 }
 
+func TestSelectionServiceSelectProviderWithModel(t *testing.T) {
+	t.Parallel()
+
+	manager := newSelectionTestManager(t, testDefaultConfig())
+	service := NewService(manager, newDriverSupporterStub(), newCatalogStub())
+
+	selection, err := service.SelectProviderWithModel(context.Background(), QiniuName, QiniuDefaultModel+"-alt")
+	if err != nil {
+		t.Fatalf("SelectProviderWithModel() error = %v", err)
+	}
+	if selection.ProviderID != QiniuName || selection.ModelID != QiniuDefaultModel+"-alt" {
+		t.Fatalf("unexpected selection after atomic switch: %+v", selection)
+	}
+
+	cfg := manager.Get()
+	if cfg.SelectedProvider != QiniuName {
+		t.Fatalf("expected selected provider %q, got %q", QiniuName, cfg.SelectedProvider)
+	}
+	if cfg.CurrentModel != QiniuDefaultModel+"-alt" {
+		t.Fatalf("expected selected model %q, got %q", QiniuDefaultModel+"-alt", cfg.CurrentModel)
+	}
+}
+
+func TestSelectionServiceSelectProviderWithModelEmptyModel(t *testing.T) {
+	t.Parallel()
+
+	manager := newSelectionTestManager(t, testDefaultConfig())
+	service := NewService(manager, newDriverSupporterStub(), newCatalogStub())
+
+	_, err := service.SelectProviderWithModel(context.Background(), QiniuName, "   ")
+	if !errors.Is(err, ErrModelNotFound) {
+		t.Fatalf("expected ErrModelNotFound, got %v", err)
+	}
+}
+
 func TestSelectionServiceSetCurrentModelRejectsUnsupportedDriver(t *testing.T) {
 	t.Parallel()
 

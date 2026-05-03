@@ -15,7 +15,9 @@ type mockSelectionService struct {
 	listModelsSnapshotFn   func(ctx context.Context) ([]providertypes.ModelDescriptor, error)
 	setCurrentModelFn      func(ctx context.Context, modelID string) (configstate.Selection, error)
 	selectProviderFn       func(ctx context.Context, providerName string) (configstate.Selection, error)
+	selectProviderModelFn  func(ctx context.Context, providerName string, modelID string) (configstate.Selection, error)
 	createCustomProviderFn func(ctx context.Context, input configstate.CreateCustomProviderInput) (configstate.Selection, error)
+	removeCustomProviderFn func(ctx context.Context, name string) error
 }
 
 func (m *mockSelectionService) ListModels(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
@@ -46,6 +48,17 @@ func (m *mockSelectionService) SelectProvider(ctx context.Context, providerName 
 	return configstate.Selection{}, nil
 }
 
+func (m *mockSelectionService) SelectProviderWithModel(
+	ctx context.Context,
+	providerName string,
+	modelID string,
+) (configstate.Selection, error) {
+	if m != nil && m.selectProviderModelFn != nil {
+		return m.selectProviderModelFn(ctx, providerName, modelID)
+	}
+	return configstate.Selection{}, nil
+}
+
 func (m *mockSelectionService) CreateCustomProvider(
 	ctx context.Context,
 	input configstate.CreateCustomProviderInput,
@@ -54,6 +67,13 @@ func (m *mockSelectionService) CreateCustomProvider(
 		return m.createCustomProviderFn(ctx, input)
 	}
 	return configstate.Selection{}, nil
+}
+
+func (m *mockSelectionService) RemoveCustomProvider(ctx context.Context, name string) error {
+	if m != nil && m.removeCustomProviderFn != nil {
+		return m.removeCustomProviderFn(ctx, name)
+	}
+	return nil
 }
 
 func staticSelectionResolver(svc SelectionService) selectionServiceResolver {

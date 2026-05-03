@@ -67,6 +67,57 @@ func TestCreateCustomProviderSuccess(t *testing.T) {
 	}
 }
 
+func TestRemoveCustomProviderSelectedProvider(t *testing.T) {
+	manager := newSelectionTestManager(t, testDefaultConfig())
+	service := NewService(manager, newDriverSupporterStub(), newCatalogStub())
+
+	const providerName = "removable-provider"
+	if err := configpkg.SaveCustomProviderWithModels(manager.BaseDir(), configpkg.SaveCustomProviderInput{
+		Name:                  providerName,
+		Driver:                provider.DriverOpenAICompat,
+		BaseURL:               "https://llm.example.com/v1",
+		APIKeyEnv:             "REMOVABLE_PROVIDER_KEY",
+		ModelSource:           configpkg.ModelSourceDiscover,
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+	}); err != nil {
+		t.Fatalf("SaveCustomProviderWithModels() error = %v", err)
+	}
+	if _, err := manager.Load(context.Background()); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := manager.Update(context.Background(), func(cfg *configpkg.Config) error {
+		cfg.SelectedProvider = providerName
+		cfg.CurrentModel = "custom-model"
+		return nil
+	}); err != nil {
+		t.Fatalf("seed selected custom provider: %v", err)
+	}
+
+	if err := service.RemoveCustomProvider(context.Background(), providerName); err != nil {
+		t.Fatalf("RemoveCustomProvider() error = %v", err)
+	}
+
+	if _, statErr := os.Stat(filepath.Join(manager.BaseDir(), "providers", providerName)); !os.IsNotExist(statErr) {
+		t.Fatalf("expected provider dir removed, stat err = %v", statErr)
+	}
+	cfg := manager.Get()
+	if strings.EqualFold(strings.TrimSpace(cfg.SelectedProvider), providerName) {
+		t.Fatalf("expected selected provider repaired after removal, got %q", cfg.SelectedProvider)
+	}
+}
+
+func TestRemoveCustomProviderNoopCases(t *testing.T) {
+	manager := newSelectionTestManager(t, testDefaultConfig())
+	service := NewService(manager, newDriverSupporterStub(), newCatalogStub())
+
+	if err := service.RemoveCustomProvider(context.Background(), "missing-provider"); err != nil {
+		t.Fatalf("expected missing provider remove to be noop, got %v", err)
+	}
+	if err := service.RemoveCustomProvider(context.Background(), configpkg.OpenAIName); err != nil {
+		t.Fatalf("expected builtin provider remove to be noop, got %v", err)
+	}
+}
+
 func TestCreateCustomProviderPreservesExplicitCustomChatEndpoint(t *testing.T) {
 	restorePersist, restoreDelete, restoreLookup, restoreSaveWithModels := stubUserEnvOpsForCreateProvider(t)
 	defer restorePersist()

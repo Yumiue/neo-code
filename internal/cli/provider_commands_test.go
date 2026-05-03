@@ -80,7 +80,8 @@ func TestProviderLsCommand(t *testing.T) {
 }
 
 func TestProviderRmCommand(t *testing.T) {
-	cmd := newProviderRmCommand()
+	svc := &mockSelectionService{}
+	cmd := newProviderRmCommandWithResolver(staticSelectionResolver(svc))
 	if cmd.Use != "rm <name>" {
 		t.Fatalf("cmd.Use = %q, want %q", cmd.Use, "rm <name>")
 	}
@@ -89,8 +90,11 @@ func TestProviderRmCommand(t *testing.T) {
 	t.Cleanup(func() { runProviderRmCommand = originalRunner })
 
 	called := false
-	runProviderRmCommand = func(c *cobra.Command, name string) error {
+	runProviderRmCommand = func(c *cobra.Command, gotSvc SelectionService, name string) error {
 		called = true
+		if gotSvc != svc {
+			t.Fatalf("injected service mismatch")
+		}
 		if name != "my-provider" {
 			t.Fatalf("name = %q, want %q", name, "my-provider")
 		}
@@ -143,7 +147,7 @@ func TestDefaultProviderAddCommandRunner(t *testing.T) {
 					return configstate.Selection{ProviderID: input.Name, ModelID: "m-1"}, nil
 				},
 			},
-			wantOutput: "供应商 my-provider 添加成功，当前模型: m-1",
+			wantOutput: "提供商 my-provider 添加成功，当前模型: m-1",
 			assertInput: func(t *testing.T, input configstate.CreateCustomProviderInput) {
 				t.Helper()
 				if input.Driver != "openaicompat" {
@@ -173,6 +177,22 @@ func TestDefaultProviderAddCommandRunner(t *testing.T) {
 				},
 			},
 			wantErr: "conflict",
+		},
+		{
+			name:     "timeout error",
+			envName:  "MOCK_KEY_TIMEOUT",
+			envValue: "sk-test",
+			opts: providerAddOptions{
+				Driver:    "openaicompat",
+				URL:       "http://mock",
+				APIKeyEnv: "MOCK_KEY_TIMEOUT",
+			},
+			service: &mockSelectionService{
+				createCustomProviderFn: func(ctx context.Context, input configstate.CreateCustomProviderInput) (configstate.Selection, error) {
+					return configstate.Selection{}, context.DeadlineExceeded
+				},
+			},
+			wantErr: "provider add 超时",
 		},
 	}
 
@@ -242,15 +262,20 @@ func TestDefaultProviderLsAndRmCommandRunner(t *testing.T) {
 		t.Fatalf("output = %q, want contains my-provider", output.String())
 	}
 
-	if err := defaultProviderRmCommandRunner(cmd, "my-provider"); err != nil {
+	removed := ""
+	svc := &mockSelectionService{
+		removeCustomProviderFn: func(ctx context.Context, name string) error {
+			removed = name
+			return nil
+		},
+	}
+	if err := defaultProviderRmCommandRunner(cmd, svc, "my-provider"); err != nil {
 		t.Fatalf("defaultProviderRmCommandRunner() error = %v", err)
 	}
-
-	output.Reset()
-	if err := defaultProviderLsCommandRunner(cmd); err != nil {
-		t.Fatalf("defaultProviderLsCommandRunner() error = %v", err)
+	if removed != "my-provider" {
+		t.Fatalf("removed = %q, want my-provider", removed)
 	}
-	if strings.Contains(output.String(), "my-provider") {
-		t.Fatalf("output = %q, should not contain my-provider", output.String())
+	if !strings.Contains(output.String(), "提供商 my-provider 已删除") {
+		t.Fatalf("output = %q, want contains remove message", output.String())
 	}
 }

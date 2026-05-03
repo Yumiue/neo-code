@@ -49,14 +49,14 @@ func TestUseCommand(t *testing.T) {
 
 func TestDefaultUseCommandRunner(t *testing.T) {
 	tests := []struct {
-		name           string
-		provider       string
-		model          string
-		selectProvider func(context.Context, string) (configstate.Selection, error)
-		setCurrent     func(context.Context, string) (configstate.Selection, error)
-		wantErr        string
-		wantOutput     []string
-		wantSetCalled  bool
+		name                    string
+		provider                string
+		model                   string
+		selectProvider          func(context.Context, string) (configstate.Selection, error)
+		selectProviderWithModel func(context.Context, string, string) (configstate.Selection, error)
+		wantErr                 string
+		wantOutput              []string
+		wantSelectWithModel     bool
 	}{
 		{
 			name:     "switch provider only",
@@ -70,14 +70,11 @@ func TestDefaultUseCommandRunner(t *testing.T) {
 			name:     "switch provider and model",
 			provider: "openai",
 			model:    "gpt-4o",
-			selectProvider: func(_ context.Context, provider string) (configstate.Selection, error) {
-				return configstate.Selection{ProviderID: provider, ModelID: "gpt-5.4"}, nil
+			selectProviderWithModel: func(_ context.Context, provider string, model string) (configstate.Selection, error) {
+				return configstate.Selection{ProviderID: provider, ModelID: model}, nil
 			},
-			setCurrent: func(_ context.Context, model string) (configstate.Selection, error) {
-				return configstate.Selection{ProviderID: "openai", ModelID: model}, nil
-			},
-			wantSetCalled: true,
-			wantOutput:    []string{"已全局切换到供应商: openai", "已设置模型: gpt-4o"},
+			wantSelectWithModel: true,
+			wantOutput:          []string{"已全局切换到供应商: openai", "已设置模型: gpt-4o"},
 		},
 		{
 			name:     "select provider error",
@@ -91,14 +88,11 @@ func TestDefaultUseCommandRunner(t *testing.T) {
 			name:     "model not found",
 			provider: "openai",
 			model:    "missing-model",
-			selectProvider: func(_ context.Context, provider string) (configstate.Selection, error) {
-				return configstate.Selection{ProviderID: provider, ModelID: "gpt-5.4"}, nil
-			},
-			setCurrent: func(_ context.Context, model string) (configstate.Selection, error) {
+			selectProviderWithModel: func(_ context.Context, provider string, model string) (configstate.Selection, error) {
 				return configstate.Selection{}, configstate.ErrModelNotFound
 			},
-			wantSetCalled: true,
-			wantErr:       `provider "openai" has no model "missing-model"`,
+			wantSelectWithModel: true,
+			wantErr:             `provider "openai" has no model "missing-model"`,
 		},
 	}
 
@@ -109,13 +103,13 @@ func TestDefaultUseCommandRunner(t *testing.T) {
 			cmd.SetOut(output)
 			cmd.SetContext(context.Background())
 
-			setCalled := false
+			selectWithModelCalled := false
 			svc := &mockSelectionService{
 				selectProviderFn: tc.selectProvider,
-				setCurrentModelFn: func(ctx context.Context, modelID string) (configstate.Selection, error) {
-					setCalled = true
-					if tc.setCurrent != nil {
-						return tc.setCurrent(ctx, modelID)
+				selectProviderModelFn: func(ctx context.Context, providerName string, modelID string) (configstate.Selection, error) {
+					selectWithModelCalled = true
+					if tc.selectProviderWithModel != nil {
+						return tc.selectProviderWithModel(ctx, providerName, modelID)
 					}
 					return configstate.Selection{}, nil
 				},
@@ -131,8 +125,8 @@ func TestDefaultUseCommandRunner(t *testing.T) {
 			if err != nil {
 				t.Fatalf("defaultUseCommandRunner() error = %v", err)
 			}
-			if setCalled != tc.wantSetCalled {
-				t.Fatalf("setCalled = %v, want %v", setCalled, tc.wantSetCalled)
+			if selectWithModelCalled != tc.wantSelectWithModel {
+				t.Fatalf("selectWithModelCalled = %v, want %v", selectWithModelCalled, tc.wantSelectWithModel)
 			}
 			for _, fragment := range tc.wantOutput {
 				if !strings.Contains(output.String(), fragment) {
