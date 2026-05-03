@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { type TokenUsage, type PermissionRequestPayload, type PlanApprovalRequestPayload } from '@/api/protocol'
+import { type TokenUsage, type PermissionRequestPayload } from '@/api/protocol'
 
 /** 聊天消息 */
 export interface ChatMessage {
@@ -36,8 +36,6 @@ interface ChatState {
   streamingMessageId: string
   /** 权限请求列表 */
   permissionRequests: PermissionRequestPayload[]
-  /** 计划审批请求 */
-  planApprovalRequest: PlanApprovalRequestPayload | null
   /** Token 用量 */
   tokenUsage: TokenUsage | null
   /** 当前运行阶段 */
@@ -65,8 +63,6 @@ interface ChatState {
   setTransitioning: (v: boolean) => void
   addPermissionRequest: (req: PermissionRequestPayload) => void
   removePermissionRequest: (requestId: string) => void
-  setPlanApprovalRequest: (req: PlanApprovalRequestPayload) => void
-  clearPlanApprovalRequest: () => void
   updateTokenUsage: (usage: TokenUsage) => void
   setPhase: (phase: string) => void
   setStopReason: (reason: string) => void
@@ -134,7 +130,6 @@ export const useChatStore = create<ChatState>((set) => ({
   isGenerating: false,
   streamingMessageId: '',
   permissionRequests: [],
-  planApprovalRequest: null,
   tokenUsage: null,
   phase: '',
   stopReason: '',
@@ -217,9 +212,6 @@ export const useChatStore = create<ChatState>((set) => ({
       permissionRequests: s.permissionRequests.filter((r) => r.request_id !== requestId),
     })),
 
-  setPlanApprovalRequest: (planApprovalRequest) => set({ planApprovalRequest }),
-  clearPlanApprovalRequest: () => set({ planApprovalRequest: null }),
-
   updateTokenUsage: (tokenUsage) => set({ tokenUsage }),
   setPhase: (phase) => set({ phase }),
   setStopReason: (stopReason) => set({ stopReason }),
@@ -235,7 +227,6 @@ export const useChatStore = create<ChatState>((set) => ({
     streamingMessageId: '',
     isGenerating: false,
     permissionRequests: [],
-    planApprovalRequest: null,
     tokenUsage: null,
     phase: '',
     stopReason: '',

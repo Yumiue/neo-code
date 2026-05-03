@@ -8,7 +8,6 @@ import {
   type CancelParams,
   type LoadSessionParams,
   type ResolvePermissionParams,
-  type ResolvePlanApprovalParams,
   type Session,
   type RunAckResult,
   type ListSessionsResult,
@@ -103,11 +102,6 @@ export class GatewayAPI {
   /** 解析权限请求 */
   async resolvePermission(params: ResolvePermissionParams) {
     return this.ws.call(Method.ResolvePermission, params)
-  }
-
-  /** 解析计划审批请求 */
-  async resolvePlanApproval(params: ResolvePlanApprovalParams) {
-    return this.ws.call(Method.ResolvePlanApproval, params)
   }
 
   /** 执行系统工具 */

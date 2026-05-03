@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -9,7 +8,6 @@ import (
 
 	"neo-code/internal/partsrender"
 	providertypes "neo-code/internal/provider/types"
-	approvalflow "neo-code/internal/runtime/approval"
 	"neo-code/internal/runtime/controlplane"
 	agentsession "neo-code/internal/session"
 )
@@ -411,33 +409,4 @@ func markCurrentPlanCompleted(session *agentsession.Session, completionSignaled 
 	session.PlanApprovalPendingFullAlign = false
 	session.PlanCompletionPendingFullReview = true
 	return true
-}
-
-// awaitPlanApproval 发出计划审批请求并阻塞等待用户决议。
-func (s *Service) awaitPlanApproval(
-	ctx context.Context,
-	runID, sessionID string,
-	plan *agentsession.PlanArtifact,
-) (bool, string, error) {
-	requestID, resultCh, err := s.approvalBroker.Open()
-	if err != nil {
-		return false, "", err
-	}
-	defer s.approvalBroker.Close(requestID)
-
-	if err := s.emit(ctx, EventPlanApprovalRequested, runID, sessionID, PlanApprovalRequestPayload{
-		RequestID: requestID,
-		PlanID:    plan.ID,
-		Revision:  plan.Revision,
-		Summary:   plan.Summary.Goal,
-	}); err != nil {
-		return false, requestID, err
-	}
-
-	select {
-	case <-ctx.Done():
-		return false, requestID, ctx.Err()
-	case decision := <-resultCh:
-		return decision == approvalflow.DecisionAllowOnce, requestID, nil
-	}
 }
