@@ -344,34 +344,27 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				if err := s.setBaseRunState(ctx, &state, controlplane.RunStateVerify); err != nil {
 					return s.handleRunError(err)
 				}
-				completionHookOutput := s.runHookPoint(
+				completionHookSignals := s.runBeforeCompletionDecisionOrchestrator(
 					ctx,
 					&state,
-					runtimehooks.HookPointBeforeCompletionDecision,
-					runtimehooks.HookContext{
-						Metadata: map[string]any{
-							"completion_passed": completed,
-							"has_tool_calls":    hasToolCalls,
-							"assistant_role":    strings.TrimSpace(turnOutput.assistant.Role),
-							"workdir":           strings.TrimSpace(snapshot.Workdir),
-						},
-					},
+					snapshot.Workdir,
+					completed,
+					hasToolCalls,
+					turnOutput.assistant.Role,
 				)
-				if completionHookOutput.Blocked {
-					s.emitRunScoped(ctx, EventHookBlocked, &state, HookBlockedPayload{
-						HookID:   strings.TrimSpace(completionHookOutput.BlockedBy),
-						Source:   string(findHookBlockSource(completionHookOutput)),
-						Point:    string(runtimehooks.HookPointBeforeCompletionDecision),
-						Reason:   findHookBlockMessage(completionHookOutput),
-						Enforced: false,
-					})
-				}
 
 				s.emitRunScopedOptional(EventVerificationStarted, &state, VerificationStartedPayload{
 					CompletionPassed:        completed,
 					CompletionBlockedReason: strings.TrimSpace(string(state.completion.CompletionBlockedReason)),
 				})
-				acceptanceDecision, err := s.beforeAcceptFinal(ctx, &state, snapshot, turnOutput.assistant, completed)
+				acceptanceDecision, err := s.beforeAcceptFinal(
+					ctx,
+					&state,
+					snapshot,
+					turnOutput.assistant,
+					completed,
+					completionHookSignals,
+				)
 				if err != nil {
 					return s.handleRunError(err)
 				}
