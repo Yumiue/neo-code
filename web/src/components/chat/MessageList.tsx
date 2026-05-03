@@ -51,38 +51,50 @@ export default function MessageList() {
   const isGenerating = useChatStore((s) => s.isGenerating)
   const containerRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
-  const nearBottomRef = useRef<boolean>(true)
   const prevMessagesLengthRef = useRef<number>(0)
+  const prevScrollTopRef = useRef<number>(0)
+  const userScrolledUpRef = useRef<boolean>(false)
 
   const ordered = useMemo(() => reorderForAITurn(messages), [messages])
 
-  // 找到外层滚动容器
-  const scrollContainerRef = useRef<HTMLElement | null>(null)
-  useEffect(() => {
-    if (containerRef.current) {
-      scrollContainerRef.current = containerRef.current.closest('[data-scroll-root]') as HTMLElement | null
-    }
-  }, [])
-
-  // 监听滚动,判断是否靠近底部
-  useEffect(() => {
-    const el = scrollContainerRef.current
-    if (!el) return
-    const onScroll = () => {
-      const threshold = 80
-      nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < threshold
-    }
-    el.addEventListener('scroll', onScroll, { passive: true })
-    return () => el.removeEventListener('scroll', onScroll)
-  }, [])
+  // 获取滚动容器（通过 bottomRef 向上查找）
+  const getScrollEl = (): HTMLElement | null =>
+    (bottomRef.current?.closest('[data-scroll-root]') as HTMLElement | null)
 
   // 条件滚动到底部
   useEffect(() => {
-    const userJustSent = messages.length > prevMessagesLengthRef.current
+    const lastMsg = messages[messages.length - 1]
+    const userJustSent =
+      messages.length > prevMessagesLengthRef.current && lastMsg?.role === 'user'
     prevMessagesLengthRef.current = messages.length
 
-    if (nearBottomRef.current || userJustSent) {
+    const scrollEl = getScrollEl()
+
+    // 通过 scrollTop 变化方向检测用户是否手动向上滚动：
+    // scrollTop 减小 = 用户向上滚；scrollTop 增大/不变 = 自动跟滚或内容增长
+    if (scrollEl) {
+      const scrollTop = scrollEl.scrollTop
+      if (scrollTop < prevScrollTopRef.current - 5) {
+        userScrolledUpRef.current = true
+      }
+      // 用户滚回底部时恢复自动跟随
+      const nearBottom = scrollEl.scrollHeight - scrollTop - scrollEl.clientHeight < 80
+      if (nearBottom) {
+        userScrolledUpRef.current = false
+      }
+      prevScrollTopRef.current = scrollTop
+    }
+
+    // 用户发送新消息时重置暂停状态，强制滚到底部
+    if (userJustSent) {
+      userScrolledUpRef.current = false
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+      return
+    }
+
+    // 生成中且用户未手动上滚 → 自动跟随
+    if (isGenerating && !userScrolledUpRef.current) {
+      bottomRef.current?.scrollIntoView({ behavior: 'instant' })
     }
   }, [ordered, isGenerating, messages.length])
 
