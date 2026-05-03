@@ -340,39 +340,26 @@ func TestBeforeCompletionDecisionOrchestratorRunsUserRepoBeforeInternalAndFeedsD
 
 	session := newRuntimeSession("session-before-completion-orchestrator")
 	state := newRunState("run-before-completion-orchestrator", session)
-	signals := service.runBeforeCompletionDecisionOrchestrator(
-		context.Background(),
-		&state,
-		t.TempDir(),
-		true,
-		false,
-		providertypes.RoleAssistant,
-	)
-	if got := strings.Join(callFlow, ","); got != "user,repo,internal" {
-		t.Fatalf("before_completion_decision hook order = %q, want %q", got, "user,repo,internal")
-	}
-	if len(signals.Annotations) < 2 {
-		t.Fatalf("signals annotations = %+v, want at least user/repo messages", signals.Annotations)
-	}
-	if len(signals.Guards) == 0 {
-		t.Fatal("expected guard signal from user hook failure")
-	}
-
 	snapshotCfg := TurnBudgetSnapshot{
 		Config:  config.StaticDefaults().Clone(),
 		Workdir: t.TempDir(),
 	}
 	state.session.TaskState.VerificationProfile = agentsession.VerificationProfileTaskOnly
-	decision, err := service.beforeAcceptFinal(
+	decision, err := service.runBeforeCompletionDecisionAcceptance(
 		context.Background(),
 		&state,
 		snapshotCfg,
 		providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")}},
+		t.TempDir(),
 		true,
-		signals,
+		false,
+		providertypes.RoleAssistant,
 	)
 	if err != nil {
-		t.Fatalf("beforeAcceptFinal() error = %v", err)
+		t.Fatalf("runBeforeCompletionDecisionAcceptance() error = %v", err)
+	}
+	if got := strings.Join(callFlow, ","); got != "user,repo,internal" {
+		t.Fatalf("before_completion_decision hook order = %q, want %q", got, "user,repo,internal")
 	}
 	if !strings.Contains(decision.InternalSummary, "hook signals consumed") {
 		t.Fatalf("decision internal summary should include hook signal context, got %q", decision.InternalSummary)
