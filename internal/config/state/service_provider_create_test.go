@@ -113,8 +113,8 @@ func TestRemoveCustomProviderNoopCases(t *testing.T) {
 	if err := service.RemoveCustomProvider(context.Background(), "missing-provider"); err != nil {
 		t.Fatalf("expected missing provider remove to be noop, got %v", err)
 	}
-	if err := service.RemoveCustomProvider(context.Background(), configpkg.OpenAIName); err != nil {
-		t.Fatalf("expected builtin provider remove to be noop, got %v", err)
+	if err := service.RemoveCustomProvider(context.Background(), configpkg.OpenAIName); err == nil {
+		t.Fatal("expected builtin provider remove to fail with error")
 	}
 }
 

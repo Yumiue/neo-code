@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"neo-code/internal/config"
@@ -93,7 +94,14 @@ func (s *Service) SelectProviderWithModel(ctx context.Context, providerName stri
 	if _, err := s.selectProviderUnlocked(ctx, providerName); err != nil {
 		return Selection{}, err
 	}
-	return s.setCurrentModelUnlocked(ctx, modelID)
+	selection, err := s.setCurrentModelUnlocked(ctx, modelID)
+	if err != nil {
+		if errors.Is(err, ErrProviderNotFound) {
+			return Selection{}, fmt.Errorf("selection: provider %q was removed during selection: %w", providerName, err)
+		}
+		return Selection{}, err
+	}
+	return selection, nil
 }
 
 // selectProviderUnlocked 在调用方已完成锁控制时执行 provider 切换核心逻辑。

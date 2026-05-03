@@ -201,11 +201,19 @@ func (s *Service) RemoveCustomProvider(ctx context.Context, name string) error {
 		return nil
 	}
 	if providerCfg.Source != config.ProviderSourceCustom {
-		return nil
+		return fmt.Errorf("selection: provider %q is builtin and cannot be removed", providerName)
 	}
+
+	apiKeyEnv := strings.TrimSpace(providerCfg.APIKeyEnv)
 
 	if err := config.DeleteCustomProvider(s.manager.BaseDir(), providerName); err != nil {
 		return err
+	}
+
+	if apiKeyEnv != "" {
+		if envErr := deleteUserEnvVarForCreate(apiKeyEnv); envErr != nil {
+			return fmt.Errorf("selection: remove provider env: %w", envErr)
+		}
 	}
 
 	if wasSelected {
