@@ -67,6 +67,31 @@ func TestBuildToolDiffPayload(t *testing.T) {
 }
 
 func TestToolExecutionHelperFunctions(t *testing.T) {
+	t.Run("toolCallTouchedPaths covers write and move payloads", func(t *testing.T) {
+		writePaths := toolCallTouchedPaths(providertypes.ToolCall{
+			Name:      tools.ToolNameFilesystemWriteFile,
+			Arguments: `{"path":" docs/readme.md "}`,
+		}, "/repo")
+		if len(writePaths) != 1 || writePaths[0] != "/repo/docs/readme.md" {
+			t.Fatalf("write toolCallTouchedPaths() = %#v", writePaths)
+		}
+
+		movePaths := toolCallTouchedPaths(providertypes.ToolCall{
+			Name:      tools.ToolNameFilesystemMoveFile,
+			Arguments: `{"source_path":"src/a.txt","destination_path":" /tmp/b.txt "}`,
+		}, "/repo")
+		if len(movePaths) != 2 || movePaths[0] != "/repo/src/a.txt" || movePaths[1] != "/tmp/b.txt" {
+			t.Fatalf("move toolCallTouchedPaths() = %#v", movePaths)
+		}
+
+		if got := toolCallTouchedPaths(providertypes.ToolCall{
+			Name:      tools.ToolNameFilesystemCopyFile,
+			Arguments: `{invalid`,
+		}, "/repo"); got != nil {
+			t.Fatalf("malformed toolCallTouchedPaths() = %#v, want nil", got)
+		}
+	})
+
 	t.Run("toolResultMultiDiffs parses valid entries", func(t *testing.T) {
 		entries, ok := toolResultMultiDiffs(map[string]any{
 			"tool_diffs": []map[string]any{
@@ -156,6 +181,21 @@ func TestEmitHelpersPublishExpectedEvents(t *testing.T) {
 	}
 	if len(payload.Changes) != 3 || payload.UncoveredPaths[0] != "new.txt" {
 		t.Fatalf("unexpected bash payload: %#v", payload)
+	}
+
+	service.emitBashSideEffectEvent(
+		context.Background(),
+		state,
+		providertypes.ToolCall{ID: "tool-2"},
+		"touch noop",
+		checkpoint.FingerprintDiff{},
+		nil,
+		nil,
+	)
+	select {
+	case extra := <-service.events:
+		t.Fatalf("unexpected empty bash side effect event: %#v", extra)
+	default:
 	}
 
 	service.emitToolDiffs(context.Background(), state, toolExecutionSummary{

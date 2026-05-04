@@ -578,6 +578,91 @@ func TestRestoreCheckpointRejectsInvalidRequestAndMismatchedSession(t *testing.T
 	}); err == nil || !strings.Contains(err.Error(), "session mismatch") {
 		t.Fatalf("RestoreCheckpoint() error = %v, want session mismatch", err)
 	}
+
+	for _, tc := range []struct {
+		name       string
+		record     agentsession.CheckpointRecord
+		sessionCP  *agentsession.SessionCheckpoint
+		wantSubstr string
+	}{
+		{
+			name: "status must be available",
+			record: agentsession.CheckpointRecord{
+				CheckpointID: "cp-status",
+				SessionID:    "session-1",
+				Status:       agentsession.CheckpointStatusRestored,
+				Restorable:   true,
+			},
+			sessionCP:  &agentsession.SessionCheckpoint{HeadJSON: `{}`, MessagesJSON: `[]`},
+			wantSubstr: "status is restored",
+		},
+		{
+			name: "checkpoint must be restorable",
+			record: agentsession.CheckpointRecord{
+				CheckpointID: "cp-restorable",
+				SessionID:    "session-1",
+				Status:       agentsession.CheckpointStatusAvailable,
+				Restorable:   false,
+			},
+			sessionCP:  &agentsession.SessionCheckpoint{HeadJSON: `{}`, MessagesJSON: `[]`},
+			wantSubstr: "not restorable",
+		},
+		{
+			name: "session checkpoint data is required",
+			record: agentsession.CheckpointRecord{
+				CheckpointID: "cp-session-data",
+				SessionID:    "session-1",
+				Status:       agentsession.CheckpointStatusAvailable,
+				Restorable:   true,
+			},
+			sessionCP:  nil,
+			wantSubstr: "no session checkpoint data",
+		},
+		{
+			name: "head json must be valid",
+			record: agentsession.CheckpointRecord{
+				CheckpointID: "cp-head-json",
+				SessionID:    "session-1",
+				Status:       agentsession.CheckpointStatusAvailable,
+				Restorable:   true,
+			},
+			sessionCP:  &agentsession.SessionCheckpoint{HeadJSON: `{invalid`, MessagesJSON: `[]`},
+			wantSubstr: "unmarshal head",
+		},
+		{
+			name: "messages json must be valid",
+			record: agentsession.CheckpointRecord{
+				CheckpointID: "cp-messages-json",
+				SessionID:    "session-1",
+				Status:       agentsession.CheckpointStatusAvailable,
+				Restorable:   true,
+			},
+			sessionCP:  &agentsession.SessionCheckpoint{HeadJSON: `{}`, MessagesJSON: `{invalid`},
+			wantSubstr: "unmarshal messages",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newRuntimeCheckpointFixture(t)
+			tc.record.SessionID = fixture.session.ID
+			spy := &checkpointStoreSpy{
+				getRecord:    tc.record,
+				getSessionCP: tc.sessionCP,
+			}
+			service := &Service{
+				sessionStore:    fixture.sessionStore,
+				checkpointStore: spy,
+				perEditStore:    checkpoint.NewPerEditSnapshotStore(t.TempDir(), fixture.workdir),
+				events:          make(chan RuntimeEvent, 8),
+			}
+			_, err := service.RestoreCheckpoint(context.Background(), GatewayRestoreInput{
+				SessionID:    fixture.session.ID,
+				CheckpointID: tc.record.CheckpointID,
+			})
+			if err == nil || !strings.Contains(err.Error(), tc.wantSubstr) {
+				t.Fatalf("RestoreCheckpoint() error = %v, want substring %q", err, tc.wantSubstr)
+			}
+		})
+	}
 }
 
 func TestCheckpointDiffSelectsLatestCodeCheckpointAndRejectsSessionOnlyTarget(t *testing.T) {
@@ -651,6 +736,43 @@ func TestCheckpointDiffSelectsLatestCodeCheckpointAndRejectsSessionOnlyTarget(t 
 		CheckpointID: "session-only",
 	}); err == nil || !strings.Contains(err.Error(), "not found or has no code snapshot") {
 		t.Fatalf("CheckpointDiff() error = %v, want session-only target rejection", err)
+	}
+}
+
+func TestCheckpointDiffRejectsMissingStateAndReturnsEmptyWhenNoPreviousSnapshot(t *testing.T) {
+	service := &Service{}
+	if _, err := service.CheckpointDiff(context.Background(), CheckpointDiffInput{}); err == nil {
+		t.Fatal("expected store availability error")
+	}
+
+	service = &Service{
+		checkpointStore: &checkpointStoreSpy{},
+		perEditStore:    checkpoint.NewPerEditSnapshotStore(t.TempDir(), t.TempDir()),
+	}
+	if _, err := service.CheckpointDiff(context.Background(), CheckpointDiffInput{}); err == nil || !strings.Contains(err.Error(), "session_id required") {
+		t.Fatalf("CheckpointDiff() error = %v, want session_id validation", err)
+	}
+
+	spy := &checkpointStoreSpy{
+		listRecords: []agentsession.CheckpointRecord{
+			{
+				CheckpointID:      "cp-only",
+				SessionID:         "session-1",
+				CreatedAt:         time.Now().UTC(),
+				CodeCheckpointRef: checkpoint.RefForPerEditCheckpoint("cp-only"),
+			},
+		},
+	}
+	service = &Service{
+		checkpointStore: spy,
+		perEditStore:    checkpoint.NewPerEditSnapshotStore(t.TempDir(), t.TempDir()),
+	}
+	result, err := service.CheckpointDiff(context.Background(), CheckpointDiffInput{SessionID: "session-1"})
+	if err != nil {
+		t.Fatalf("CheckpointDiff() error = %v", err)
+	}
+	if result.CheckpointID != "cp-only" || result.PrevCheckpointID != "" || result.Patch != "" {
+		t.Fatalf("CheckpointDiff() = %#v, want latest checkpoint without previous diff", result)
 	}
 }
 

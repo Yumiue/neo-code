@@ -279,6 +279,99 @@ func TestSQLiteCheckpointStoreCreateRestoreAndResume(t *testing.T) {
 	}
 }
 
+func TestSQLiteCheckpointStoreRestoreCheckpointUpdatesStatuses(t *testing.T) {
+	t.Parallel()
+
+	fixture := newCheckpointStoreFixture(t)
+	loaded := createCheckpointTestSession(t, fixture.sessionStore, "session_restore_status", fixture.workspaceRoot)
+
+	recordA, err := fixture.checkpointStore.CreateCheckpoint(context.Background(), checkpointInputFromSession(
+		t, loaded, "cp-available", session.CheckpointReasonPreWrite, time.Now().Add(-2*time.Minute),
+	))
+	if err != nil {
+		t.Fatalf("CreateCheckpoint(cp-available) error = %v", err)
+	}
+	recordB, err := fixture.checkpointStore.CreateCheckpoint(context.Background(), checkpointInputFromSession(
+		t, loaded, "cp-restored", session.CheckpointReasonEndOfTurn, time.Now().Add(-time.Minute),
+	))
+	if err != nil {
+		t.Fatalf("CreateCheckpoint(cp-restored) error = %v", err)
+	}
+
+	if err := fixture.checkpointStore.RestoreCheckpoint(context.Background(), RestoreCheckpointInput{
+		SessionID:        loaded.ID,
+		Head:             loaded.HeadSnapshot(),
+		Messages:         loaded.Messages,
+		UpdatedAt:        time.Now(),
+		MarkAvailableIDs: []string{recordA.CheckpointID},
+		MarkRestoredIDs:  []string{recordB.CheckpointID},
+	}); err != nil {
+		t.Fatalf("RestoreCheckpoint() error = %v", err)
+	}
+
+	availableRecord, _, err := fixture.checkpointStore.GetCheckpoint(context.Background(), recordA.CheckpointID)
+	if err != nil {
+		t.Fatalf("GetCheckpoint(cp-available) error = %v", err)
+	}
+	if availableRecord.Status != session.CheckpointStatusAvailable {
+		t.Fatalf("available record status = %q, want available", availableRecord.Status)
+	}
+
+	restoredRecord, _, err := fixture.checkpointStore.GetCheckpoint(context.Background(), recordB.CheckpointID)
+	if err != nil {
+		t.Fatalf("GetCheckpoint(cp-restored) error = %v", err)
+	}
+	if restoredRecord.Status != session.CheckpointStatusRestored {
+		t.Fatalf("restored record status = %q, want restored", restoredRecord.Status)
+	}
+}
+
+func TestSQLiteCheckpointStoreGetCheckpointWithoutSessionSnapshot(t *testing.T) {
+	t.Parallel()
+
+	fixture := newCheckpointStoreFixture(t)
+	loaded := createCheckpointTestSession(t, fixture.sessionStore, "session_record_only", fixture.workspaceRoot)
+	db, err := fixture.checkpointStore.ensureDB(context.Background())
+	if err != nil {
+		t.Fatalf("ensureDB() error = %v", err)
+	}
+
+	if _, err := db.ExecContext(context.Background(), `
+INSERT INTO checkpoint_records (
+	id, workspace_key, session_id, run_id, workdir, created_at_ms,
+	reason, code_checkpoint_ref, session_checkpoint_ref, resume_checkpoint_ref,
+	transcript_revision, restorable, status
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`,
+		"cp-record-only",
+		session.WorkspacePathKey(loaded.Workdir),
+		loaded.ID,
+		"run-record-only",
+		loaded.Workdir,
+		time.Now().UnixMilli(),
+		string(session.CheckpointReasonPreWrite),
+		"",
+		"",
+		"",
+		0,
+		1,
+		string(session.CheckpointStatusAvailable),
+	); err != nil {
+		t.Fatalf("insert checkpoint record error = %v", err)
+	}
+
+	record, sessionCP, err := fixture.checkpointStore.GetCheckpoint(context.Background(), "cp-record-only")
+	if err != nil {
+		t.Fatalf("GetCheckpoint() error = %v", err)
+	}
+	if record.CheckpointID != "cp-record-only" {
+		t.Fatalf("record id = %q, want cp-record-only", record.CheckpointID)
+	}
+	if sessionCP != nil {
+		t.Fatalf("session checkpoint = %#v, want nil", sessionCP)
+	}
+}
+
 func TestSQLiteCheckpointStorePruneAndRepair(t *testing.T) {
 	t.Parallel()
 
