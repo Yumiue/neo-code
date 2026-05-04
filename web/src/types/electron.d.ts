@@ -4,6 +4,7 @@ export interface ElectronAPI {
   getAddress: () => Promise<string>
   getWorkdir: () => Promise<string>
   selectWorkdir: () => Promise<{ canceled: boolean; workdir: string }>
+  pickDirectory: () => Promise<{ canceled: boolean; filePaths: string[] }>
   minimize: () => Promise<void>
   maximize: () => Promise<void>
   close: () => Promise<void>

@@ -14,6 +14,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
 	/** 选择新工作区目录并重启 Gateway */
 	selectWorkdir: () => ipcRenderer.invoke('gateway:selectWorkdir') as Promise<{ canceled: boolean; workdir: string }>,
 
+	/** 纯目录选择器（不重启 Gateway） */
+	pickDirectory: () => ipcRenderer.invoke('dialog:pickDirectory') as Promise<{ canceled: boolean; filePaths: string[] }>,
+
 	/** 窗口控制 */
 	minimize: () => ipcRenderer.invoke('window:minimize'),
 	maximize: () => ipcRenderer.invoke('window:maximize'),

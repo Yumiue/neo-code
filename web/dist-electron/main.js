@@ -105,7 +105,7 @@ let gatewayProcess = null;
 let gatewayReady = false;
 let gatewayAddress = "";
 let gatewayToken = "";
-let currentWorkdir = process.env["NEOCODE_WORKDIR"] ?? app.getPath("home");
+let currentWorkdir = process.env["NEOCODE_WORKDIR"] ?? "";
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -225,7 +225,11 @@ function findExplicitPort() {
 async function tryStartGateway(binary, httpAddress) {
   var _a, _b;
   console.log(`[Electron] Starting Gateway: ${binary} on ${httpAddress}`);
-  const proc = spawn(binary, ["--http-listen", httpAddress, "--workdir", currentWorkdir], {
+  const args = ["--http-listen", httpAddress];
+  if (currentWorkdir) {
+    args.push("--workdir", currentWorkdir);
+  }
+  const proc = spawn(binary, args, {
     detached: false,
     stdio: "pipe"
   });
@@ -324,7 +328,7 @@ ipcMain.handle("gateway:selectWorkdir", async () => {
   if (!mainWindow) return { canceled: true, workdir: currentWorkdir };
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ["openDirectory"],
-    defaultPath: currentWorkdir
+    defaultPath: currentWorkdir || app.getPath("home")
   });
   if (result.canceled || result.filePaths.length === 0) {
     return { canceled: true, workdir: currentWorkdir };
@@ -338,6 +342,14 @@ ipcMain.handle("gateway:selectWorkdir", async () => {
   stopGateway();
   await startGateway();
   return { canceled: false, workdir: currentWorkdir };
+});
+ipcMain.handle("dialog:pickDirectory", async () => {
+  if (!mainWindow) return { canceled: true, filePaths: [] };
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ["openDirectory"],
+    defaultPath: currentWorkdir || app.getPath("home")
+  });
+  return { canceled: result.canceled, filePaths: result.filePaths };
 });
 ipcMain.handle("window:minimize", () => mainWindow == null ? void 0 : mainWindow.minimize());
 ipcMain.handle("window:maximize", () => {

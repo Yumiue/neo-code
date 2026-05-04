@@ -78,14 +78,17 @@ func defaultBuildGatewayRuntimePort(ctx context.Context, workdir string) (gatewa
 		return nil, nil, err
 	}
 
-	defaultHash := agentsession.HashWorkspaceRoot(trimmedWorkdir)
-	if _, err := index.Register(trimmedWorkdir, ""); err != nil {
-		_ = bundle.Close()
-		return nil, nil, err
-	}
-	if err := index.Save(); err != nil {
-		_ = bundle.Close()
-		return nil, nil, err
+	defaultHash := ""
+	if trimmedWorkdir != "" {
+		defaultHash = agentsession.HashWorkspaceRoot(trimmedWorkdir)
+		if _, err := index.Register(trimmedWorkdir, ""); err != nil {
+			_ = bundle.Close()
+			return nil, nil, err
+		}
+		if err := index.Save(); err != nil {
+			_ = bundle.Close()
+			return nil, nil, err
+		}
 	}
 
 	bridge, err := newGatewayRuntimePortBridge(ctx, bundle.Runtime, bundle.SessionStore, bundle.ConfigManager, bundle.ProviderSelection, bundle.ToolRegistry)

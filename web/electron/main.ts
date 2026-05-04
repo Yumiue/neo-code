@@ -16,7 +16,7 @@ let gatewayProcess: ChildProcess | null = null
 let gatewayReady = false
 let gatewayAddress = ''
 let gatewayToken = ''
-let currentWorkdir = process.env['NEOCODE_WORKDIR'] ?? app.getPath('home')
+let currentWorkdir = process.env['NEOCODE_WORKDIR'] ?? ''
 
 /** 创建主窗口 */
 function createWindow(): void {
@@ -162,7 +162,11 @@ function findExplicitPort(): number | null {
 /** 尝试在指定地址启动 Gateway */
 async function tryStartGateway(binary: string, httpAddress: string): Promise<boolean> {
 	console.log(`[Electron] Starting Gateway: ${binary} on ${httpAddress}`)
-	const proc = spawn(binary, ['--http-listen', httpAddress, '--workdir', currentWorkdir], {
+	const args = ['--http-listen', httpAddress]
+	if (currentWorkdir) {
+		args.push('--workdir', currentWorkdir)
+	}
+	const proc = spawn(binary, args, {
 		detached: false,
 		stdio: 'pipe',
 	})
@@ -280,7 +284,7 @@ ipcMain.handle('gateway:selectWorkdir', async () => {
 	if (!mainWindow) return { canceled: true, workdir: currentWorkdir }
 	const result = await dialog.showOpenDialog(mainWindow, {
 		properties: ['openDirectory'],
-		defaultPath: currentWorkdir,
+		defaultPath: currentWorkdir || app.getPath('home'),
 	})
 	if (result.canceled || result.filePaths.length === 0) {
 		return { canceled: true, workdir: currentWorkdir }
@@ -295,6 +299,16 @@ ipcMain.handle('gateway:selectWorkdir', async () => {
 	stopGateway()
 	await startGateway()
 	return { canceled: false, workdir: currentWorkdir }
+})
+
+/** 纯目录选择器，不修改 Gateway 工作目录 */
+ipcMain.handle('dialog:pickDirectory', async () => {
+	if (!mainWindow) return { canceled: true, filePaths: [] as string[] }
+	const result = await dialog.showOpenDialog(mainWindow, {
+		properties: ['openDirectory'],
+		defaultPath: currentWorkdir || app.getPath('home'),
+	})
+	return { canceled: result.canceled, filePaths: result.filePaths }
 })
 
 /** 窗口控制 */

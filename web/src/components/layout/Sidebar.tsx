@@ -9,7 +9,6 @@ import {
   Plus,
   Search,
   PanelLeft,
-  Filter,
   MessageSquare,
   Folder,
   FolderPlus,
@@ -188,7 +187,12 @@ export default function Sidebar({ collapsed }: SidebarProps) {
 
       {/* Session List Header */}
       <div style={styles.listHeader}>
-        <span style={styles.listTitle}>工作区</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+          <span style={styles.listTitle}>工作区</span>
+          <button style={styles.iconBtn} title="新建工作区" onClick={() => setCreateWorkspaceOpen(true)}>
+            <FolderPlus size={14} />
+          </button>
+        </div>
         <div style={styles.searchBox}>
           <Search size={12} />
           <input
@@ -197,14 +201,6 @@ export default function Sidebar({ collapsed }: SidebarProps) {
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="搜索工作区或会话"
           />
-        </div>
-        <div style={styles.listActions}>
-          <button style={styles.iconBtn} title="新建工作区" onClick={() => setCreateWorkspaceOpen(true)}>
-            <FolderPlus size={14} />
-          </button>
-          <button style={styles.iconBtn} title="筛选">
-            <Filter size={14} />
-          </button>
         </div>
       </div>
 

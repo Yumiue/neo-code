@@ -142,7 +142,11 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
         } catch (workspaceErr) {
           console.warn('[RuntimeProvider] reconnect fetchWorkspaces failed:', workspaceErr)
         }
-        await useSessionStore.getState().fetchSessions(api, true)
+
+        const hasWorkspaces = useWorkspaceStore.getState().workspaces.length > 0
+        if (hasWorkspaces) {
+          await useSessionStore.getState().fetchSessions(api, true)
+        }
 
         // Restore connected status after successful reconnect
         setStatus('connected')
@@ -177,9 +181,12 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
         console.warn('[RuntimeProvider] fetchWorkspaces failed, falling back to single workspace:', workspaceErr)
       }
 
-      // Fetch sessions and initialize
-      await useSessionStore.getState().fetchSessions(api, true)
-      await useSessionStore.getState().initializeActiveSession(api)
+      // Fetch sessions and initialize only when workspaces exist
+      const hasWorkspaces = useWorkspaceStore.getState().workspaces.length > 0
+      if (hasWorkspaces) {
+        await useSessionStore.getState().fetchSessions(api, true)
+        await useSessionStore.getState().initializeActiveSession(api)
+      }
 
       // Persist browser config if appropriate
       if (persistBrowserConfig && nextConfig.mode === 'browser') {
@@ -218,13 +225,15 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
   const selectWorkdir = useCallback(async () => {
     if (!window.electronAPI || mode !== 'electron') return workdir
     try {
-      const result = await window.electronAPI.selectWorkdir()
-      if (!result.canceled) {
-        setWorkdir(result.workdir)
+      const result = await window.electronAPI.pickDirectory()
+      if (!result.canceled && result.filePaths.length > 0) {
+        const picked = result.filePaths[0]
+        setWorkdir(picked)
+        return picked
       }
-      return result.workdir
+      return workdir
     } catch (err) {
-      console.error('selectWorkdir failed:', err)
+      console.error('pickDirectory failed:', err)
       return workdir
     }
   }, [mode, workdir])

@@ -58,6 +58,12 @@ func (m *MultiWorkspaceRuntime) getPort(ctx context.Context) (RuntimePort, error
 		hash = m.defaultHash
 	}
 	if hash == "" {
+		records := m.index.List()
+		if len(records) > 0 {
+			hash = records[0].Hash
+		}
+	}
+	if hash == "" {
 		return nil, fmt.Errorf("workspace hash is empty and no default configured")
 	}
 	return m.getPortForHash(hash)

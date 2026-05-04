@@ -9,6 +9,8 @@ electron.contextBridge.exposeInMainWorld("electronAPI", {
   getWorkdir: () => electron.ipcRenderer.invoke("gateway:getWorkdir"),
   /** 选择新工作区目录并重启 Gateway */
   selectWorkdir: () => electron.ipcRenderer.invoke("gateway:selectWorkdir"),
+  /** 纯目录选择器（不重启 Gateway） */
+  pickDirectory: () => electron.ipcRenderer.invoke("dialog:pickDirectory"),
   /** 窗口控制 */
   minimize: () => electron.ipcRenderer.invoke("window:minimize"),
   maximize: () => electron.ipcRenderer.invoke("window:maximize"),
