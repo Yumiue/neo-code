@@ -191,6 +191,12 @@ trust store 示例：
 docs/examples/hooks.yaml
 ```
 
+全局 user hooks 示例见：
+
+```text
+docs/examples/user-hooks-config.yaml
+```
+
 ## Budget 解析规则
 
 NeoCode 已不再使用旧的 `auto_compact` 阈值语义，当前统一使用 `context.budget`：

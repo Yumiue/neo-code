@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"neo-code/internal/config"
+	providertypes "neo-code/internal/provider/types"
 	runtimehooks "neo-code/internal/runtime/hooks"
 )
 
@@ -677,6 +678,81 @@ func TestConfigureRuntimeHooksRejectsExternalKindAndDoesNotRegister(t *testing.T
 	}
 	if service.hookExecutor != nil {
 		t.Fatalf("unexpected hook executor after external kind rejection: %T", service.hookExecutor)
+	}
+}
+
+func TestUserBuiltinHookConfiguredEndToEndOnUserPromptSubmit(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Runtime.Hooks.Items = []config.RuntimeHookItemConfig{
+			{
+				ID:      "user-context-note",
+				Enabled: runtimeBoolPtr(true),
+				Point:   "user_prompt_submit",
+				Scope:   "user",
+				Kind:    "builtin",
+				Mode:    "sync",
+				Handler: "add_context_note",
+				Params:  map[string]any{"note": "user note from config"},
+			},
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("update runtime hook config: %v", err)
+	}
+
+	store := newMemoryStore()
+	scripted := &scriptedProvider{
+		streams: [][]providertypes.StreamEvent{
+			{
+				providertypes.NewTextDeltaStreamEvent("ok"),
+				providertypes.NewMessageDoneStreamEvent("", nil),
+			},
+		},
+	}
+	service := NewWithFactory(
+		manager,
+		&stubToolManager{},
+		store,
+		&scriptedProviderFactory{provider: scripted},
+		&stubContextBuilder{},
+	)
+	if err := configureRuntimeHooksFromConfig(service, manager.Get()); err != nil {
+		t.Fatalf("configureRuntimeHooksFromConfig() error = %v", err)
+	}
+	if err := service.Run(context.Background(), UserInput{
+		RunID: "run-user-hook-user-prompt-submit",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	found := false
+	for _, evt := range events {
+		if evt.Type != EventHookFinished {
+			continue
+		}
+		payload, ok := evt.Payload.(HookEventPayload)
+		if !ok {
+			continue
+		}
+		if payload.Point != string(runtimehooks.HookPointUserPromptSubmit) {
+			continue
+		}
+		if payload.Source != string(runtimehooks.HookSourceUser) {
+			t.Fatalf("payload.Source = %q, want %q", payload.Source, runtimehooks.HookSourceUser)
+		}
+		if payload.Message != "user note from config" {
+			t.Fatalf("payload.Message = %q, want %q", payload.Message, "user note from config")
+		}
+		found = true
+		break
+	}
+	if !found {
+		t.Fatal("expected user_prompt_submit hook_finished event from user config hook")
 	}
 }
 
