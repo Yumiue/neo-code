@@ -142,7 +142,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
         } catch (workspaceErr) {
           console.warn('[RuntimeProvider] reconnect fetchWorkspaces failed:', workspaceErr)
         }
-        await useSessionStore.getState().fetchSessions(api)
+        await useSessionStore.getState().fetchSessions(api, true)
 
         // Restore connected status after successful reconnect
         setStatus('connected')
@@ -178,7 +178,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
       }
 
       // Fetch sessions and initialize
-      await useSessionStore.getState().fetchSessions(api)
+      await useSessionStore.getState().fetchSessions(api, true)
       await useSessionStore.getState().initializeActiveSession(api)
 
       // Persist browser config if appropriate

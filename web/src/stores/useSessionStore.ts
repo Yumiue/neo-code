@@ -44,7 +44,7 @@ interface SessionState {
   setCurrentProjectId: (id: string) => void
   setLoading: (loading: boolean) => void
   /** 从后端拉取会话列表并映射为项目分组 */
-  fetchSessions: (gatewayAPI: GatewayAPI) => Promise<void>
+  fetchSessions: (gatewayAPI: GatewayAPI, force?: boolean) => Promise<void>
   /** 切换到指定会话：清空消息 → 绑定流 → 加载历史消息 */
   switchSession: (sessionId: string, gatewayAPI: GatewayAPI) => Promise<void>
   /** 创建新会话：清空消息，等待 run 成功后由事件回写真实 session_id */
@@ -55,6 +55,8 @@ interface SessionState {
   prepareNewChat: () => void
   /** 重置内部状态（工作区切换时调用，确保 fetchSessions 不使用过期数据） */
   resetForWorkspaceSwitch: () => void
+  /** 从本地 projects 列表中移除一个 session（乐观更新） */
+  removeSessionLocally: (sessionId: string) => void
 }
 
 /** 将后端扁平会话列表映射为项目分组结构 */
@@ -283,9 +285,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set({ _initialBindDone: false, loading: false })
   },
 
-  fetchSessions: async (gatewayAPI) => {
-    // 去重：若已有 fetch 在进行中，复用同一 promise
-    if (_fetchSessionsPromise) return _fetchSessionsPromise
+  removeSessionLocally: (sessionId) => {
+    const projects = get().projects
+      .map((p) => ({ ...p, sessions: p.sessions.filter((s) => s.id !== sessionId) }))
+      .filter((p) => p.sessions.length > 0)
+    set({ projects })
+  },
+
+  fetchSessions: async (gatewayAPI, force) => {
+    // 去重：若已有 fetch 在进行中，复用同一 promise（force 跳过去重）
+    if (!force && _fetchSessionsPromise) return _fetchSessionsPromise
 
     _fetchSessionsPromise = (async () => {
       set({ loading: true })
@@ -321,8 +330,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         }
       } catch (err) {
         console.error('fetchSessions failed:', err)
-        set({ loading: false })
-        useUIStore.getState().showToast('会话列表加载失败', 'error')
+        set({ projects: [], loading: false })
       } finally {
         _fetchSessionsPromise = null
       }

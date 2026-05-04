@@ -284,14 +284,19 @@ export default function Sidebar({ collapsed }: SidebarProps) {
               setContextMenu(null)
             }}>重命名</button>
             <button style={{ ...styles.contextItem, color: 'var(--error)' }} onClick={async () => {
+              const deletedId = contextMenu.sessionId
+              setContextMenu(null)
               try {
-                await gatewayAPI.deleteSession(contextMenu.sessionId)
-                await useSessionStore.getState().fetchSessions(gatewayAPI)
-                useSessionStore.getState().prepareNewChat()
+                useSessionStore.getState().removeSessionLocally(deletedId)
+                if (useSessionStore.getState().currentSessionId === deletedId) {
+                  useSessionStore.getState().prepareNewChat()
+                }
+                await gatewayAPI.deleteSession(deletedId)
+                useSessionStore.getState().fetchSessions(gatewayAPI, true).catch(() => {})
               } catch (err) {
                 console.error('Delete session failed:', err)
+                useSessionStore.getState().fetchSessions(gatewayAPI, true).catch(() => {})
               }
-              setContextMenu(null)
             }}>删除</button>
           </div>
         </>

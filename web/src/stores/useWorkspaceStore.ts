@@ -107,7 +107,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       set({ currentWorkspaceHash: hash })
 
       // 加载新工作区的会话列表
-      await useSessionStore.getState().fetchSessions(gatewayAPI)
+      await useSessionStore.getState().fetchSessions(gatewayAPI, true)
     } catch (err) {
       console.error('switchWorkspace failed:', err)
       useUIStore.getState().showToast('切换工作区失败', 'error')
@@ -150,7 +150,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       set({ currentWorkspaceHash: w.hash })
 
       // 加载新工作区的会话列表
-      await useSessionStore.getState().fetchSessions(gatewayAPI)
+      await useSessionStore.getState().fetchSessions(gatewayAPI, true)
       useUIStore.getState().showToast('工作区创建成功', 'success')
     } catch (err) {
       console.error('createWorkspace failed:', err)

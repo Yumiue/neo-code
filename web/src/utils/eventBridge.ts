@@ -82,7 +82,7 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
       }
       chatStore.setGenerating(false)
       if (frameSessionId) {
-        useSessionStore.getState().fetchSessions(gatewayAPI).catch(() => {})
+        useSessionStore.getState().fetchSessions(gatewayAPI, true).catch(() => {})
       }
       break
     }
@@ -124,7 +124,7 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
       if (sessionId && sessionId !== useSessionStore.getState().currentSessionId) {
         useSessionStore.getState().setCurrentSessionId(sessionId)
       }
-      useSessionStore.getState().fetchSessions(gatewayAPI).catch(() => {})
+      useSessionStore.getState().fetchSessions(gatewayAPI, true).catch(() => {})
       break
     }
 

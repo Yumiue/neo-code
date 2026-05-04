@@ -148,12 +148,15 @@ export default function ChatPanel() {
                 <button style={styles.moreMenuItem} onClick={async () => {
                   setMoreMenuOpen(false)
                   if (currentSessionId && gatewayAPI) {
+                    const deletedId = currentSessionId
                     try {
-                      await gatewayAPI.deleteSession(currentSessionId)
-                      await useSessionStore.getState().fetchSessions(gatewayAPI)
-			      useSessionStore.getState().prepareNewChat()
+                      useSessionStore.getState().removeSessionLocally(deletedId)
+                      useSessionStore.getState().prepareNewChat()
+                      await gatewayAPI.deleteSession(deletedId)
+                      useSessionStore.getState().fetchSessions(gatewayAPI, true).catch(() => {})
                     } catch (err) {
                       console.error('Archive session failed:', err)
+                      useSessionStore.getState().fetchSessions(gatewayAPI, true).catch(() => {})
                     }
                   }
                 }}>
