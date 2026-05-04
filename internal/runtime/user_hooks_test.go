@@ -558,6 +558,31 @@ func TestConfigureRuntimeHooksFromConfigNoEnabledUserItemsKeepsRepoCapableExecut
 	}
 }
 
+func TestConfigureRuntimeHooksWithoutItemsKeepsBehaviorUnchanged(t *testing.T) {
+	t.Parallel()
+
+	cfg := *config.StaticDefaults()
+	cfg.Workdir = t.TempDir()
+	cfg.Runtime.Hooks.Items = nil
+	cfg.Runtime.Hooks.ApplyDefaults(config.StaticDefaults().Runtime.Hooks)
+
+	service := &Service{events: make(chan RuntimeEvent, 8)}
+	if err := configureRuntimeHooksFromConfig(service, cfg); err != nil {
+		t.Fatalf("configureRuntimeHooksFromConfig() error = %v", err)
+	}
+	if service.hookExecutor == nil {
+		t.Fatal("expected runtime hooks chain to remain available for repo discovery")
+	}
+	out := service.hookExecutor.Run(
+		context.Background(),
+		runtimehooks.HookPointBeforeToolCall,
+		runtimehooks.HookContext{Metadata: map[string]any{"tool_name": "bash", "workdir": cfg.Workdir}},
+	)
+	if out.Blocked || len(out.Results) != 0 {
+		t.Fatalf("unexpected hook output without user/repo config: %+v", out)
+	}
+}
+
 func TestBuildUserBuiltinHookHandlerEdgeCases(t *testing.T) {
 	t.Parallel()
 
@@ -621,6 +646,38 @@ func TestBuildUserBuiltinHookHandlerEdgeCases(t *testing.T) {
 	}
 	_ = defaultWorkdirHandler(context.Background(), runtimehooks.HookContext{Metadata: map[string]any{"workdir": ""}})
 
+}
+
+func TestConfigureRuntimeHooksRejectsExternalKindAndDoesNotRegister(t *testing.T) {
+	t.Parallel()
+
+	cfg := *config.StaticDefaults()
+	cfg.Workdir = t.TempDir()
+	cfg.Runtime.Hooks.Items = []config.RuntimeHookItemConfig{
+		{
+			ID:      "external-command",
+			Enabled: runtimeBoolPtr(true),
+			Point:   "before_tool_call",
+			Scope:   "user",
+			Kind:    "command",
+			Mode:    "sync",
+			Handler: "warn_on_tool_call",
+			Params:  map[string]any{"tool_name": "bash"},
+		},
+	}
+	cfg.Runtime.Hooks.ApplyDefaults(config.StaticDefaults().Runtime.Hooks)
+
+	service := &Service{events: make(chan RuntimeEvent, 8)}
+	err := configureRuntimeHooksFromConfig(service, cfg)
+	if err == nil {
+		t.Fatal("expected external kind to be rejected")
+	}
+	if !strings.Contains(err.Error(), "not supported in P6-lite") {
+		t.Fatalf("error=%q, want contains not supported in P6-lite", err.Error())
+	}
+	if service.hookExecutor != nil {
+		t.Fatalf("unexpected hook executor after external kind rejection: %T", service.hookExecutor)
+	}
 }
 
 func TestConfigureRuntimeHooksInjectsAsyncResultSinkIntoBaseExecutor(t *testing.T) {
