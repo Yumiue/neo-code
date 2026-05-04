@@ -1642,20 +1642,46 @@ func TestPrepareBashInitRCAndBuildShellCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("prepareZshInitDir", func(t *testing.T) {
+		originalCreate := createZshInitDir
+		t.Cleanup(func() { createZshInitDir = originalCreate })
+
+		createZshInitDir = func() (string, error) { return "/tmp/mock-zdotdir", nil }
+		if got := prepareZshInitDir("/bin/zsh"); got != "/tmp/mock-zdotdir" {
+			t.Fatalf("prepareZshInitDir() = %q, want /tmp/mock-zdotdir", got)
+		}
+		if got := prepareZshInitDir("/bin/bash"); got != "" {
+			t.Fatalf("prepareZshInitDir(non-zsh) = %q, want empty", got)
+		}
+
+		createZshInitDir = func() (string, error) { return "", errors.New("mock create error") }
+		if got := prepareZshInitDir("/bin/zsh"); got != "" {
+			t.Fatalf("prepareZshInitDir(create error) = %q, want empty", got)
+		}
+	})
+
 	t.Run("buildShellCommand", func(t *testing.T) {
 		originalCreate := createBashInitRCFile
 		originalDelete := deleteBashInitRCFile
+		originalCreateZsh := createZshInitDir
+		originalDeleteZsh := deleteZshInitDir
 		t.Cleanup(func() { createBashInitRCFile = originalCreate })
 		t.Cleanup(func() { deleteBashInitRCFile = originalDelete })
+		t.Cleanup(func() { createZshInitDir = originalCreateZsh })
+		t.Cleanup(func() { deleteZshInitDir = originalDeleteZsh })
 
 		rcPath := filepath.Join(t.TempDir(), "mock.rc")
 		if err := os.WriteFile(rcPath, []byte("mock"), 0o600); err != nil {
 			t.Fatalf("WriteFile() error = %v", err)
 		}
+		zdotDirPath := t.TempDir()
 
 		deletedPath := ""
+		deletedZdotDir := ""
 		createBashInitRCFile = func() (string, error) { return rcPath, nil }
 		deleteBashInitRCFile = func(path string) { deletedPath = path }
+		createZshInitDir = func() (string, error) { return zdotDirPath, nil }
+		deleteZshInitDir = func(path string) { deletedZdotDir = path }
 
 		cmd, cleanup := buildShellCommand("/bin/bash", ManualShellOptions{Workdir: t.TempDir()}, "/tmp/diag.sock")
 		if cmd.Path != "/bin/bash" {
@@ -1683,7 +1709,20 @@ func TestPrepareBashInitRCAndBuildShellCommand(t *testing.T) {
 		if strings.Contains(strings.Join(cmd.Args, " "), "--rcfile") {
 			t.Fatalf("zsh cmd.Args = %#v, should not contain --rcfile", cmd.Args)
 		}
+		foundZdotDir := false
+		for _, env := range cmd.Env {
+			if env == "ZDOTDIR="+zdotDirPath {
+				foundZdotDir = true
+				break
+			}
+		}
+		if !foundZdotDir {
+			t.Fatalf("zsh cmd.Env = %#v, want contains ZDOTDIR", cmd.Env)
+		}
 		cleanup()
+		if deletedZdotDir != zdotDirPath {
+			t.Fatalf("deletedZdotDir = %q, want %q", deletedZdotDir, zdotDirPath)
+		}
 	})
 }
 
@@ -1710,6 +1749,32 @@ func TestDefaultBashInitRCFileLifecycle(t *testing.T) {
 	}
 
 	defaultDeleteBashInitRCFile("")
+}
+
+func TestDefaultZshInitDirLifecycle(t *testing.T) {
+	path, err := defaultCreateZshInitDir()
+	if err != nil {
+		t.Fatalf("defaultCreateZshInitDir() error = %v", err)
+	}
+	rcPath := filepath.Join(path, ".zshrc")
+	data, readErr := os.ReadFile(rcPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile() error = %v", readErr)
+	}
+	text := string(data)
+	if !strings.Contains(text, "neocode shell integration") {
+		t.Fatalf("zsh rc content missing integration marker: %q", text)
+	}
+	if !strings.Contains(text, ". \"${HOME}/.zshrc\"") {
+		t.Fatalf("zsh rc content missing ${HOME}/.zshrc include: %q", text)
+	}
+
+	defaultDeleteZshInitDir(path)
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Fatalf("expected zsh init dir removed, stat err = %v", statErr)
+	}
+
+	defaultDeleteZshInitDir("")
 }
 
 func TestResolveShellPathDefaultsToBinBash(t *testing.T) {

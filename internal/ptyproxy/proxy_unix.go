@@ -598,10 +598,20 @@ func buildShellCommand(shellPath string, options ManualShellOptions, socketPath 
 	command := exec.Command(shellPath)
 	command.Dir = options.Workdir
 	command.Env = MergeEnvVar(os.Environ(), DiagSocketEnv, socketPath)
-	cleanup := func() {}
+
+	cleanupTasks := make([]func(), 0, 2)
+	cleanup := func() {
+		for index := len(cleanupTasks) - 1; index >= 0; index-- {
+			cleanupTasks[index]()
+		}
+	}
 	if rcFile := prepareBashInitRC(shellPath); rcFile != "" {
 		command.Args = append(command.Args, "--rcfile", rcFile)
-		cleanup = func() { deleteBashInitRCFile(rcFile) }
+		cleanupTasks = append(cleanupTasks, func() { deleteBashInitRCFile(rcFile) })
+	}
+	if zdotDir := prepareZshInitDir(shellPath); zdotDir != "" {
+		command.Env = MergeEnvVar(command.Env, "ZDOTDIR", zdotDir)
+		cleanupTasks = append(cleanupTasks, func() { deleteZshInitDir(zdotDir) })
 	}
 	return command, cleanup
 }
@@ -612,6 +622,8 @@ func buildShellCommand(shellPath string, options ManualShellOptions, socketPath 
 var (
 	createBashInitRCFile = defaultCreateBashInitRCFile
 	deleteBashInitRCFile = defaultDeleteBashInitRCFile
+	createZshInitDir     = defaultCreateZshInitDir
+	deleteZshInitDir     = defaultDeleteZshInitDir
 )
 
 func prepareBashInitRC(shellPath string) string {
@@ -625,9 +637,28 @@ func prepareBashInitRC(shellPath string) string {
 	return path
 }
 
+// prepareZshInitDir 当 shell 为 zsh 时创建临时 ZDOTDIR 目录并注入 .zshrc。
+// 返回空字符串表示跳过（非 zsh 或创建失败）。
+func prepareZshInitDir(shellPath string) string {
+	if !isZshShell(shellPath) {
+		return ""
+	}
+	path, err := createZshInitDir()
+	if err != nil {
+		return ""
+	}
+	return path
+}
+
 func isBashShell(shellPath string) bool {
 	base := strings.ToLower(filepath.Base(shellPath))
 	return base == "bash"
+}
+
+// isZshShell 判断给定 shell 路径是否为 zsh。
+func isZshShell(shellPath string) bool {
+	base := strings.ToLower(filepath.Base(shellPath))
+	return base == "zsh"
 }
 
 func defaultCreateBashInitRCFile() (string, error) {
@@ -656,6 +687,33 @@ fi
 func defaultDeleteBashInitRCFile(path string) {
 	if path != "" {
 		_ = os.Remove(path)
+	}
+}
+
+// defaultCreateZshInitDir 创建临时 ZDOTDIR，并写入注入脚本到 .zshrc。
+func defaultCreateZshInitDir() (string, error) {
+	content := shellInitScript + `
+# Load user's original zshrc to preserve custom prompt, aliases, etc.
+if [ -f "${HOME}/.zshrc" ]; then
+	. "${HOME}/.zshrc"
+fi
+`
+	directory, err := os.MkdirTemp("", "neocode-zsh-*")
+	if err != nil {
+		return "", fmt.Errorf("ptyproxy: create zsh init directory: %w", err)
+	}
+	rcPath := filepath.Join(directory, ".zshrc")
+	if writeErr := os.WriteFile(rcPath, []byte(content), 0o600); writeErr != nil {
+		_ = os.RemoveAll(directory)
+		return "", fmt.Errorf("ptyproxy: write zsh rc file: %w", writeErr)
+	}
+	return directory, nil
+}
+
+// defaultDeleteZshInitDir 删除临时 ZDOTDIR 目录及其注入文件。
+func defaultDeleteZshInitDir(path string) {
+	if path != "" {
+		_ = os.RemoveAll(path)
 	}
 }
 
