@@ -132,6 +132,7 @@ async function loadSessionWithInsights(gatewayAPI: GatewayAPI, sessionId: string
 
 /** 将后端历史消息映射为前端 ChatMessage 列表，正确合并 tool_result 回 tool_call */
 function mapHistoryMessages(backendMessages: BackendMessage[]): Array<ReturnType<typeof useChatStore.getState>['messages'][0]> {
+  let _idCounter = 0
   // Phase 1: Collect tool results by tool_call_id
   const toolResults = new Map<string, { content: string; isError: boolean }>()
   for (const msg of backendMessages) {
@@ -150,7 +151,7 @@ function mapHistoryMessages(backendMessages: BackendMessage[]): Array<ReturnType
       // If assistant message also has text content, emit that first
       if (msg.content && msg.role === 'assistant') {
         result.push({
-          id: `hist_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          id: `hist_${Date.now()}_${_idCounter++}`,
           role: 'assistant',
           type: 'text',
           content: msg.content,
@@ -161,7 +162,7 @@ function mapHistoryMessages(backendMessages: BackendMessage[]): Array<ReturnType
       for (const tc of msg.tool_calls) {
         const tr = toolResults.get(tc.id)
         result.push({
-          id: `hist_tc_${tc.id}_${Date.now()}`,
+          id: `hist_tc_${tc.id}_${_idCounter++}`,
           role: 'tool',
           type: 'tool_call',
           content: '',
@@ -175,7 +176,7 @@ function mapHistoryMessages(backendMessages: BackendMessage[]): Array<ReturnType
       }
     } else {
       result.push({
-        id: `hist_${msg.role}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        id: `hist_${msg.role}_${Date.now()}_${_idCounter++}`,
         role: (msg.role as 'user' | 'assistant' | 'tool') || 'assistant',
         type: 'text',
         content: msg.content,

@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef } from 'react'
 import { useSessionStore } from '@/stores/useSessionStore'
 import { useRuntimeInsightStore } from '@/stores/useRuntimeInsightStore'
 import { useGatewayAPI } from '@/context/RuntimeProvider'
@@ -31,6 +31,7 @@ export default function CheckpointTab() {
   const [expandedCpId, setExpandedCpId] = useState<string | null>(null)
   const [diffLoading, setDiffLoading] = useState<string | null>(null)
   const [diffResult, setDiffResult] = useState<Record<string, { added: string[]; deleted: string[]; modified: string[] } | null>>({})
+  const diffAbortRef = useRef<AbortController | null>(null)
 
   const [confirm, setConfirm] = useState<{
     title: string
@@ -59,13 +60,20 @@ export default function CheckpointTab() {
     if (!gatewayAPI || !sessionId) return
     if (expandedCpId === cpId) {
       setExpandedCpId(null)
+      diffAbortRef.current?.abort()
+      diffAbortRef.current = null
+      setDiffLoading(null)
       return
     }
     setExpandedCpId(cpId)
     if (!diffResult[cpId]) {
+      diffAbortRef.current?.abort()
+      const abortCtrl = new AbortController()
+      diffAbortRef.current = abortCtrl
       setDiffLoading(cpId)
       try {
         const result = await gatewayAPI.checkpointDiff({ session_id: sessionId, checkpoint_id: cpId })
+        if (abortCtrl.signal.aborted) return
         const payload = result.payload
         setDiffResult((prev) => ({
           ...prev,
@@ -76,9 +84,14 @@ export default function CheckpointTab() {
           },
         }))
       } catch {
-        setDiffResult((prev) => ({ ...prev, [cpId]: null }))
+        if (!abortCtrl.signal.aborted) {
+          setDiffResult((prev) => ({ ...prev, [cpId]: null }))
+        }
       } finally {
-        setDiffLoading(null)
+        if (diffAbortRef.current === abortCtrl) {
+          setDiffLoading(null)
+          diffAbortRef.current = null
+        }
       }
     }
   }
