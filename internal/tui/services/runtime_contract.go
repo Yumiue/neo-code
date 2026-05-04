@@ -118,35 +118,35 @@ const (
 
 // PermissionRequestPayload 描述权限请求事件载荷。
 type PermissionRequestPayload struct {
-	RequestID     string
-	ToolCallID    string
-	ToolName      string
-	ToolCategory  string
-	ActionType    string
-	Operation     string
-	TargetType    string
-	Target        string
-	Decision      string
-	Reason        string
-	RuleID        string
-	RememberScope string
+	RequestID     string `json:"request_id"`
+	ToolCallID    string `json:"tool_call_id"`
+	ToolName      string `json:"tool_name"`
+	ToolCategory  string `json:"tool_category"`
+	ActionType    string `json:"action_type"`
+	Operation     string `json:"operation"`
+	TargetType    string `json:"target_type"`
+	Target        string `json:"target"`
+	Decision      string `json:"decision"`
+	Reason        string `json:"reason"`
+	RuleID        string `json:"rule_id"`
+	RememberScope string `json:"remember_scope,omitempty"`
 }
 
 // PermissionResolvedPayload 描述权限请求处理结果。
 type PermissionResolvedPayload struct {
-	RequestID     string
-	ToolCallID    string
-	ToolName      string
-	ToolCategory  string
-	ActionType    string
-	Operation     string
-	TargetType    string
-	Target        string
-	Decision      string
-	Reason        string
-	RuleID        string
-	RememberScope string
-	ResolvedAs    string
+	RequestID     string `json:"request_id"`
+	ToolCallID    string `json:"tool_call_id"`
+	ToolName      string `json:"tool_name"`
+	ToolCategory  string `json:"tool_category"`
+	ActionType    string `json:"action_type"`
+	Operation     string `json:"operation"`
+	TargetType    string `json:"target_type"`
+	Target        string `json:"target"`
+	Decision      string `json:"decision"`
+	Reason        string `json:"reason"`
+	RuleID        string `json:"rule_id"`
+	RememberScope string `json:"remember_scope,omitempty"`
+	ResolvedAs    string `json:"resolved_as,omitempty"`
 }
 
 // SessionSkillState 描述会话技能状态。

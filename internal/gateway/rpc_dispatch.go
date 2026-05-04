@@ -62,6 +62,7 @@ func dispatchRPCRequest(ctx context.Context, request protocol.JSONRPCRequest, ru
 		SessionID: normalized.SessionID,
 		RunID:     normalized.RunID,
 		Workdir:   normalized.Workdir,
+		Mode:      normalized.Mode,
 		Payload:   normalized.Payload,
 	}
 
@@ -259,6 +260,10 @@ func hydrateFrameSessionFromConnection(ctx context.Context, frame MessageFrame) 
 	if strings.TrimSpace(frame.SessionID) != "" {
 		return frame
 	}
+	// new_session 请求跳过绑定回填，由下游创建全新会话
+	if frame.SkipSessionHydration {
+		return frame
+	}
 
 	payloadSessionID := strings.TrimSpace(extractSessionIDFromPayload(frame.Payload))
 	if payloadSessionID != "" {
@@ -295,6 +300,11 @@ func hydrateFrameRunPayload(frame MessageFrame) MessageFrame {
 		return frame
 	}
 
+	// new_session=true 时跳过连接绑定的 session_id 回填，让后端创建全新会话
+	if params.NewSession {
+		frame.SkipSessionHydration = true
+	}
+
 	if strings.TrimSpace(frame.SessionID) == "" {
 		frame.SessionID = strings.TrimSpace(params.SessionID)
 	}
@@ -303,6 +313,9 @@ func hydrateFrameRunPayload(frame MessageFrame) MessageFrame {
 	}
 	if strings.TrimSpace(frame.Workdir) == "" {
 		frame.Workdir = strings.TrimSpace(params.Workdir)
+	}
+	if strings.TrimSpace(frame.Mode) == "" {
+		frame.Mode = strings.TrimSpace(params.Mode)
 	}
 	if strings.TrimSpace(frame.InputText) == "" {
 		frame.InputText = strings.TrimSpace(params.InputText)
@@ -341,7 +354,6 @@ func convertProtocolRunInputParts(parts []protocol.RunInputPart) []InputPart {
 func requiresSession(action FrameAction) bool {
 	switch action {
 	case FrameActionBindStream,
-		FrameActionRun,
 		FrameActionCompact,
 		FrameActionLoadSession,
 		FrameActionListSessionTodos,

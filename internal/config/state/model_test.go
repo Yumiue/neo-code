@@ -9,7 +9,7 @@ import (
 	providertypes "neo-code/internal/provider/types"
 )
 
-func TestCatalogInputFromProviderBuiltinUsesStaticModelsAndDisablesDiscovery(t *testing.T) {
+func TestCatalogInputFromProviderBuiltinUsesStaticModelsAndEnablesDiscovery(t *testing.T) {
 	t.Setenv("CATALOG_PROVIDER_API_KEY", "secret-key")
 
 	cfg := configpkg.ProviderConfig{
@@ -47,8 +47,8 @@ func TestCatalogInputFromProviderBuiltinUsesStaticModelsAndDisablesDiscovery(t *
 	if len(input.ConfiguredModels) != 1 || input.ConfiguredModels[0].ID != "model-a" {
 		t.Fatalf("expected configured models to be normalized, got %+v", input.ConfiguredModels)
 	}
-	if !input.DisableDiscovery {
-		t.Fatal("expected builtin provider to disable discovery")
+	if input.DisableDiscovery {
+		t.Fatal("expected builtin provider to enable discovery")
 	}
 
 	cfg.Models[0].ID = "mutated"

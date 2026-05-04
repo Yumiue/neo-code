@@ -303,6 +303,7 @@ type RunParams struct {
 	InputText  string         `json:"input_text,omitempty"`  // 与 input_parts 至少一个非空
 	InputParts []RunInputPart `json:"input_parts,omitempty"` // text|image
 	Workdir    string         `json:"workdir,omitempty"`     // 请求级工作目录覆盖
+	Mode       string         `json:"mode,omitempty"`        // Agent 工作模式：build|plan，可选，默认沿用 session 当前 mode
 }
 
 type RunInputPart struct {
@@ -320,6 +321,7 @@ type RunInputPart struct {
 2. `type=image` 时 `media.uri` 与 `media.mime_type` `MUST` 非空。  
 3. 未知字段会因严格解码触发 `invalid_frame`。  
 4. `run_id` 归一化顺序为：显式 `run_id` > `request_id` > 网关生成 `run_<timestamp>`。  
+5. `mode` 可选值为 `"build"` 或 `"plan"`，为空时默认沿用 session 当前 mode（新会话默认为 `"build"`）。切换 mode 后，后端会更新 session 并影响后续运行的工具可用性和 prompt 策略。  
 
 Response Schema：
 

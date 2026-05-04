@@ -45,3 +45,10 @@ workspace.xml
 # VitePress / frontend build artifacts
 www/.vitepress/cache/
 www/.vitepress/dist/
+
+# Web frontend build artifacts
+web/dist/
+web/.vite/
+web/build/
+web/release/
+web/dist-electron/

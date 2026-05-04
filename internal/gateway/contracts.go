@@ -59,6 +59,8 @@ type RunInput struct {
 	InputParts []InputPart
 	// Workdir 是请求级工作目录覆盖值。
 	Workdir string
+	// Mode 是请求级 Agent 工作模式（build / plan）。
+	Mode string
 }
 
 // CompactInput 表示网关向下游运行端口发起 compact 动作时的输入。
@@ -524,6 +526,8 @@ type Session struct {
 	Provider string `json:"provider,omitempty"`
 	// Model 是会话当前模型。
 	Model string `json:"model,omitempty"`
+	// AgentMode 是会话当前 Agent 工作模式。
+	AgentMode string `json:"agent_mode,omitempty"`
 	// Messages 是会话消息快照。
 	Messages []SessionMessage `json:"messages,omitempty"`
 }
@@ -538,6 +542,8 @@ type SessionSummary struct {
 	CreatedAt time.Time `json:"created_at"`
 	// UpdatedAt 是会话更新时间。
 	UpdatedAt time.Time `json:"updated_at"`
+	// AgentMode 是会话当前 Agent 工作模式。
+	AgentMode string `json:"agent_mode,omitempty"`
 }
 
 // TodoViewItem 描述会话 Todo 单项快照。

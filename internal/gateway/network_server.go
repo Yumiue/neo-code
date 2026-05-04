@@ -66,7 +66,9 @@ type NetworkServerOptions struct {
 	AllowedOrigins               []string
 	// ConnectionCountChanged 在活跃长连接数变化时回调当前总数，用于空闲退出治理。
 	ConnectionCountChanged func(active int)
-	listenFn               func(network, address string) (net.Listener, error)
+	// StaticFileDir 可选：如果非空，从该目录提供 SPA 静态文件服务。
+	StaticFileDir string
+	listenFn      func(network, address string) (net.Listener, error)
 }
 
 // NetworkServer 提供 HTTP/WebSocket/SSE 网络访问面的统一入口服务。
@@ -87,7 +89,8 @@ type NetworkServer struct {
 	metrics              *GatewayMetrics
 	allowedOrigins       []string
 	connectionCountChanged func(active int)
-	startedAt            time.Time
+	staticFileDir         string
+	startedAt             time.Time
 
 	mu         sync.Mutex
 	server     *http.Server
@@ -185,7 +188,8 @@ func NewNetworkServer(options NetworkServerOptions) (*NetworkServer, error) {
 		metrics:              metrics,
 		allowedOrigins:       allowedOrigins,
 		connectionCountChanged: options.ConnectionCountChanged,
-		startedAt:            time.Now().UTC(),
+		staticFileDir:         options.StaticFileDir,
+		startedAt:              time.Now().UTC(),
 		wsConns:              make(map[*websocket.Conn]context.CancelFunc),
 		sseCancels:           make(map[int]context.CancelFunc),
 	}, nil
@@ -361,12 +365,20 @@ func (s *NetworkServer) buildHandler(runtimePort RuntimePort) http.Handler {
 	mux.HandleFunc("/sse", func(writer http.ResponseWriter, request *http.Request) {
 		s.handleSSERequest(writer, request, runtimePort)
 	})
+	if s.staticFileDir != "" {
+		return WithStaticFileHandler(mux, s.staticFileDir, s.logger)
+	}
 	return mux
 }
 
 // withCORS 为网络入口注入 CORS 头，仅对白名单 Origin 回显允许值。
+// WebSocket 升级请求不受 CORS 约束，直接放行交予 WS 握手阶段的 Origin 校验。
 func (s *NetworkServer) withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if strings.EqualFold(request.Header.Get("Upgrade"), "websocket") {
+			next.ServeHTTP(writer, request)
+			return
+		}
 		origin := strings.TrimSpace(request.Header.Get("Origin"))
 		if origin != "" {
 			if !s.isAllowedOrigin(origin) {
@@ -926,6 +938,7 @@ func (s *NetworkServer) decorateRequestContext(base context.Context, source Requ
 	ctx := WithRequestSource(base, source)
 	authState := NewConnectionAuthState()
 	ctx = WithConnectionAuthState(ctx, authState)
+	ctx = WithConnectionWorkspaceState(ctx, NewConnectionWorkspaceState())
 
 	trimmedToken := strings.TrimSpace(token)
 	if trimmedToken != "" {
@@ -1099,6 +1112,7 @@ func (s *NetworkServer) isAllowedOrigin(origin string) bool {
 }
 
 // validateWebSocketOrigin 在握手阶段基于实例 allowlist 校验 WebSocket 来源。
+// Electron 的 file:// 协议产生 opaque origin (null)，此类来源不受 CORS allowlist 约束。
 func (s *NetworkServer) validateWebSocketOrigin(request *http.Request) error {
 	if request == nil {
 		return errors.New("invalid websocket request")
@@ -1107,14 +1121,24 @@ func (s *NetworkServer) validateWebSocketOrigin(request *http.Request) error {
 	if origin == "" {
 		return nil
 	}
+	if isElectronCompatibleOrigin(origin) {
+		return nil
+	}
 	if !s.isAllowedOrigin(origin) {
 		return fmt.Errorf("websocket origin %q is not allowed", origin)
 	}
 	return nil
 }
 
+// isElectronCompatibleOrigin 放行 Electron/Chromium 的 file:// 协议来源，
+// 包括 "null"（opaque origin 的序列化值）和任何以 file:// 开头的 Origin。
+func isElectronCompatibleOrigin(origin string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(origin))
+	return normalized == "null" || strings.HasPrefix(normalized, "file://")
+}
+
 func defaultControlPlaneOrigins() []string {
-	return []string{"http://localhost", "http://127.0.0.1", "http://[::1]", "app://"}
+	return []string{"http://localhost", "http://127.0.0.1", "http://[::1]", "app://", "file://", "null"}
 }
 
 func normalizeControlPlaneOrigins(origins []string) []string {

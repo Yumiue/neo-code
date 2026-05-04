@@ -61,13 +61,37 @@ type bridgeSessionLoader interface {
 }
 
 // defaultBuildGatewayRuntimePort 构建网关运行时 RuntimePort 适配器，并返回对应资源清理函数。
+// 当启用多工作区时，返回 MultiWorkspaceRuntime 路由代理，每个工作区拥有独立的 RuntimeBundle。
 func defaultBuildGatewayRuntimePort(ctx context.Context, workdir string) (gateway.RuntimePort, func() error, error) {
-	bundle, err := app.BuildGatewayServerDeps(ctx, app.BootstrapOptions{Workdir: strings.TrimSpace(workdir)})
+	trimmedWorkdir := strings.TrimSpace(workdir)
+
+	// 先构建默认工作区的 bundle，用于获取 baseDir 和共享组件。
+	bundle, err := app.BuildGatewayServerDeps(ctx, app.BootstrapOptions{Workdir: trimmedWorkdir})
 	if err != nil {
 		return nil, nil, err
 	}
 
-	bridge, err := newGatewayRuntimePortBridge(ctx, bundle.Runtime, bundle.SessionStore, bundle.ConfigManager, bundle.ProviderSelection)
+	baseDir := bundle.ConfigManager.BaseDir()
+	index := agentsession.NewWorkspaceIndex(baseDir)
+	if err := index.Load(); err != nil {
+		_ = bundle.Close()
+		return nil, nil, err
+	}
+
+	defaultHash := ""
+	if trimmedWorkdir != "" {
+		defaultHash = agentsession.HashWorkspaceRoot(trimmedWorkdir)
+		if _, err := index.Register(trimmedWorkdir, ""); err != nil {
+			_ = bundle.Close()
+			return nil, nil, err
+		}
+		if err := index.Save(); err != nil {
+			_ = bundle.Close()
+			return nil, nil, err
+		}
+	}
+
+	bridge, err := newGatewayRuntimePortBridge(ctx, bundle.Runtime, bundle.SessionStore, bundle.ConfigManager, bundle.ProviderSelection, bundle.ToolRegistry)
 	if err != nil {
 		if bundle.Close != nil {
 			_ = bundle.Close()
@@ -75,7 +99,37 @@ func defaultBuildGatewayRuntimePort(ctx context.Context, workdir string) (gatewa
 		return nil, nil, err
 	}
 
-	cleanup := func() error {
+	buildPort := func(ctx context.Context, wd string) (gateway.RuntimePort, func() error, error) {
+		trimmedWd := strings.TrimSpace(wd)
+		if trimmedWd != "" {
+			_ = os.MkdirAll(trimmedWd, 0o755)
+		}
+		b, err := app.BuildGatewayServerDeps(ctx, app.BootstrapOptions{Workdir: trimmedWd})
+		if err != nil {
+			return nil, nil, err
+		}
+		br, err := newGatewayRuntimePortBridge(ctx, b.Runtime, b.SessionStore, b.ConfigManager, b.ProviderSelection, b.ToolRegistry)
+		if err != nil {
+			if b.Close != nil {
+				_ = b.Close()
+			}
+			return nil, nil, err
+		}
+		cleanup := func() error {
+			var closeErr error
+			if br != nil {
+				closeErr = errors.Join(closeErr, br.Close())
+			}
+			if b.Close != nil {
+				closeErr = errors.Join(closeErr, b.Close())
+			}
+			return closeErr
+		}
+		return br, cleanup, nil
+	}
+
+	mw := gateway.NewMultiWorkspaceRuntime(index, defaultHash, buildPort)
+	mw.PreloadWorkspaceBundle(defaultHash, bridge, func() error {
 		var closeErr error
 		if bridge != nil {
 			closeErr = errors.Join(closeErr, bridge.Close())
@@ -84,9 +138,10 @@ func defaultBuildGatewayRuntimePort(ctx context.Context, workdir string) (gatewa
 			closeErr = errors.Join(closeErr, bundle.Close())
 		}
 		return closeErr
-	}
+	})
+	mw.SetManagementPort(bridge)
 
-	return bridge, cleanup, nil
+	return mw, mw.Close, nil
 }
 
 // configManagerPort 定义桥接层对配置管理器的最小需求。
@@ -111,6 +166,7 @@ type gatewayRuntimePortBridge struct {
 	sessionStore      bridgeSessionStore
 	configManager     configManagerPort
 	providerSelection providerSelectorPort
+	toolRegistry      *tools.Registry
 	events            chan gateway.RuntimeEvent
 
 	stopOnce sync.Once
@@ -132,12 +188,15 @@ func newGatewayRuntimePortBridge(
 	}
 	var cm configManagerPort
 	var ps providerSelectorPort
+	var tr *tools.Registry
 	for _, extra := range extras {
 		switch typed := extra.(type) {
 		case configManagerPort:
 			cm = typed
 		case providerSelectorPort:
 			ps = typed
+		case *tools.Registry:
+			tr = typed
 		}
 	}
 
@@ -146,6 +205,7 @@ func newGatewayRuntimePortBridge(
 		sessionStore:      store,
 		configManager:     cm,
 		providerSelection: ps,
+		toolRegistry:      tr,
 		events:            make(chan gateway.RuntimeEvent, 128),
 		stopCh:            make(chan struct{}),
 	}
@@ -158,7 +218,22 @@ func (b *gatewayRuntimePortBridge) Run(ctx context.Context, input gateway.RunInp
 	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
 		return err
 	}
-	return b.runtime.Submit(ctx, convertGatewayRunInput(input))
+	err := b.runtime.Submit(ctx, convertGatewayRunInput(input))
+	if err != nil && isRuntimeNotFoundError(err) {
+		sessionID := strings.TrimSpace(input.SessionID)
+		if sessionID == "" {
+			return err
+		}
+		creator, ok := b.runtime.(runtimeSessionCreator)
+		if !ok {
+			return err
+		}
+		if _, createErr := creator.CreateSession(ctx, sessionID); createErr != nil {
+			return err
+		}
+		return b.runtime.Submit(ctx, convertGatewayRunInput(input))
+	}
+	return err
 }
 
 // Compact 将 gateway.compact 请求映射到 runtime 紧凑化能力并回填统一结果。
@@ -512,21 +587,24 @@ func (b *gatewayRuntimePortBridge) ListFiles(ctx context.Context, input gateway.
 	return result, nil
 }
 
-// ListModels 列出可用模型。
+// ListModels 列出可用模型（仅返回当前选中 provider 的模型）。
 func (b *gatewayRuntimePortBridge) ListModels(ctx context.Context, input gateway.ListModelsInput) ([]gateway.ModelEntry, error) {
 	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
 		return nil, err
 	}
-	if b.providerSelection == nil {
-		return nil, fmt.Errorf("gateway runtime bridge: provider selection is unavailable")
-	}
-	options, err := b.providerSelection.ListProviderOptions(ctx)
+
+	// 复用 ListProviders 的 Selected 标记逻辑，避免与 cfg.SelectedProvider 单独比较产生不一致
+	providers, err := b.ListProviders(ctx, gateway.ListProvidersInput{SubjectID: input.SubjectID})
 	if err != nil {
 		return nil, err
 	}
+
 	models := make([]gateway.ModelEntry, 0)
-	for _, option := range options {
-		for _, model := range option.Models {
+	for _, p := range providers {
+		if !p.Selected {
+			continue
+		}
+		for _, model := range p.Models {
 			id := strings.TrimSpace(model.ID)
 			if id == "" {
 				continue
@@ -538,7 +616,7 @@ func (b *gatewayRuntimePortBridge) ListModels(ctx context.Context, input gateway
 			models = append(models, gateway.ModelEntry{
 				ID:       id,
 				Name:     name,
-				Provider: strings.TrimSpace(option.ID),
+				Provider: strings.TrimSpace(p.ID),
 			})
 		}
 	}
@@ -726,7 +804,7 @@ func (b *gatewayRuntimePortBridge) UpsertMCPServer(ctx context.Context, input ga
 	}
 	server := input.Server.Clone()
 	server.ID = strings.TrimSpace(server.ID)
-	return b.configManager.Update(ctx, func(cfg *config.Config) error {
+	if err := b.configManager.Update(ctx, func(cfg *config.Config) error {
 		servers := cfg.Tools.MCP.Clone().Servers
 		replaced := false
 		for index := range servers {
@@ -741,7 +819,13 @@ func (b *gatewayRuntimePortBridge) UpsertMCPServer(ctx context.Context, input ga
 		}
 		cfg.Tools.MCP.Servers = servers
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	if err := app.RebuildMCPServersForRegistry(b.toolRegistry, b.configManager.Get()); err != nil {
+		return fmt.Errorf("gateway runtime bridge: rebuild mcp servers after upsert: %w", err)
+	}
+	return nil
 }
 
 // SetMCPServerEnabled 修改 MCP server 启用状态。
@@ -753,7 +837,7 @@ func (b *gatewayRuntimePortBridge) SetMCPServerEnabled(ctx context.Context, inpu
 		return fmt.Errorf("gateway runtime bridge: config manager is unavailable")
 	}
 	id := strings.TrimSpace(input.ID)
-	return b.configManager.Update(ctx, func(cfg *config.Config) error {
+	if err := b.configManager.Update(ctx, func(cfg *config.Config) error {
 		servers := cfg.Tools.MCP.Clone().Servers
 		for index := range servers {
 			if strings.EqualFold(strings.TrimSpace(servers[index].ID), id) {
@@ -763,7 +847,13 @@ func (b *gatewayRuntimePortBridge) SetMCPServerEnabled(ctx context.Context, inpu
 			}
 		}
 		return fmt.Errorf("%w: mcp server %q not found", gateway.ErrRuntimeResourceNotFound, id)
-	})
+	}); err != nil {
+		return err
+	}
+	if err := app.RebuildMCPServersForRegistry(b.toolRegistry, b.configManager.Get()); err != nil {
+		return fmt.Errorf("gateway runtime bridge: rebuild mcp servers after set enabled: %w", err)
+	}
+	return nil
 }
 
 // DeleteMCPServer 删除 MCP server 配置。
@@ -775,7 +865,7 @@ func (b *gatewayRuntimePortBridge) DeleteMCPServer(ctx context.Context, input ga
 		return fmt.Errorf("gateway runtime bridge: config manager is unavailable")
 	}
 	id := strings.TrimSpace(input.ID)
-	return b.configManager.Update(ctx, func(cfg *config.Config) error {
+	if err := b.configManager.Update(ctx, func(cfg *config.Config) error {
 		servers := cfg.Tools.MCP.Clone().Servers
 		next := servers[:0]
 		removed := false
@@ -791,7 +881,13 @@ func (b *gatewayRuntimePortBridge) DeleteMCPServer(ctx context.Context, input ga
 		}
 		cfg.Tools.MCP.Servers = next
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	if err := app.RebuildMCPServersForRegistry(b.toolRegistry, b.configManager.Get()); err != nil {
+		return fmt.Errorf("gateway runtime bridge: rebuild mcp servers after delete: %w", err)
+	}
+	return nil
 }
 
 // Close 主动停止桥接事件泵，避免网关关闭后后台协程悬挂。
@@ -877,6 +973,7 @@ func convertGatewayRunInput(input gateway.RunInput) agentruntime.PrepareInput {
 		SessionID: strings.TrimSpace(input.SessionID),
 		RunID:     runID,
 		Workdir:   strings.TrimSpace(input.Workdir),
+		Mode:      strings.TrimSpace(input.Mode),
 		Text:      strings.Join(textParts, "\n"),
 		Images:    images,
 	}
@@ -1052,6 +1149,7 @@ func convertRuntimeSessionToGatewaySession(session agentsession.Session) gateway
 		Workdir:   strings.TrimSpace(session.Workdir),
 		Provider:  strings.TrimSpace(session.Provider),
 		Model:     strings.TrimSpace(session.Model),
+		AgentMode: strings.TrimSpace(string(session.AgentMode)),
 		Messages:  convertSessionMessages(session.Messages),
 	}
 }
@@ -1319,6 +1417,23 @@ func (b *gatewayRuntimePortBridge) modelDisplayName(ctx context.Context, provide
 		}
 	}
 	return modelID
+}
+
+// ReloadConfig 从磁盘重新加载内存配置快照，使管理端口的写入对其他工作区可见。
+func (b *gatewayRuntimePortBridge) ReloadConfig(ctx context.Context) error {
+	if b == nil || b.configManager == nil {
+		return nil
+	}
+	_, err := b.configManager.Load(ctx)
+	return err
+}
+
+// RebuildMCPServers 根据当前配置重建 MCP Server 工具注册表。
+func (b *gatewayRuntimePortBridge) RebuildMCPServers() error {
+	if b == nil || b.toolRegistry == nil || b.configManager == nil {
+		return nil
+	}
+	return app.RebuildMCPServersForRegistry(b.toolRegistry, b.configManager.Get())
 }
 
 // currentConfig 返回当前配置快照；桥接器未绑定配置管理器时退回静态默认值。
