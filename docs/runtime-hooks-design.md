@@ -24,11 +24,13 @@ P2 仅支持：
 - `scope=user`
 - `kind=builtin`
 - `mode=sync`
-- 挂载点：`before_tool_call`、`after_tool_result`、`before_completion_decision`
+- 挂载点：与 `HookPointCapability` 中 `UserAllowed=true` 的点位一致，当前包括：
+  `before_tool_call`、`after_tool_result`、`before_completion_decision`、`after_tool_failure`、
+  `session_start`、`session_end`、`user_prompt_submit`、`post_compact`、`subagent_stop`
 - handler：`require_file_exists`、`warn_on_tool_call`、`add_context_note`
 - external kinds（`command/http/prompt/agent`）在 P6-lite 阶段显式拒绝，不会半生效
 
-当前（P3）明确定义：
+当前（P3）明确不支持：
 
 - user hook 修改 tool 输入或 tool result
 - user hook 直接写入 provider-facing prompt
@@ -43,7 +45,7 @@ repo hooks 文件路径固定为：
 <workspace>/.neocode/hooks.yaml
 ```
 
-仅支持与 P2 相同的 builtin 子集（`kind=builtin`、`mode=sync`、3 个 points、3 个 handlers）。
+仅支持与 P2 相同的 builtin 子集（`kind=builtin`、`mode=sync`、`UserAllowed=true` points、3 个 handlers）。
 external kinds（`command/http/prompt/agent`）在 P6-lite 阶段显式拒绝，不会加载执行。
 
 执行顺序固定为：
