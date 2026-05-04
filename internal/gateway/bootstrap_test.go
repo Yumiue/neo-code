@@ -542,6 +542,47 @@ func TestCheckpointFrameHandlers(t *testing.T) {
 			t.Fatalf("payload = %#v", response.Payload)
 		}
 	})
+
+	t.Run("checkpoint diff success", func(t *testing.T) {
+		runtime := &bootstrapRuntimeStub{
+			checkpointDiffFn: func(_ context.Context, input CheckpointDiffInput) (CheckpointDiffResult, error) {
+				if input.SubjectID != "subject-1" || input.SessionID != "session-1" || input.CheckpointID != "cp-1" {
+					t.Fatalf("input = %#v", input)
+				}
+				return CheckpointDiffResult{
+					CheckpointID:     input.CheckpointID,
+					PrevCheckpointID: "cp-0",
+					Files: FileDiffs{
+						Modified: []string{"README.md"},
+					},
+					Patch: "diff --git a/README.md b/README.md",
+				}, nil
+			},
+		}
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+
+		response := handleCheckpointDiffFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionCheckpointDiff,
+			RequestID: "req-checkpoint-diff",
+			SessionID: " session-1 ",
+			Payload: map[string]any{
+				"checkpoint_id": " cp-1 ",
+			},
+		}, runtime)
+
+		if response.Type != FrameTypeAck || response.Action != FrameActionCheckpointDiff || response.SessionID != "session-1" {
+			t.Fatalf("response = %#v", response)
+		}
+		result, ok := response.Payload.(CheckpointDiffResult)
+		if !ok || result.CheckpointID != "cp-1" || result.PrevCheckpointID != "cp-0" ||
+			len(result.Files.Modified) != 1 || result.Files.Modified[0] != "README.md" ||
+			result.Patch != "diff --git a/README.md b/README.md" {
+			t.Fatalf("payload = %#v", response.Payload)
+		}
+	})
 }
 
 func TestDecodeCheckpointRestorePayloadBranches(t *testing.T) {
@@ -567,6 +608,31 @@ func TestDecodeCheckpointRestorePayloadBranches(t *testing.T) {
 
 	params = decodeCheckpointRestorePayload(invalidJSONMarshaler{})
 	if params != (CheckpointRestoreInput{}) {
+		t.Fatalf("marshal failure should return zero input, got %#v", params)
+	}
+}
+
+func TestDecodeCheckpointDiffPayloadBranches(t *testing.T) {
+	t.Parallel()
+
+	params := decodeCheckpointDiffPayload(map[string]any{
+		"session_id":    " session-1 ",
+		"checkpoint_id": " cp-1 ",
+	})
+	if params.SessionID != "session-1" || params.CheckpointID != "cp-1" {
+		t.Fatalf("decode map payload = %#v", params)
+	}
+
+	params = decodeCheckpointDiffPayload(CheckpointDiffInput{
+		SessionID:    "session-2",
+		CheckpointID: "cp-2",
+	})
+	if params.SessionID != "session-2" || params.CheckpointID != "cp-2" {
+		t.Fatalf("decode struct payload = %#v", params)
+	}
+
+	params = decodeCheckpointDiffPayload(invalidJSONMarshaler{})
+	if params != (CheckpointDiffInput{}) {
 		t.Fatalf("marshal failure should return zero input, got %#v", params)
 	}
 }

@@ -233,6 +233,13 @@ func (s *urlschemeIntegrationRuntimeStub) UndoRestore(
 	return gateway.CheckpointRestoreResult{}, nil
 }
 
+func (s *urlschemeIntegrationRuntimeStub) CheckpointDiff(
+	context.Context,
+	gateway.CheckpointDiffInput,
+) (gateway.CheckpointDiffResult, error) {
+	return gateway.CheckpointDiffResult{}, nil
+}
+
 func waitGatewayReady(address string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {

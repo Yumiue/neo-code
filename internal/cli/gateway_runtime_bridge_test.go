@@ -74,6 +74,9 @@ type runtimeStub struct {
 	undoRestoreSessionID  string
 	undoRestoreOut        agentruntime.RestoreResult
 	undoRestoreErr        error
+	checkpointDiffIn      agentruntime.CheckpointDiffInput
+	checkpointDiffOut     agentruntime.CheckpointDiffResult
+	checkpointDiffErr     error
 }
 
 const testBridgeSubjectID = bridgeLocalSubjectID
@@ -174,8 +177,9 @@ func (s *runtimeStub) UndoRestoreCheckpoint(_ context.Context, sessionID string)
 	s.undoRestoreSessionID = sessionID
 	return s.undoRestoreOut, s.undoRestoreErr
 }
-func (s *runtimeStub) CheckpointDiff(_ context.Context, _ agentruntime.CheckpointDiffInput) (agentruntime.CheckpointDiffResult, error) {
-	return agentruntime.CheckpointDiffResult{}, nil
+func (s *runtimeStub) CheckpointDiff(_ context.Context, input agentruntime.CheckpointDiffInput) (agentruntime.CheckpointDiffResult, error) {
+	s.checkpointDiffIn = input
+	return s.checkpointDiffOut, s.checkpointDiffErr
 }
 func (s *runtimeStub) DeleteSession(_ context.Context, _ string) error {
 	return nil
@@ -285,6 +289,18 @@ func TestGatewayRuntimePortBridgeCheckpointOperations(t *testing.T) {
 			CheckpointID: "guard-1",
 			SessionID:    "session-1",
 		},
+		checkpointDiffOut: agentruntime.CheckpointDiffResult{
+			CheckpointID:     "cp-2",
+			PrevCheckpointID: "cp-1",
+			CommitHash:       "commit-2",
+			PrevCommitHash:   "commit-1",
+			Files: agentruntime.FileDiffs{
+				Added:    []string{"new.txt"},
+				Deleted:  []string{"old.txt"},
+				Modified: []string{"keep.txt"},
+			},
+			Patch: "diff --git a/keep.txt b/keep.txt",
+		},
 	}
 
 	bridge := &gatewayRuntimePortBridge{runtime: stub}
@@ -328,6 +344,25 @@ func TestGatewayRuntimePortBridgeCheckpointOperations(t *testing.T) {
 	}
 	if undoResult.CheckpointID != "guard-1" || undoResult.SessionID != "session-1" {
 		t.Fatalf("UndoRestore() = %#v", undoResult)
+	}
+
+	diffResult, err := bridge.CheckpointDiff(context.Background(), gateway.CheckpointDiffInput{
+		SessionID:    " session-1 ",
+		CheckpointID: " cp-2 ",
+	})
+	if err != nil {
+		t.Fatalf("CheckpointDiff() error = %v", err)
+	}
+	if stub.checkpointDiffIn.SessionID != "session-1" || stub.checkpointDiffIn.CheckpointID != "cp-2" {
+		t.Fatalf("CheckpointDiff() forwarded %#v", stub.checkpointDiffIn)
+	}
+	if diffResult.CheckpointID != "cp-2" || diffResult.PrevCheckpointID != "cp-1" ||
+		diffResult.CommitHash != "commit-2" || diffResult.PrevCommitHash != "commit-1" ||
+		len(diffResult.Files.Added) != 1 || diffResult.Files.Added[0] != "new.txt" ||
+		len(diffResult.Files.Deleted) != 1 || diffResult.Files.Deleted[0] != "old.txt" ||
+		len(diffResult.Files.Modified) != 1 || diffResult.Files.Modified[0] != "keep.txt" ||
+		diffResult.Patch != "diff --git a/keep.txt b/keep.txt" {
+		t.Fatalf("CheckpointDiff() = %#v", diffResult)
 	}
 }
 
