@@ -1212,7 +1212,11 @@ func TestSendDiagIPCCommandFallbackToLegacySocket(t *testing.T) {
 	t.Setenv("HOME", homeDir)
 	t.Setenv("TMPDIR", legacyTmpDir)
 
-	legacySocket := filepath.Join(legacyTmpDir, fmt.Sprintf("%s%d%s", diagSocketFilePrefix, time.Now().UnixNano(), diagSocketFileSuffix))
+	const legacyPID = 48213
+	legacySocket := filepath.Join(
+		legacyTmpDir,
+		fmt.Sprintf("%s%d%s", diagSocketFilePrefix, legacyPID, diagSocketFileSuffix),
+	)
 	listener, resolvedLegacySocket, err := listenDiagSocket(legacySocket)
 	if err != nil {
 		t.Fatalf("listenDiagSocket() error = %v", err)
@@ -1251,7 +1255,12 @@ func TestSendDiagIPCCommandFallbackToLegacySocket(t *testing.T) {
 		serverDone <- writeErr
 	}()
 
-	primarySocket := filepath.Join(homeDir, ".neocode", "run", "missing.sock")
+	primarySocket := filepath.Join(
+		homeDir,
+		".neocode",
+		"run",
+		fmt.Sprintf("%s%d%s", diagSocketFilePrefix, legacyPID, diagSocketFileSuffix),
+	)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	response, err := sendDiagIPCCommand(ctx, primarySocket, diagIPCRequest{Cmd: diagCommandDiagnose})
@@ -1263,6 +1272,38 @@ func TestSendDiagIPCCommandFallbackToLegacySocket(t *testing.T) {
 	}
 	if serverErr := <-serverDone; serverErr != nil {
 		t.Fatalf("legacy socket server error = %v", serverErr)
+	}
+}
+
+func TestSendDiagIPCCommandFallbackRejectsMismatchedLegacyPID(t *testing.T) {
+	homeDir := t.TempDir()
+	legacyTmpDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	t.Setenv("TMPDIR", legacyTmpDir)
+
+	const legacyPID = 39101
+	legacySocket := filepath.Join(
+		legacyTmpDir,
+		fmt.Sprintf("%s%d%s", diagSocketFilePrefix, legacyPID, diagSocketFileSuffix),
+	)
+	listener, resolvedLegacySocket, err := listenDiagSocket(legacySocket)
+	if err != nil {
+		t.Fatalf("listenDiagSocket() error = %v", err)
+	}
+	defer func() {
+		_ = listener.Close()
+		_ = os.Remove(resolvedLegacySocket)
+	}()
+
+	primarySocket := filepath.Join(
+		homeDir,
+		".neocode",
+		"run",
+		fmt.Sprintf("%s%d%s", diagSocketFilePrefix, legacyPID+1, diagSocketFileSuffix),
+	)
+	_, err = sendDiagIPCCommand(context.Background(), primarySocket, diagIPCRequest{Cmd: diagCommandDiagnose})
+	if err == nil {
+		t.Fatal("expected sendDiagIPCCommand() to fail when legacy pid mismatches primary pid")
 	}
 }
 

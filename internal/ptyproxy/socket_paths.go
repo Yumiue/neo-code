@@ -35,6 +35,15 @@ func ResolveLegacyTmpDiagSocketPath() (string, error) {
 	return findLatestSocketByPattern(os.TempDir(), diagSocketFilePrefix+"*"+diagSocketFileSuffix)
 }
 
+// ResolveLegacyTmpDiagSocketPathForPID 返回临时目录下与指定 PID 匹配的遗留诊断 socket 路径。
+func ResolveLegacyTmpDiagSocketPathForPID(pid int) (string, error) {
+	if pid <= 0 {
+		return "", fmt.Errorf("ptyproxy: invalid diag socket pid %d", pid)
+	}
+	pattern := diagSocketFilePrefix + strconv.Itoa(pid) + diagSocketFileSuffix
+	return findLatestSocketByPattern(os.TempDir(), pattern)
+}
+
 // resolveDiagSocketPathForPID 按约定生成带 PID 的诊断 socket 路径。
 func resolveDiagSocketPathForPID(pid int) (string, error) {
 	runDir, err := resolveDiagSocketRunDir()
@@ -45,6 +54,24 @@ func resolveDiagSocketPathForPID(pid int) (string, error) {
 		pid = os.Getpid()
 	}
 	return filepath.Join(runDir, diagSocketFilePrefix+strconv.Itoa(pid)+diagSocketFileSuffix), nil
+}
+
+// parseDiagSocketPIDFromPath 从诊断 socket 文件名中解析 PID。
+func parseDiagSocketPIDFromPath(socketPath string) (int, error) {
+	base := strings.TrimSpace(filepath.Base(strings.TrimSpace(socketPath)))
+	if base == "." || base == "" {
+		return 0, fmt.Errorf("ptyproxy: diag socket path is empty")
+	}
+	if !strings.HasPrefix(base, diagSocketFilePrefix) || !strings.HasSuffix(base, diagSocketFileSuffix) {
+		return 0, fmt.Errorf("ptyproxy: diag socket filename is invalid: %s", base)
+	}
+	rawPID := strings.TrimPrefix(base, diagSocketFilePrefix)
+	rawPID = strings.TrimSuffix(rawPID, diagSocketFileSuffix)
+	pid, err := strconv.Atoi(rawPID)
+	if err != nil || pid <= 0 {
+		return 0, fmt.Errorf("ptyproxy: diag socket pid is invalid: %s", rawPID)
+	}
+	return pid, nil
 }
 
 // resolveDiagSocketRunDir 解析诊断 socket 的统一运行目录。

@@ -499,7 +499,7 @@ func sendDiagIPCCommand(ctx context.Context, socketPath string, request diagIPCR
 		return diagIPCResponse{}, err
 	}
 
-	legacyPath, fallbackErr := ResolveLegacyTmpDiagSocketPath()
+	legacyPath, fallbackErr := resolveValidatedLegacyDiagSocketPath(primaryPath)
 	if fallbackErr != nil {
 		return diagIPCResponse{}, err
 	}
@@ -517,6 +517,26 @@ func sendDiagIPCCommand(ctx context.Context, socketPath string, request diagIPCR
 		strings.TrimSpace(primaryPath),
 	)
 	return fallbackResponse, nil
+}
+
+// resolveValidatedLegacyDiagSocketPath 基于主 socket 的 PID 选择并校验 legacy socket，避免误连其他会话。
+func resolveValidatedLegacyDiagSocketPath(primaryPath string) (string, error) {
+	expectedPID, err := parseDiagSocketPIDFromPath(primaryPath)
+	if err != nil {
+		return "", err
+	}
+	legacyPath, err := ResolveLegacyTmpDiagSocketPathForPID(expectedPID)
+	if err != nil {
+		return "", err
+	}
+	legacyPID, err := parseDiagSocketPIDFromPath(legacyPath)
+	if err != nil {
+		return "", err
+	}
+	if legacyPID != expectedPID {
+		return "", fmt.Errorf("ptyproxy: legacy diag socket pid mismatch, want %d got %d", expectedPID, legacyPID)
+	}
+	return legacyPath, nil
 }
 
 // sendDiagIPCCommandToPath 在指定 socket 路径上执行一次 JSON-Lines 请求响应。
