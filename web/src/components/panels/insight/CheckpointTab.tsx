@@ -13,7 +13,7 @@ import {
   FileMinus,
   FileEdit,
 } from 'lucide-react'
-import type { CheckpointCreatedPayload, CheckpointRestoredPayload, CheckpointUndoRestorePayload } from '@/api/protocol'
+import type { CheckpointRestoredPayload } from '@/api/protocol'
 
 function formatCpTime(ms: number): string {
   const d = new Date(ms)
