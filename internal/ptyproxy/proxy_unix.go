@@ -202,7 +202,6 @@ func RunManualShell(ctx context.Context, options ManualShellOptions) error {
 		defer probeTimer.Stop()
 		<-probeTimer.C
 		if !autoState.OSCReady.Load() {
-			autoState.Enabled.Store(false)
 			writeProxyf(normalized.Stderr, "neocode shell: OSC133 probe timed out, fallback to manual mode\n")
 		}
 	}()
@@ -1020,7 +1019,6 @@ func streamPTYOutput(
 				switch event.Type {
 				case ShellEventPromptReady:
 					autoState.OSCReady.Store(true)
-					autoState.Enabled.Store(true)
 					if pendingTrigger != nil && autoState.Enabled.Load() {
 						select {
 						case autoTriggerCh <- *pendingTrigger:

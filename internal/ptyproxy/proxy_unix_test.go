@@ -949,7 +949,7 @@ func TestStreamPTYOutputSkipsTriggerWhenAutoDisabled(t *testing.T) {
 	}
 }
 
-func TestStreamPTYOutputReenablesAutoOnPromptReady(t *testing.T) {
+func TestStreamPTYOutputPromptReadyKeepsUserAutoSwitch(t *testing.T) {
 	payloadReader, payloadWriter := io.Pipe()
 	defer payloadReader.Close()
 	output := &bytes.Buffer{}
@@ -974,26 +974,21 @@ func TestStreamPTYOutputReenablesAutoOnPromptReady(t *testing.T) {
 		_ = payloadWriter.Close()
 	}()
 
-	var gotTrigger diagnoseTrigger
 	select {
 	case trigger := <-autoTriggers:
-		gotTrigger = trigger
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("expected one auto diagnose trigger after re-enable")
+		t.Fatalf("unexpected trigger when auto is disabled by user: %#v", trigger)
+	default:
 	}
 	select {
 	case <-streamDone:
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("streamPTYOutput did not finish")
 	}
-	if !autoState.Enabled.Load() {
-		t.Fatal("expected auto to be re-enabled after OSC133 PromptReady")
+	if autoState.Enabled.Load() {
+		t.Fatal("expected auto switch to keep disabled after OSC133 PromptReady")
 	}
 	if !autoState.OSCReady.Load() {
 		t.Fatal("expected OSCReady to be set after PromptReady")
-	}
-	if gotTrigger.CommandText != "go test ./..." {
-		t.Fatalf("trigger.CommandText = %q, want %q", gotTrigger.CommandText, "go test ./...")
 	}
 	if !strings.Contains(output.String(), "fatal: build failed") {
 		t.Fatalf("output = %q, want contains fatal text", output.String())
