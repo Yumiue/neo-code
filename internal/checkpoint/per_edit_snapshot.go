@@ -170,6 +170,52 @@ func (s *PerEditSnapshotStore) CaptureBatch(absPaths []string) ([]string, error)
 	return captured, nil
 }
 
+// CapturePostDelete 为已删除的路径写入 post-delete 版本（Existed=false）。
+// 这些版本不进入 pending，而是直接追加到索引，供 restore/diff 的 v_next 查询使用。
+func (s *PerEditSnapshotStore) CapturePostDelete(absPaths []string) error {
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
+
+	for _, p := range absPaths {
+		cleanPath := filepath.Clean(p)
+		if cleanPath == "" || cleanPath == "." {
+			continue
+		}
+		hash := perEditPathHash(cleanPath)
+
+		versions := s.pathToVersions[hash]
+		nextVersion := 1
+		if len(versions) > 0 {
+			nextVersion = versions[len(versions)-1] + 1
+		}
+
+		meta := FileVersionMeta{
+			PathHash:    hash,
+			DisplayPath: cleanPath,
+			Version:     nextVersion,
+			Existed:     false,
+			IsDir:       false,
+			Mode:        0,
+			CreatedAt:   time.Now().UTC(),
+		}
+		metaPath := s.versionMetaPath(hash, nextVersion)
+		if err := s.writeVersionMetaOnly(metaPath, meta); err != nil {
+			return fmt.Errorf("per-edit: post-delete %s: %w", cleanPath, err)
+		}
+		if err := s.appendIndex(perEditIndexEntry{
+			PathHash:    hash,
+			DisplayPath: cleanPath,
+			Version:     nextVersion,
+		}); err != nil {
+			return fmt.Errorf("per-edit: append post-delete index %s: %w", cleanPath, err)
+		}
+
+		s.pathToVersions[hash] = append(versions, nextVersion)
+		s.displayPaths[hash] = cleanPath
+	}
+	return nil
+}
+
 // Finalize 把当前 pending 的 (pathHash → version) 映射写入 cp_<checkpointID>.json。
 // pending 为空时返回 (false, nil)，不创建空 checkpoint。调用方在 Finalize 后应调用 Reset。
 func (s *PerEditSnapshotStore) Finalize(checkpointID string) (bool, error) {
@@ -252,6 +298,9 @@ func (s *PerEditSnapshotStore) Restore(ctx context.Context, checkpointID string)
 		content, err := s.readVersionBin(hash, nextVersion)
 		if err != nil {
 			return fmt.Errorf("per-edit: read bin v%d: %w", nextVersion, err)
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return fmt.Errorf("per-edit: restore mkdir parent %s: %w", target, err)
 		}
 		if err := writeFileAtomic(target, content, nextMeta.Mode); err != nil {
 			return fmt.Errorf("per-edit: write restore %s: %w", target, err)
@@ -414,7 +463,7 @@ func (s *PerEditSnapshotStore) ChangedFiles(ctx context.Context, fromID, toID st
 			out = append(out, FileChangeEntry{Path: rel, Kind: FileChangeAdded})
 		case fromExists && !toExists:
 			out = append(out, FileChangeEntry{Path: rel, Kind: FileChangeDeleted})
-		case fromExists && toExists && (fromIsDir != toIsDir || !bytes.Equal(fromContent, toContent)):
+		case fromIsDir != toIsDir || !bytes.Equal(fromContent, toContent):
 			out = append(out, FileChangeEntry{Path: rel, Kind: FileChangeModified})
 		}
 	}
@@ -478,13 +527,19 @@ func (s *PerEditSnapshotStore) writeVersionFiles(meta FileVersionMeta, content [
 	if err := writeFileAtomic(binPath, content, 0o644); err != nil {
 		return fmt.Errorf("per-edit: write bin: %w", err)
 	}
+	if err := s.writeVersionMetaOnly(metaPath, meta); err != nil {
+		_ = os.Remove(binPath)
+		return err
+	}
+	return nil
+}
+
+func (s *PerEditSnapshotStore) writeVersionMetaOnly(metaPath string, meta FileVersionMeta) error {
 	metaJSON, err := json.Marshal(meta)
 	if err != nil {
-		_ = os.Remove(binPath)
 		return fmt.Errorf("per-edit: marshal meta: %w", err)
 	}
 	if err := writeFileAtomic(metaPath, metaJSON, 0o644); err != nil {
-		_ = os.Remove(binPath)
 		return fmt.Errorf("per-edit: write meta: %w", err)
 	}
 	return nil

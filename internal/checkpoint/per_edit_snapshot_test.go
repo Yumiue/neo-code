@@ -621,3 +621,330 @@ func TestRestore_DirectoryWithNestedFile(t *testing.T) {
 		t.Fatalf("expected dir absent after restore cp-remove, stat err=%v", err)
 	}
 }
+
+func TestChangedFiles(t *testing.T) {
+	store, workdir := newTestStore(t)
+
+	// Setup files for cp1.
+	writeWorkdirFile(t, workdir, "a.txt", "alpha")
+	writeWorkdirFile(t, workdir, "b.txt", "beta")
+
+	// Turn 1: capture, finalize cp1.
+	if _, err := store.CapturePreWrite(filepath.Join(workdir, "a.txt")); err != nil {
+		t.Fatalf("capture cp1 a: %v", err)
+	}
+	if _, err := store.CapturePreWrite(filepath.Join(workdir, "b.txt")); err != nil {
+		t.Fatalf("capture cp1 b: %v", err)
+	}
+	if _, err := store.Finalize("cp1"); err != nil {
+		t.Fatalf("finalize cp1: %v", err)
+	}
+	store.Reset()
+
+	// Turn 2: capture all paths (including new c.txt), then edit.
+	if _, err := store.CapturePreWrite(filepath.Join(workdir, "a.txt")); err != nil {
+		t.Fatalf("capture cp2 a: %v", err)
+	}
+	if _, err := store.CapturePreWrite(filepath.Join(workdir, "b.txt")); err != nil {
+		t.Fatalf("capture cp2 b: %v", err)
+	}
+	if _, err := store.CapturePreWrite(filepath.Join(workdir, "c.txt")); err != nil {
+		t.Fatalf("capture cp2 c: %v", err)
+	}
+	writeWorkdirFile(t, workdir, "a.txt", "alpha-v2")
+	if err := os.Remove(filepath.Join(workdir, "b.txt")); err != nil {
+		t.Fatalf("remove b.txt: %v", err)
+	}
+	writeWorkdirFile(t, workdir, "c.txt", "gamma")
+	if _, err := store.Finalize("cp2"); err != nil {
+		t.Fatalf("finalize cp2: %v", err)
+	}
+	store.Reset()
+
+	// Turn 3: capture all paths again to create v_next for cp2 (needed for correct diff resolution).
+	if _, err := store.CapturePreWrite(filepath.Join(workdir, "a.txt")); err != nil {
+		t.Fatalf("capture cp3 a: %v", err)
+	}
+	if _, err := store.CapturePreWrite(filepath.Join(workdir, "b.txt")); err != nil {
+		t.Fatalf("capture cp3 b: %v", err)
+	}
+	if _, err := store.CapturePreWrite(filepath.Join(workdir, "c.txt")); err != nil {
+		t.Fatalf("capture cp3 c: %v", err)
+	}
+	if _, err := store.Finalize("cp3"); err != nil {
+		t.Fatalf("finalize cp3: %v", err)
+	}
+	store.Reset()
+
+	// Restore to cp1 so workdir fallback matches cp1 state.
+	if err := store.Restore(context.Background(), "cp1"); err != nil {
+		t.Fatalf("restore cp1: %v", err)
+	}
+	// c.txt did not exist in cp1; Restore won't remove it because cp1 doesn't know about it.
+	if err := os.Remove(filepath.Join(workdir, "c.txt")); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("remove stray c.txt: %v", err)
+	}
+
+	changes, err := store.ChangedFiles(context.Background(), "cp1", "cp2")
+	if err != nil {
+		t.Fatalf("changed files cp1->cp2: %v", err)
+	}
+	if len(changes) != 3 {
+		t.Fatalf("expected 3 changes, got %d: %+v", len(changes), changes)
+	}
+
+	want := map[string]FileChangeKind{
+		"a.txt": FileChangeModified,
+		"b.txt": FileChangeDeleted,
+		"c.txt": FileChangeAdded,
+	}
+	for _, ch := range changes {
+		if want[ch.Path] != ch.Kind {
+			t.Errorf("path %s: expected kind %s, got %s", ch.Path, want[ch.Path], ch.Kind)
+		}
+		delete(want, ch.Path)
+	}
+	if len(want) > 0 {
+		t.Errorf("missing expected changes: %+v", want)
+	}
+}
+
+func TestChangedFiles_NoChange(t *testing.T) {
+	store, workdir := newTestStore(t)
+	writeWorkdirFile(t, workdir, "x.txt", "same")
+
+	if _, err := store.CapturePreWrite(filepath.Join(workdir, "x.txt")); err != nil {
+		t.Fatalf("capture cp1: %v", err)
+	}
+	if _, err := store.Finalize("cp1"); err != nil {
+		t.Fatalf("finalize cp1: %v", err)
+	}
+	store.Reset()
+
+	if _, err := store.CapturePreWrite(filepath.Join(workdir, "x.txt")); err != nil {
+		t.Fatalf("capture cp2: %v", err)
+	}
+	if _, err := store.Finalize("cp2"); err != nil {
+		t.Fatalf("finalize cp2: %v", err)
+	}
+	store.Reset()
+
+	changes, err := store.ChangedFiles(context.Background(), "cp1", "cp2")
+	if err != nil {
+		t.Fatalf("changed files cp1->cp2: %v", err)
+	}
+	if len(changes) != 0 {
+		t.Fatalf("expected no changes, got %d: %+v", len(changes), changes)
+	}
+}
+
+func TestChangedFiles_DirectoryToFile(t *testing.T) {
+	store, workdir := newTestStore(t)
+	path := filepath.Join(workdir, "target")
+
+	// Turn 1: target is a directory.
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if _, err := store.CapturePreWrite(path); err != nil {
+		t.Fatalf("capture cp1: %v", err)
+	}
+	if _, err := store.Finalize("cp1"); err != nil {
+		t.Fatalf("finalize cp1: %v", err)
+	}
+	store.Reset()
+
+	// Turn 2: target becomes a file.
+	if _, err := store.CapturePreWrite(path); err != nil {
+		t.Fatalf("capture cp2: %v", err)
+	}
+	if err := os.RemoveAll(path); err != nil {
+		t.Fatalf("remove dir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("file"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if _, err := store.Finalize("cp2"); err != nil {
+		t.Fatalf("finalize cp2: %v", err)
+	}
+	store.Reset()
+
+	// Turn 3: capture again to give cp2 a v_next.
+	if _, err := store.CapturePreWrite(path); err != nil {
+		t.Fatalf("capture cp3: %v", err)
+	}
+	if _, err := store.Finalize("cp3"); err != nil {
+		t.Fatalf("finalize cp3: %v", err)
+	}
+	store.Reset()
+
+	changes, err := store.ChangedFiles(context.Background(), "cp1", "cp2")
+	if err != nil {
+		t.Fatalf("changed files: %v", err)
+	}
+	if len(changes) != 1 || changes[0].Path != "target" || changes[0].Kind != FileChangeModified {
+		t.Fatalf("expected target modified, got %+v", changes)
+	}
+}
+
+func TestCapturePostDelete_CreatesExistedFalseVersion(t *testing.T) {
+	store, workdir := newTestStore(t)
+	abs := writeWorkdirFile(t, workdir, "a.txt", "hello")
+
+	// Turn 1: capture pre-write (v1, Existed=true).
+	if _, err := store.CapturePreWrite(abs); err != nil {
+		t.Fatalf("capture v1: %v", err)
+	}
+	if _, err := store.Finalize("cp1"); err != nil {
+		t.Fatalf("finalize cp1: %v", err)
+	}
+	store.Reset()
+
+	// Delete the file, then call CapturePostDelete to create v2(Existed=false).
+	if err := os.Remove(abs); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if err := store.CapturePostDelete([]string{abs}); err != nil {
+		t.Fatalf("CapturePostDelete: %v", err)
+	}
+
+	// Restore cp1: v_next should be v2(Existed=false) → file should be deleted.
+	if err := store.Restore(context.Background(), "cp1"); err != nil {
+		t.Fatalf("restore cp1: %v", err)
+	}
+	if _, err := os.Stat(abs); !os.IsNotExist(err) {
+		t.Fatalf("expected file absent after restore, stat err=%v", err)
+	}
+}
+
+func TestCapturePostDelete_DirectoryTreeRecovery(t *testing.T) {
+	store, workdir := newTestStore(t)
+	dir := filepath.Join(workdir, "foo")
+	child1 := filepath.Join(dir, "a.txt")
+	child2 := filepath.Join(dir, "sub", "b.txt")
+
+	// Create nested tree.
+	writeWorkdirFile(t, workdir, "foo/a.txt", "alpha")
+	writeWorkdirFile(t, workdir, "foo/sub/b.txt", "beta")
+
+	// Turn 1: pre-capture directory and all nested files.
+	if _, err := store.CapturePreWrite(dir); err != nil {
+		t.Fatalf("capture dir: %v", err)
+	}
+	if _, err := store.CapturePreWrite(child1); err != nil {
+		t.Fatalf("capture child1: %v", err)
+	}
+	if _, err := store.CapturePreWrite(child2); err != nil {
+		t.Fatalf("capture child2: %v", err)
+	}
+	if _, err := store.Finalize("cp1"); err != nil {
+		t.Fatalf("finalize cp1: %v", err)
+	}
+	store.Reset()
+
+	// Turn 2: pre-capture, then delete tree, then CapturePostDelete, then finalize cp2.
+	if _, err := store.CapturePreWrite(dir); err != nil {
+		t.Fatalf("capture dir t2: %v", err)
+	}
+	if _, err := store.CapturePreWrite(child1); err != nil {
+		t.Fatalf("capture child1 t2: %v", err)
+	}
+	if _, err := store.CapturePreWrite(child2); err != nil {
+		t.Fatalf("capture child2 t2: %v", err)
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("removeAll: %v", err)
+	}
+	if err := store.CapturePostDelete([]string{dir, child1, child2}); err != nil {
+		t.Fatalf("CapturePostDelete: %v", err)
+	}
+	if _, err := store.Finalize("cp2"); err != nil {
+		t.Fatalf("finalize cp2: %v", err)
+	}
+	store.Reset()
+
+	// Restore cp1: v_next is v2(pre-delete, Existed=true) → tree recreated.
+	if err := store.Restore(context.Background(), "cp1"); err != nil {
+		t.Fatalf("restore cp1: %v", err)
+	}
+	if got := mustReadFile(t, child1); got != "alpha" {
+		t.Fatalf("child1 want alpha got %q", got)
+	}
+	if got := mustReadFile(t, child2); got != "beta" {
+		t.Fatalf("child2 want beta got %q", got)
+	}
+
+	// Restore cp2: v_next is v3(post-delete, Existed=false) → tree deleted.
+	if err := store.Restore(context.Background(), "cp2"); err != nil {
+		t.Fatalf("restore cp2: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("expected dir absent after restore cp2, stat err=%v", err)
+	}
+}
+
+func TestRestore_RemoveDirWithNestedFiles(t *testing.T) {
+	store, workdir := newTestStore(t)
+	dir := filepath.Join(workdir, "foo")
+	child := filepath.Join(dir, "bar.txt")
+
+	// Turn 1: create tree.
+	writeWorkdirFile(t, workdir, "foo/bar.txt", "hello")
+	if _, err := store.CapturePreWrite(dir); err != nil {
+		t.Fatalf("capture dir t1: %v", err)
+	}
+	if _, err := store.CapturePreWrite(child); err != nil {
+		t.Fatalf("capture child t1: %v", err)
+	}
+	if _, err := store.Finalize("cp1"); err != nil {
+		t.Fatalf("finalize cp1: %v", err)
+	}
+	store.Reset()
+
+	// Turn 2: remove tree with recursive pre-capture + post-delete.
+	if _, err := store.CapturePreWrite(dir); err != nil {
+		t.Fatalf("capture dir t2: %v", err)
+	}
+	if _, err := store.CapturePreWrite(child); err != nil {
+		t.Fatalf("capture child t2: %v", err)
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("removeAll: %v", err)
+	}
+	if err := store.CapturePostDelete([]string{dir, child}); err != nil {
+		t.Fatalf("CapturePostDelete: %v", err)
+	}
+	if _, err := store.Finalize("cp2"); err != nil {
+		t.Fatalf("finalize cp2: %v", err)
+	}
+	store.Reset()
+
+	// Turn 3: recreate tree with different content.
+	writeWorkdirFile(t, workdir, "foo/bar.txt", "world")
+	if _, err := store.CapturePreWrite(dir); err != nil {
+		t.Fatalf("capture dir t3: %v", err)
+	}
+	if _, err := store.CapturePreWrite(child); err != nil {
+		t.Fatalf("capture child t3: %v", err)
+	}
+	if _, err := store.Finalize("cp3"); err != nil {
+		t.Fatalf("finalize cp3: %v", err)
+	}
+	store.Reset()
+
+	// Restore cp2: should delete the tree.
+	if err := store.Restore(context.Background(), "cp2"); err != nil {
+		t.Fatalf("restore cp2: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("expected dir absent after restore cp2, stat err=%v", err)
+	}
+
+	// Restore cp1: should recreate the tree with original content.
+	if err := store.Restore(context.Background(), "cp1"); err != nil {
+		t.Fatalf("restore cp1: %v", err)
+	}
+	if got := mustReadFile(t, child); got != "hello" {
+		t.Fatalf("child want hello got %q", got)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -158,15 +159,32 @@ func (s *Service) executeOneToolCall(
 	var preFingerprint checkpoint.WorkdirFingerprint
 	var bashCapturedPaths []string
 	var bashCommand string
+	var touchedPaths []string
+	var removeDirNestedPaths []string
 
 	if isWrite {
-		paths := toolCallTouchedPaths(call, snapshot.Workdir)
-		if len(paths) > 0 {
-			preSnaps = make(map[string]fileSnapshot, len(paths))
-			for _, p := range paths {
+		touchedPaths = toolCallTouchedPaths(call, snapshot.Workdir)
+		if len(touchedPaths) > 0 {
+			preSnaps = make(map[string]fileSnapshot, len(touchedPaths))
+			for _, p := range touchedPaths {
 				preSnaps[p] = captureFileSnapshot(p)
 				if s.perEditStore != nil {
 					_, _ = s.perEditStore.CapturePreWrite(p)
+				}
+				// remove_dir: recursively pre-capture all nested files/dirs.
+				if strings.EqualFold(strings.TrimSpace(call.Name), tools.ToolNameFilesystemRemoveDir) {
+					if info, err := os.Stat(p); err == nil && info.IsDir() {
+						_ = filepath.WalkDir(p, func(path string, d os.DirEntry, err error) error {
+							if err != nil || path == p {
+								return nil
+							}
+							removeDirNestedPaths = append(removeDirNestedPaths, path)
+							if s.perEditStore != nil {
+								_, _ = s.perEditStore.CapturePreWrite(path)
+							}
+							return nil
+						})
+					}
 				}
 			}
 		}
@@ -216,6 +234,22 @@ func (s *Service) executeOneToolCall(
 			if len(diffs) == 1 {
 				result.Metadata["tool_diff"] = diffs[0]["diff"]
 				result.Metadata["tool_diff_new"] = diffs[0]["was_new"]
+			}
+		}
+	}
+
+	if isWrite && execErr == nil && !result.IsError && s.perEditStore != nil {
+		switch strings.TrimSpace(call.Name) {
+		case tools.ToolNameFilesystemRemoveDir:
+			if len(removeDirNestedPaths) > 0 && len(touchedPaths) > 0 {
+				allPaths := append([]string{touchedPaths[0]}, removeDirNestedPaths...)
+				_ = s.perEditStore.CapturePostDelete(allPaths)
+			} else if len(touchedPaths) > 0 {
+				_ = s.perEditStore.CapturePostDelete(touchedPaths)
+			}
+		case tools.ToolNameFilesystemDeleteFile:
+			if len(touchedPaths) > 0 {
+				_ = s.perEditStore.CapturePostDelete(touchedPaths)
 			}
 		}
 	}
