@@ -27,6 +27,11 @@ import { useRuntimeInsightStore } from '@/stores/useRuntimeInsightStore'
 
 type PayloadRecord = Record<string, unknown> | undefined
 
+// 模块级缓存:最新 verification 消息 ID 与最近完成的 tool_call ID
+// 用于避免每次 verification stage / checkpoint 事件都全量扫描 messages 数组
+let _latestVerificationMsgId: string | undefined
+let _latestDoneToolCallId: string | undefined
+
 function normalizePermissionPayload(raw: unknown): PermissionRequestPayload | null {
   const r = raw as Record<string, unknown> | undefined
   if (!r || typeof r !== 'object') return null
@@ -82,21 +87,11 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
   const frameSessionId = frame.session_id
   const frameRunId = frame.run_id
 
-  /** 在 messages 中从后往前找到最新一条 verification 消息,返回其 id */
-  function findLatestVerificationMessageId(): string | undefined {
-    const messages = useChatStore.getState().messages
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].type === 'verification') return messages[i].id
-    }
-    return undefined
-  }
-
   /** 更新最新 verification 消息的 data 为 insightStore 当前最后一条 record */
   function syncLatestVerificationToChat() {
-    const msgId = findLatestVerificationMessageId()
     const history = useRuntimeInsightStore.getState().verificationHistory
-    if (msgId && history.length > 0) {
-      useChatStore.getState().updateVerificationMessage(msgId, history[history.length - 1])
+    if (_latestVerificationMsgId && history.length > 0) {
+      chatStore.updateVerificationMessage(_latestVerificationMsgId, history[history.length - 1])
     }
   }
 
@@ -143,7 +138,9 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
     }
 
     case EventType.ToolResult: {
-      useChatStore.getState().updateToolCall(strField(eventPayload, 'tool_call_id'), strField(eventPayload, 'content'), 'done')
+      const tcId = strField(eventPayload, 'tool_call_id')
+      useChatStore.getState().updateToolCall(tcId, strField(eventPayload, 'content'), 'done')
+      _latestDoneToolCallId = tcId
       break
     }
 
@@ -319,12 +316,13 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
       const payload = eventPayload as VerificationStartedPayload | undefined
       if (payload) {
         const recordId = insightStore.startVerification(payload)
-        // 在聊天流中创建一条 verification 内联消息,后续 stage/finished 持续更新它
         const history = useRuntimeInsightStore.getState().verificationHistory
         const record = history.length > 0 ? history[history.length - 1] : undefined
         if (record) {
-          useChatStore.getState().addMessage({
-            id: `msg_${Date.now()}_verify_${recordId.slice(0, 8)}`,
+          const msgId = `msg_${Date.now()}_verify_${recordId.slice(0, 8)}`
+          _latestVerificationMsgId = msgId
+          chatStore.addMessage({
+            id: msgId,
             role: 'assistant',
             type: 'verification',
             content: '',
@@ -333,7 +331,7 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
           })
         }
       }
-      useChatStore.getState().setPhase('verification')
+      chatStore.setPhase('verification')
       uiStore.showToast('验证开始', 'info')
       break
     }
@@ -396,14 +394,8 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
       const payload = eventPayload as CheckpointCreatedPayload | undefined
       if (payload) {
         insightStore.addCheckpointEvent(payload)
-        // 反向查找最后一条已完成(done)的 tool_call,把 checkpointId 挂上去
-        const messages = useChatStore.getState().messages
-        for (let i = messages.length - 1; i >= 0; i--) {
-          const m = messages[i]
-          if (m.type === 'tool_call' && m.toolStatus === 'done' && !m.checkpointId) {
-            useChatStore.getState().attachCheckpointToToolCall(m.toolCallId!, payload.checkpoint_id)
-            break
-          }
+        if (_latestDoneToolCallId) {
+          chatStore.attachCheckpointToToolCall(_latestDoneToolCallId, payload.checkpoint_id)
         }
       }
       break

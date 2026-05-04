@@ -138,7 +138,7 @@ export const useRuntimeInsightStore = create<RuntimeInsightState>((set) => ({
       verificationFinished: null,
       verificationCompleted: null,
       verificationFailed: null,
-      verificationHistory: [...s.verificationHistory, record],
+      verificationHistory: [...s.verificationHistory, record].slice(-50),
     }))
     return record.id
   },
