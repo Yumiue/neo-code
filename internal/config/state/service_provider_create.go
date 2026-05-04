@@ -169,6 +169,7 @@ func (s *Service) CreateCustomProvider(ctx context.Context, input CreateCustomPr
 }
 
 // RemoveCustomProvider 删除指定的自定义 provider，并在必要时修复当前选中项。
+//
 //go:noinline
 func (s *Service) RemoveCustomProvider(ctx context.Context, name string) error {
 	if err := s.validate(); err != nil {
@@ -211,9 +212,10 @@ func (s *Service) RemoveCustomProvider(ctx context.Context, name string) error {
 		return err
 	}
 
+	var envCleanupErr error
 	if apiKeyEnv != "" {
 		if envErr := deleteUserEnvVarForCreate(apiKeyEnv); envErr != nil {
-			return fmt.Errorf("selection: remove provider env: %w", envErr)
+			envCleanupErr = fmt.Errorf("selection: remove provider env: %w", envErr)
 		}
 	}
 
@@ -230,14 +232,21 @@ func (s *Service) RemoveCustomProvider(ctx context.Context, name string) error {
 	}
 
 	if _, err := s.manager.Load(ctx); err != nil {
+		if envCleanupErr != nil {
+			return errors.Join(envCleanupErr, err)
+		}
 		return err
 	}
 
 	if wasSelected {
-		_, err := s.EnsureSelection(ctx)
-		return err
+		if _, err := s.EnsureSelection(ctx); err != nil {
+			if envCleanupErr != nil {
+				return errors.Join(envCleanupErr, err)
+			}
+			return err
+		}
 	}
-	return nil
+	return envCleanupErr
 }
 
 // normalizeCreateCustomProviderInput 统一裁剪新增 Provider 输入并执行基础字段校验。

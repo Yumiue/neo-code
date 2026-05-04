@@ -895,6 +895,60 @@ func TestRemoveCustomProviderEnvDeleteFailure(t *testing.T) {
 	}
 }
 
+func TestRemoveCustomProviderEnvDeleteFailureStillRepairsSelection(t *testing.T) {
+	restorePersist, restoreDelete, restoreLookup, restoreSaveWithModels := stubUserEnvOpsForCreateProvider(t)
+	defer restorePersist()
+	defer restoreDelete()
+	defer restoreLookup()
+	defer restoreSaveWithModels()
+
+	manager := newSelectionTestManager(t, testDefaultConfig())
+	service := NewService(manager, newDriverSupporterStub(), newCatalogStub())
+
+	const providerName = "env-delete-failed-selected-provider"
+	if err := configpkg.SaveCustomProviderWithModels(manager.BaseDir(), configpkg.SaveCustomProviderInput{
+		Name:                  providerName,
+		Driver:                provider.DriverOpenAICompat,
+		BaseURL:               "https://llm.example.com/v1",
+		APIKeyEnv:             "ENV_DELETE_FAILED_SELECTED_PROVIDER_API_KEY",
+		ModelSource:           configpkg.ModelSourceDiscover,
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+	}); err != nil {
+		t.Fatalf("SaveCustomProviderWithModels() error = %v", err)
+	}
+	if _, err := manager.Load(context.Background()); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := manager.Update(context.Background(), func(cfg *configpkg.Config) error {
+		cfg.SelectedProvider = providerName
+		cfg.CurrentModel = "custom-model"
+		return nil
+	}); err != nil {
+		t.Fatalf("seed selected provider: %v", err)
+	}
+
+	deleteUserEnvVarForCreate = func(string) error { return errors.New("delete env failed") }
+	err := service.RemoveCustomProvider(context.Background(), providerName)
+	if err == nil || !strings.Contains(err.Error(), "remove provider env") {
+		t.Fatalf("err = %v, want remove provider env", err)
+	}
+
+	cfg := manager.Get()
+	if strings.EqualFold(strings.TrimSpace(cfg.SelectedProvider), providerName) {
+		t.Fatalf("selected provider still points to removed provider %q", providerName)
+	}
+	if strings.TrimSpace(cfg.SelectedProvider) == "" {
+		t.Fatalf("selected provider should be repaired to a valid provider, got empty")
+	}
+	if _, providerErr := cfg.ProviderByName(cfg.SelectedProvider); providerErr != nil {
+		t.Fatalf("selected provider %q is invalid: %v", cfg.SelectedProvider, providerErr)
+	}
+	removedConfigPath := filepath.Join(manager.BaseDir(), "providers", providerName, "provider.yaml")
+	if _, statErr := os.Stat(removedConfigPath); !os.IsNotExist(statErr) {
+		t.Fatalf("provider config should be removed, stat err = %v", statErr)
+	}
+}
+
 func TestRemoveCustomProviderSelectedEnsureSelectionFailure(t *testing.T) {
 	restorePersist, restoreDelete, restoreLookup, restoreSaveWithModels := stubUserEnvOpsForCreateProvider(t)
 	defer restorePersist()
