@@ -829,6 +829,191 @@ func TestTryReclaimStaleProviderCreateLockKeepsActiveLeaseWhenDirIsOld(t *testin
 	}
 }
 
+func TestRemoveCustomProviderValidationBranches(t *testing.T) {
+	restorePersist, restoreDelete, restoreLookup, restoreSaveWithModels := stubUserEnvOpsForCreateProvider(t)
+	defer restorePersist()
+	defer restoreDelete()
+	defer restoreLookup()
+	defer restoreSaveWithModels()
+
+	manager := newSelectionTestManager(t, testDefaultConfig())
+	service := NewService(manager, newDriverSupporterStub(), newCatalogStub())
+
+	t.Run("context canceled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := service.RemoveCustomProvider(ctx, "custom")
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+	})
+
+	t.Run("empty provider name", func(t *testing.T) {
+		err := service.RemoveCustomProvider(context.Background(), "   ")
+		if !errors.Is(err, ErrProviderNotFound) {
+			t.Fatalf("err = %v, want ErrProviderNotFound", err)
+		}
+	})
+
+	t.Run("invalid provider name", func(t *testing.T) {
+		err := service.RemoveCustomProvider(context.Background(), "../bad")
+		if err == nil {
+			t.Fatal("expected invalid provider name error")
+		}
+	})
+}
+
+func TestRemoveCustomProviderEnvDeleteFailure(t *testing.T) {
+	restorePersist, restoreDelete, restoreLookup, restoreSaveWithModels := stubUserEnvOpsForCreateProvider(t)
+	defer restorePersist()
+	defer restoreDelete()
+	defer restoreLookup()
+	defer restoreSaveWithModels()
+
+	manager := newSelectionTestManager(t, testDefaultConfig())
+	service := NewService(manager, newDriverSupporterStub(), newCatalogStub())
+
+	const providerName = "env-delete-failed-provider"
+	if err := configpkg.SaveCustomProviderWithModels(manager.BaseDir(), configpkg.SaveCustomProviderInput{
+		Name:                  providerName,
+		Driver:                provider.DriverOpenAICompat,
+		BaseURL:               "https://llm.example.com/v1",
+		APIKeyEnv:             "ENV_DELETE_FAILED_PROVIDER_API_KEY",
+		ModelSource:           configpkg.ModelSourceDiscover,
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+	}); err != nil {
+		t.Fatalf("SaveCustomProviderWithModels() error = %v", err)
+	}
+	if _, err := manager.Load(context.Background()); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	deleteUserEnvVarForCreate = func(string) error { return errors.New("delete env failed") }
+	err := service.RemoveCustomProvider(context.Background(), providerName)
+	if err == nil || !strings.Contains(err.Error(), "remove provider env") {
+		t.Fatalf("err = %v, want remove provider env", err)
+	}
+}
+
+func TestRemoveCustomProviderSelectedEnsureSelectionFailure(t *testing.T) {
+	restorePersist, restoreDelete, restoreLookup, restoreSaveWithModels := stubUserEnvOpsForCreateProvider(t)
+	defer restorePersist()
+	defer restoreDelete()
+	defer restoreLookup()
+	defer restoreSaveWithModels()
+
+	defaults := testDefaultConfig()
+	manager := newSelectionTestManager(t, defaults)
+	supporters := &selectiveDriverSupporter{supported: map[string]bool{"anthropic": true}}
+	service := NewService(manager, supporters, newCatalogStub())
+
+	const providerName = "selected-provider-for-failed-ensure"
+	if err := configpkg.SaveCustomProviderWithModels(manager.BaseDir(), configpkg.SaveCustomProviderInput{
+		Name:                  providerName,
+		Driver:                provider.DriverOpenAICompat,
+		BaseURL:               "https://llm.example.com/v1",
+		APIKeyEnv:             "FAILED_ENSURE_SELECTION_API_KEY",
+		ModelSource:           configpkg.ModelSourceDiscover,
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+	}); err != nil {
+		t.Fatalf("SaveCustomProviderWithModels() error = %v", err)
+	}
+	if _, err := manager.Load(context.Background()); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := manager.Update(context.Background(), func(cfg *configpkg.Config) error {
+		cfg.SelectedProvider = providerName
+		cfg.CurrentModel = "custom-model"
+		return nil
+	}); err != nil {
+		t.Fatalf("seed selected provider: %v", err)
+	}
+
+	err := service.RemoveCustomProvider(context.Background(), providerName)
+	if !errors.Is(err, ErrProviderNotFound) {
+		t.Fatalf("err = %v, want ErrProviderNotFound", err)
+	}
+}
+
+func TestRemoveCustomProviderContextCancellationDuringUpdate(t *testing.T) {
+	restorePersist, restoreDelete, restoreLookup, restoreSaveWithModels := stubUserEnvOpsForCreateProvider(t)
+	defer restorePersist()
+	defer restoreDelete()
+	defer restoreLookup()
+	defer restoreSaveWithModels()
+
+	manager := newSelectionTestManager(t, testDefaultConfig())
+	service := NewService(manager, newDriverSupporterStub(), newCatalogStub())
+
+	const providerName = "cancel-during-update-provider"
+	if err := configpkg.SaveCustomProviderWithModels(manager.BaseDir(), configpkg.SaveCustomProviderInput{
+		Name:                  providerName,
+		Driver:                provider.DriverOpenAICompat,
+		BaseURL:               "https://llm.example.com/v1",
+		APIKeyEnv:             "CANCEL_DURING_UPDATE_PROVIDER_API_KEY",
+		ModelSource:           configpkg.ModelSourceDiscover,
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+	}); err != nil {
+		t.Fatalf("SaveCustomProviderWithModels() error = %v", err)
+	}
+	if _, err := manager.Load(context.Background()); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := manager.Update(context.Background(), func(cfg *configpkg.Config) error {
+		cfg.SelectedProvider = providerName
+		cfg.CurrentModel = "custom-model"
+		return nil
+	}); err != nil {
+		t.Fatalf("seed selected provider: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	deleteUserEnvVarForCreate = func(string) error {
+		cancel()
+		return nil
+	}
+	err := service.RemoveCustomProvider(ctx, providerName)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}
+
+func TestRemoveCustomProviderContextCancellationBeforeReload(t *testing.T) {
+	restorePersist, restoreDelete, restoreLookup, restoreSaveWithModels := stubUserEnvOpsForCreateProvider(t)
+	defer restorePersist()
+	defer restoreDelete()
+	defer restoreLookup()
+	defer restoreSaveWithModels()
+
+	manager := newSelectionTestManager(t, testDefaultConfig())
+	service := NewService(manager, newDriverSupporterStub(), newCatalogStub())
+
+	const providerName = "cancel-before-reload-provider"
+	if err := configpkg.SaveCustomProviderWithModels(manager.BaseDir(), configpkg.SaveCustomProviderInput{
+		Name:                  providerName,
+		Driver:                provider.DriverOpenAICompat,
+		BaseURL:               "https://llm.example.com/v1",
+		APIKeyEnv:             "CANCEL_BEFORE_RELOAD_PROVIDER_API_KEY",
+		ModelSource:           configpkg.ModelSourceDiscover,
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+	}); err != nil {
+		t.Fatalf("SaveCustomProviderWithModels() error = %v", err)
+	}
+	if _, err := manager.Load(context.Background()); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	deleteUserEnvVarForCreate = func(string) error {
+		cancel()
+		return nil
+	}
+	err := service.RemoveCustomProvider(ctx, providerName)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}
+
 func captureEnvForCreateProvider(t *testing.T, key string) func() {
 	t.Helper()
 

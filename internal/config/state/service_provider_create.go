@@ -169,6 +169,7 @@ func (s *Service) CreateCustomProvider(ctx context.Context, input CreateCustomPr
 }
 
 // RemoveCustomProvider 删除指定的自定义 provider，并在必要时修复当前选中项。
+//go:noinline
 func (s *Service) RemoveCustomProvider(ctx context.Context, name string) error {
 	if err := s.validate(); err != nil {
 		return err
