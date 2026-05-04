@@ -309,6 +309,55 @@ func (s *PerEditSnapshotStore) Restore(ctx context.Context, checkpointID string)
 	return nil
 }
 
+// RestoreExact 直接恢复 checkpoint 中记录的**精确版本**（不查找 v_next）。
+// 用于 UndoRestore：guard checkpoint 保存的就是 restore 前的 pre-write 状态，
+// 直接写回即可，无需 v_next 语义。
+func (s *PerEditSnapshotStore) RestoreExact(ctx context.Context, checkpointID string) error {
+	cp, err := s.readCheckpointMeta(checkpointID)
+	if err != nil {
+		return err
+	}
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
+
+	for hash, vAt := range cp.FileVersions {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		meta, err := s.readVersionMeta(hash, vAt)
+		if err != nil {
+			return fmt.Errorf("per-edit: read meta v%d: %w", vAt, err)
+		}
+		target := s.resolveDisplayPathLocked(hash, meta.DisplayPath)
+		if target == "" {
+			return fmt.Errorf("per-edit: missing display path for hash %s", hash)
+		}
+		if !meta.Existed {
+			if err := os.RemoveAll(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("per-edit: restore-exact remove %s: %w", target, err)
+			}
+			continue
+		}
+		if meta.IsDir {
+			if err := os.MkdirAll(target, meta.Mode); err != nil {
+				return fmt.Errorf("per-edit: restore-exact mkdir %s: %w", target, err)
+			}
+			continue
+		}
+		content, err := s.readVersionBin(hash, vAt)
+		if err != nil {
+			return fmt.Errorf("per-edit: restore-exact read bin v%d: %w", vAt, err)
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return fmt.Errorf("per-edit: restore-exact mkdir parent %s: %w", target, err)
+		}
+		if err := writeFileAtomic(target, content, meta.Mode); err != nil {
+			return fmt.Errorf("per-edit: restore-exact write %s: %w", target, err)
+		}
+	}
+	return nil
+}
+
 // Diff 端到端对比两个 checkpoint 之间的工作区差异，返回 unified diff。
 // 端到端性质保证：unified diff 算法只看输入端点，中间的反复修改若回到原值会自动从 diff 消失。
 func (s *PerEditSnapshotStore) Diff(ctx context.Context, fromID, toID string) (string, error) {
@@ -342,11 +391,11 @@ func (s *PerEditSnapshotStore) Diff(ctx context.Context, fromID, toID string) (s
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		fromContent, fromIsDir, fromExists, fromDisplay, err := s.contentAtCheckpointLocked(hash, fromMeta.FileVersions)
+		fromContent, fromIsDir, fromExists, fromDisplay, err := s.contentAtCheckpointLocked(hash, fromMeta.FileVersions, false)
 		if err != nil {
 			return "", err
 		}
-		toContent, toIsDir, toExists, toDisplay, err := s.contentAtCheckpointLocked(hash, toMeta.FileVersions)
+		toContent, toIsDir, toExists, toDisplay, err := s.contentAtCheckpointLocked(hash, toMeta.FileVersions, false)
 		if err != nil {
 			return "", err
 		}
@@ -445,11 +494,11 @@ func (s *PerEditSnapshotStore) ChangedFiles(ctx context.Context, fromID, toID st
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		fromContent, fromIsDir, fromExists, fromDisplay, err := s.contentAtCheckpointLocked(hash, fromMeta.FileVersions)
+		fromContent, fromIsDir, fromExists, fromDisplay, err := s.contentAtCheckpointLocked(hash, fromMeta.FileVersions, false)
 		if err != nil {
 			return nil, err
 		}
-		toContent, toIsDir, toExists, toDisplay, err := s.contentAtCheckpointLocked(hash, toMeta.FileVersions)
+		toContent, toIsDir, toExists, toDisplay, err := s.contentAtCheckpointLocked(hash, toMeta.FileVersions, false)
 		if err != nil {
 			return nil, err
 		}
@@ -682,14 +731,18 @@ func (s *PerEditSnapshotStore) resolveDisplayPathLocked(hash, fallback string) s
 
 // contentAtCheckpointLocked 计算 hash 在某个 checkpoint 时刻的 workdir 内容。
 // 在 cp.FileVersions 中：找下一版本读 .bin（或 Existed=false 时返回 nil）；
-// 不在 cp.FileVersions 或没有下一版本：以当前 workdir 实际内容为准（per-edit 不还原非快照文件）。
+// 没有下一版本时：以当前 workdir 实际内容为准。
+// 不在 cp.FileVersions 中且 fallbackIfMissing=false 时：返回 exists=false，避免 diff 侧把工作区当前文件误判为 checkpoint 时刻已存在。
 // indexMu 必须被持有。
-func (s *PerEditSnapshotStore) contentAtCheckpointLocked(hash string, cpVersions map[string]int) ([]byte, bool, bool, string, error) {
+func (s *PerEditSnapshotStore) contentAtCheckpointLocked(hash string, cpVersions map[string]int, fallbackIfMissing bool) ([]byte, bool, bool, string, error) {
 	display := s.displayPaths[hash]
 	vAt, ok := cpVersions[hash]
 	if !ok {
-		c, isDir, exists := readWorkdirContent(display)
-		return c, isDir, exists, display, nil
+		if fallbackIfMissing {
+			c, isDir, exists := readWorkdirContent(display)
+			return c, isDir, exists, display, nil
+		}
+		return nil, false, false, display, nil
 	}
 	nextVersion := s.findNextVersionLocked(hash, vAt)
 	if nextVersion == 0 {

@@ -1020,3 +1020,106 @@ func TestPerEditStoreHelperMethods(t *testing.T) {
 		}
 	})
 }
+
+func TestRestoreExact(t *testing.T) {
+	store, workdir := newTestStore(t)
+	abs := writeWorkdirFile(t, workdir, "a.txt", "hello")
+
+	// Turn 1: capture, edit, finalize cp1.
+	if _, err := store.CapturePreWrite(abs); err != nil {
+		t.Fatalf("capture: %v", err)
+	}
+	if err := os.WriteFile(abs, []byte("world"), 0o644); err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+	if _, err := store.Finalize("cp1"); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+	store.Reset()
+
+	// Turn 2: capture (v2="world"), edit again.
+	if _, err := store.CapturePreWrite(abs); err != nil {
+		t.Fatalf("capture t2: %v", err)
+	}
+	if err := os.WriteFile(abs, []byte("third"), 0o644); err != nil {
+		t.Fatalf("edit t2: %v", err)
+	}
+	if _, err := store.Finalize("cp2"); err != nil {
+		t.Fatalf("finalize cp2: %v", err)
+	}
+	store.Reset()
+
+	// RestoreExact(cp2) should write back v2="world" (the exact version in cp2).
+	if err := store.RestoreExact(context.Background(), "cp2"); err != nil {
+		t.Fatalf("RestoreExact(cp2): %v", err)
+	}
+	if got := mustReadFile(t, abs); got != "world" {
+		t.Fatalf("RestoreExact(cp2) want world got %q", got)
+	}
+
+	// RestoreExact(cp1) should write back v1="hello".
+	if err := store.RestoreExact(context.Background(), "cp1"); err != nil {
+		t.Fatalf("RestoreExact(cp1): %v", err)
+	}
+	if got := mustReadFile(t, abs); got != "hello" {
+		t.Fatalf("RestoreExact(cp1) want hello got %q", got)
+	}
+}
+
+func TestChangedFiles_NewFileDetectedAsAdded(t *testing.T) {
+	store, workdir := newTestStore(t)
+
+	// Turn 1: only a.txt exists.
+	writeWorkdirFile(t, workdir, "a.txt", "alpha")
+	if _, err := store.CapturePreWrite(filepath.Join(workdir, "a.txt")); err != nil {
+		t.Fatalf("capture cp1 a: %v", err)
+	}
+	if _, err := store.Finalize("cp1"); err != nil {
+		t.Fatalf("finalize cp1: %v", err)
+	}
+	store.Reset()
+
+	// Turn 2: create b.txt.
+	writeWorkdirFile(t, workdir, "b.txt", "beta")
+	if _, err := store.CapturePreWrite(filepath.Join(workdir, "a.txt")); err != nil {
+		t.Fatalf("capture cp2 a: %v", err)
+	}
+	if _, err := store.CapturePreWrite(filepath.Join(workdir, "b.txt")); err != nil {
+		t.Fatalf("capture cp2 b: %v", err)
+	}
+	if _, err := store.Finalize("cp2"); err != nil {
+		t.Fatalf("finalize cp2: %v", err)
+	}
+	store.Reset()
+
+	// Turn 3: capture again to give cp2 a v_next.
+	if _, err := store.CapturePreWrite(filepath.Join(workdir, "a.txt")); err != nil {
+		t.Fatalf("capture cp3 a: %v", err)
+	}
+	if _, err := store.CapturePreWrite(filepath.Join(workdir, "b.txt")); err != nil {
+		t.Fatalf("capture cp3 b: %v", err)
+	}
+	if _, err := store.Finalize("cp3"); err != nil {
+		t.Fatalf("finalize cp3: %v", err)
+	}
+	store.Reset()
+
+	// Restore to cp1 so workdir fallback matches cp1 state.
+	if err := store.Restore(context.Background(), "cp1"); err != nil {
+		t.Fatalf("restore cp1: %v", err)
+	}
+	if err := os.Remove(filepath.Join(workdir, "b.txt")); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("remove stray b.txt: %v", err)
+	}
+
+	changes, err := store.ChangedFiles(context.Background(), "cp1", "cp2")
+	if err != nil {
+		t.Fatalf("changed files cp1->cp2: %v", err)
+	}
+	if len(changes) != 1 {
+		t.Fatalf("expected 1 change, got %d: %+v", len(changes), changes)
+	}
+	if changes[0].Path != "b.txt" || changes[0].Kind != FileChangeAdded {
+		t.Fatalf("expected b.txt added, got %+v", changes[0])
+	}
+}

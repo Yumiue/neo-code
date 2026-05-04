@@ -74,11 +74,20 @@ func (s *Service) RestoreCheckpoint(ctx context.Context, input GatewayRestoreInp
 	}
 
 	// 3. Restore code via per-edit store（不在 cp.FileVersions 中的文件保持不变）。
+	// Guard checkpoint 恢复时使用 RestoreExact：guard 中存储的 version 就是 restore 前的 pre-write 状态，
+	// 而 Restore 的 v_next 语义在 guard 上通常是 no-op（guard 之后没有新的 capture）。
+	isGuardRestore := record.Reason == agentsession.CheckpointReasonGuard
 	if checkpoint.IsPerEditRef(record.CodeCheckpointRef) {
 		perEditID := checkpoint.PerEditCheckpointIDFromRef(record.CodeCheckpointRef)
 		if perEditID != "" {
-			if err := s.perEditStore.Restore(ctx, perEditID); err != nil {
-				return RestoreResult{}, fmt.Errorf("checkpoint: restore code: %w", err)
+			if isGuardRestore {
+				if err := s.perEditStore.RestoreExact(ctx, perEditID); err != nil {
+					return RestoreResult{}, fmt.Errorf("checkpoint: restore code: %w", err)
+				}
+			} else {
+				if err := s.perEditStore.Restore(ctx, perEditID); err != nil {
+					return RestoreResult{}, fmt.Errorf("checkpoint: restore code: %w", err)
+				}
 			}
 		}
 	}
