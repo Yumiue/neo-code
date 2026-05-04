@@ -4,20 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
 	"neo-code/internal/checkpoint"
-	providertypes "neo-code/internal/provider/types"
 	agentsession "neo-code/internal/session"
-	"neo-code/internal/tools"
 )
 
-// createPreWriteCheckpoint 在工具执行前创建 checkpoint，采用两阶段提交。
-// shadowRepo 可用时做完整快照，不可用时降级为 session-only checkpoint。
-// 失败时不阻塞工具执行，仅返回 error 由调用方发 warning event。
-func (s *Service) createPreWriteCheckpoint(ctx context.Context, state *runState) error {
-	if s.checkpointStore == nil {
+// createStartOfTurnCheckpoint 在每轮 turn 开始时创建检查点。
+// 把上一轮 turn 的 pending capture 固化为 cp_<id>.json；pending 为空时退化为 session-only。
+// 返回 error 由调用方发 warning event；失败不阻塞执行。
+func (s *Service) createStartOfTurnCheckpoint(ctx context.Context, state *runState) error {
+	if s.checkpointStore == nil || s.perEditStore == nil {
 		return nil
 	}
 
@@ -26,36 +25,75 @@ func (s *Service) createPreWriteCheckpoint(ctx context.Context, state *runState)
 	runID := state.runID
 	state.mu.Unlock()
 
-	// 降级模式：shadowRepo 不可用时创建 session-only checkpoint
-	if s.shadowRepo == nil || !s.shadowRepo.IsAvailable() {
-		return s.createDegradedCheckpoint(ctx, session, runID)
+	checkpointID := agentsession.NewID("checkpoint")
+	written, err := s.perEditStore.Finalize(checkpointID)
+	if err != nil {
+		return fmt.Errorf("checkpoint: finalize per-edit: %w", err)
 	}
+
+	if !written {
+		return s.createSessionOnlyCheckpoint(ctx, session, runID, state, agentsession.CheckpointReasonPreWrite)
+	}
+	defer s.perEditStore.Reset()
+	return s.createCheckpointRecord(ctx, session, runID, state, checkpointID, agentsession.CheckpointReasonPreWrite)
+}
+
+// createEndOfTurnCheckpoint 在工具执行完成后创建代码检查点。
+// hasWorkspaceWrite=false 时不创建（避免空 checkpoint）；为 true 时 Finalize 当前 pending。
+// 失败仅 log，不阻塞主流程。
+func (s *Service) createEndOfTurnCheckpoint(ctx context.Context, state *runState, hasWorkspaceWrite bool) {
+	if s.checkpointStore == nil || s.perEditStore == nil {
+		return
+	}
+	if !hasWorkspaceWrite {
+		return
+	}
+
+	state.mu.Lock()
+	session := state.session
+	runID := state.runID
+	state.mu.Unlock()
 
 	checkpointID := agentsession.NewID("checkpoint")
-	ref := checkpoint.RefForCheckpoint(session.ID, checkpointID)
-	commitMsg := fmt.Sprintf("pre_write checkpoint for session %s", session.ID)
-
-	// Phase 1: shadow snapshot
-	commitHash, err := s.shadowRepo.Snapshot(ctx, ref, commitMsg)
+	written, err := s.perEditStore.Finalize(checkpointID)
 	if err != nil {
-		return fmt.Errorf("checkpoint: shadow snapshot: %w", err)
+		log.Printf("checkpoint: end-of-turn finalize: %v", err)
+		return
 	}
+	if !written {
+		return
+	}
+	defer s.perEditStore.Reset()
+	if err := s.createCheckpointRecord(ctx, session, runID, state, checkpointID, agentsession.CheckpointReasonEndOfTurn); err != nil {
+		log.Printf("checkpoint: end-of-turn record: %v", err)
+	}
+}
 
-	// Phase 2: DB write
+// createCheckpointRecord 写入 SQLite checkpoint 记录 + session 快照，并发出 EventCheckpointCreated。
+// CodeCheckpointRef 复用为 "peredit:<checkpointID>"，由 per-edit 后端解释为版本化文件历史的引用。
+func (s *Service) createCheckpointRecord(
+	ctx context.Context,
+	session agentsession.Session,
+	runID string,
+	state *runState,
+	checkpointID string,
+	reason agentsession.CheckpointReason,
+) error {
 	head := session.HeadSnapshot()
 	headJSON, err := json.Marshal(head)
 	if err != nil {
-		_ = s.shadowRepo.DeleteRef(ctx, ref)
+		_ = s.perEditStore.DeleteCheckpoint(checkpointID)
 		return fmt.Errorf("checkpoint: marshal head: %w", err)
 	}
 	messagesJSON, err := json.Marshal(session.Messages)
 	if err != nil {
-		_ = s.shadowRepo.DeleteRef(ctx, ref)
+		_ = s.perEditStore.DeleteCheckpoint(checkpointID)
 		return fmt.Errorf("checkpoint: marshal messages: %w", err)
 	}
 
 	effectiveWorkdir := strings.TrimSpace(session.Workdir)
 	now := time.Now()
+	ref := checkpoint.RefForPerEditCheckpoint(checkpointID)
 
 	record := agentsession.CheckpointRecord{
 		CheckpointID:      checkpointID,
@@ -64,12 +102,11 @@ func (s *Service) createPreWriteCheckpoint(ctx context.Context, state *runState)
 		RunID:             runID,
 		Workdir:           effectiveWorkdir,
 		CreatedAt:         now,
-		Reason:            agentsession.CheckpointReasonPreWrite,
+		Reason:            reason,
 		CodeCheckpointRef: ref,
 		Restorable:        true,
 		Status:            agentsession.CheckpointStatusCreating,
 	}
-
 	sessionCP := agentsession.SessionCheckpoint{
 		ID:           agentsession.NewID("sc"),
 		SessionID:    session.ID,
@@ -78,14 +115,12 @@ func (s *Service) createPreWriteCheckpoint(ctx context.Context, state *runState)
 		CreatedAt:    now,
 	}
 
-	input := checkpoint.CreateCheckpointInput{
+	saved, err := s.checkpointStore.CreateCheckpoint(ctx, checkpoint.CreateCheckpointInput{
 		Record:    record,
 		SessionCP: sessionCP,
-	}
-
-	saved, err := s.checkpointStore.CreateCheckpoint(ctx, input)
+	})
 	if err != nil {
-		_ = s.shadowRepo.DeleteRef(ctx, ref)
+		_ = s.perEditStore.DeleteCheckpoint(checkpointID)
 		return fmt.Errorf("checkpoint: db write: %w", err)
 	}
 
@@ -93,61 +128,31 @@ func (s *Service) createPreWriteCheckpoint(ctx context.Context, state *runState)
 		CheckpointID:         saved.CheckpointID,
 		CodeCheckpointRef:    saved.CodeCheckpointRef,
 		SessionCheckpointRef: saved.SessionCheckpointRef,
-		CommitHash:           commitHash,
+		CommitHash:           "",
 		Reason:               string(saved.Reason),
 	})
 	return nil
 }
 
-// toolCallsContainWorkspaceWrite 检查工具调用列表中是否包含会修改工作区的调用。
-func toolCallsContainWorkspaceWrite(calls []providertypes.ToolCall) bool {
-	for _, call := range calls {
-		if isWorkspaceWriteToolCall(call) {
-			return true
-		}
-	}
-	return false
-}
-
-func isWorkspaceWriteToolCall(call providertypes.ToolCall) bool {
-	switch call.Name {
-	case tools.ToolNameFilesystemWriteFile, tools.ToolNameFilesystemEdit:
-		return true
-	case tools.ToolNameBash:
-		return isBashWriteCommand(call.Arguments)
-	}
-	return false
-}
-
-func isBashWriteCommand(argumentsJSON string) bool {
-	trimmed := strings.TrimSpace(argumentsJSON)
-	if trimmed == "" {
-		return false
-	}
-	var args struct {
-		Command string `json:"command"`
-	}
-	if err := json.Unmarshal([]byte(trimmed), &args); err != nil {
-		return false
-	}
-	intent := tools.AnalyzeBashCommand(args.Command)
-	return intent.Classification == tools.BashIntentClassificationLocalMutation ||
-		intent.Classification == tools.BashIntentClassificationDestructive
-}
-
-// createDegradedCheckpoint 创建 session-only checkpoint（无代码快照），用于 shadowRepo 不可用时。
-func (s *Service) createDegradedCheckpoint(ctx context.Context, session agentsession.Session, runID string) error {
+// createSessionOnlyCheckpoint 创建仅含 session 状态的 checkpoint（无代码引用），用于无 pending 写入时的边界标记。
+func (s *Service) createSessionOnlyCheckpoint(
+	ctx context.Context,
+	session agentsession.Session,
+	runID string,
+	state *runState,
+	reason agentsession.CheckpointReason,
+) error {
 	checkpointID := agentsession.NewID("checkpoint")
 	now := time.Now()
 
 	head := session.HeadSnapshot()
 	headJSON, err := json.Marshal(head)
 	if err != nil {
-		return fmt.Errorf("checkpoint: marshal degraded head: %w", err)
+		return fmt.Errorf("checkpoint: marshal session-only head: %w", err)
 	}
 	messagesJSON, err := json.Marshal(session.Messages)
 	if err != nil {
-		return fmt.Errorf("checkpoint: marshal degraded messages: %w", err)
+		return fmt.Errorf("checkpoint: marshal session-only messages: %w", err)
 	}
 
 	record := agentsession.CheckpointRecord{
@@ -157,7 +162,7 @@ func (s *Service) createDegradedCheckpoint(ctx context.Context, session agentses
 		RunID:        runID,
 		Workdir:      session.Workdir,
 		CreatedAt:    now,
-		Reason:       agentsession.CheckpointReasonPreWriteDegraded,
+		Reason:       reason,
 		Restorable:   true,
 		Status:       agentsession.CheckpointStatusCreating,
 	}
@@ -174,10 +179,10 @@ func (s *Service) createDegradedCheckpoint(ctx context.Context, session agentses
 		SessionCP: sessionCP,
 	})
 	if err != nil {
-		return fmt.Errorf("checkpoint: degraded create: %w", err)
+		return fmt.Errorf("checkpoint: session-only create: %w", err)
 	}
 
-	s.emitRunScoped(ctx, EventCheckpointCreated, nil, CheckpointCreatedPayload{
+	s.emitRunScoped(ctx, EventCheckpointCreated, state, CheckpointCreatedPayload{
 		CheckpointID:         saved.CheckpointID,
 		CodeCheckpointRef:    "",
 		SessionCheckpointRef: saved.SessionCheckpointRef,

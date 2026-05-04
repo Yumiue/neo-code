@@ -210,6 +210,10 @@ func (s *rpcRunCaptureRuntimeStub) UndoRestore(_ context.Context, _ UndoRestoreI
 	return CheckpointRestoreResult{}, nil
 }
 
+func (s *rpcRunCaptureRuntimeStub) CheckpointDiff(_ context.Context, _ CheckpointDiffInput) (CheckpointDiffResult, error) {
+	return CheckpointDiffResult{}, nil
+}
+
 func TestDispatchRPCRequestResultEncodeError(t *testing.T) {
 	installHandlerRegistryForTest(t, map[FrameAction]requestFrameHandler{
 		FrameActionPing: func(_ context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {
@@ -979,6 +983,10 @@ func (s *runtimePortOnlyStub) RestoreCheckpoint(_ context.Context, _ CheckpointR
 
 func (s *runtimePortOnlyStub) UndoRestore(_ context.Context, _ UndoRestoreInput) (CheckpointRestoreResult, error) {
 	return CheckpointRestoreResult{}, nil
+}
+
+func (s *runtimePortOnlyStub) CheckpointDiff(_ context.Context, _ CheckpointDiffInput) (CheckpointDiffResult, error) {
+	return CheckpointDiffResult{}, nil
 }
 
 func TestDispatchRPCRequestProviderMethodsManagementPortUnavailable(t *testing.T) {

@@ -86,6 +86,8 @@ const (
 	FrameActionRestoreCheckpoint FrameAction = "checkpoint_restore"
 	// FrameActionUndoRestore 表示撤销最近一次 checkpoint 恢复。
 	FrameActionUndoRestore FrameAction = "checkpoint_undo_restore"
+	// FrameActionCheckpointDiff 表示查询两个相邻代码检查点之间的差异。
+	FrameActionCheckpointDiff FrameAction = "checkpoint_diff"
 )
 
 // InputPartType 表示多模态输入分片类型。

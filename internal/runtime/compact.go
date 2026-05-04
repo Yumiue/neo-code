@@ -284,12 +284,11 @@ func (s *Service) createCompactCheckpoint(ctx context.Context, runID string, ses
 		Status:       agentsession.CheckpointStatusCreating,
 	}
 
-	// Shadow snapshot if available
-	if s.shadowRepo != nil && s.shadowRepo.IsAvailable() {
-		ref := checkpoint.RefForCheckpoint(session.ID, checkpointID)
-		if commitHash, err := s.shadowRepo.Snapshot(ctx, ref, "compact checkpoint"); err == nil {
-			record.CodeCheckpointRef = ref
-			_ = commitHash
+	// Per-edit snapshot if pending writes exist this turn.
+	if s.perEditStore != nil {
+		if written, err := s.perEditStore.Finalize(checkpointID); err == nil && written {
+			record.CodeCheckpointRef = checkpoint.RefForPerEditCheckpoint(checkpointID)
+			s.perEditStore.Reset()
 		}
 	}
 

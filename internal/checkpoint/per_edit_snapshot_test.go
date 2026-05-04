@@ -1,0 +1,441 @@
+package checkpoint
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// newTestStore returns a PerEditSnapshotStore rooted at t.TempDir() and a workdir under it.
+func newTestStore(t *testing.T) (*PerEditSnapshotStore, string) {
+	t.Helper()
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "project")
+	workdir := filepath.Join(root, "workdir")
+	if err := os.MkdirAll(workdir, 0o755); err != nil {
+		t.Fatalf("mkdir workdir: %v", err)
+	}
+	return NewPerEditSnapshotStore(projectDir, workdir), workdir
+}
+
+func writeWorkdirFile(t *testing.T, workdir, rel, content string) string {
+	t.Helper()
+	abs := filepath.Join(workdir, rel)
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		t.Fatalf("mkdir parent: %v", err)
+	}
+	if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", rel, err)
+	}
+	return abs
+}
+
+func mustReadFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(data)
+}
+
+// TestCapturePreWrite_AssignsMonotonicVersions: same path captured across turns gets v1, v2, v3...
+func TestCapturePreWrite_AssignsMonotonicVersions(t *testing.T) {
+	store, workdir := newTestStore(t)
+	abs := writeWorkdirFile(t, workdir, "a.txt", "v0")
+
+	for i := 1; i <= 3; i++ {
+		v, err := store.CapturePreWrite(abs)
+		if err != nil {
+			t.Fatalf("capture %d: %v", i, err)
+		}
+		if v != i {
+			t.Fatalf("capture %d: want version %d, got %d", i, i, v)
+		}
+		store.Reset()
+	}
+}
+
+// TestCapturePreWrite_DedupesWithinTurn: same path within one turn returns first version every time.
+func TestCapturePreWrite_DedupesWithinTurn(t *testing.T) {
+	store, workdir := newTestStore(t)
+	abs := writeWorkdirFile(t, workdir, "a.txt", "hello")
+
+	v1, err := store.CapturePreWrite(abs)
+	if err != nil || v1 != 1 {
+		t.Fatalf("first capture: v=%d err=%v", v1, err)
+	}
+	v2, err := store.CapturePreWrite(abs)
+	if err != nil {
+		t.Fatalf("second capture: %v", err)
+	}
+	if v2 != v1 {
+		t.Fatalf("dedupe failed: v1=%d v2=%d", v1, v2)
+	}
+	v3, err := store.CapturePreWrite(abs)
+	if err != nil {
+		t.Fatalf("third capture: %v", err)
+	}
+	if v3 != v1 {
+		t.Fatalf("dedupe failed: v1=%d v3=%d", v1, v3)
+	}
+}
+
+// TestCapturePreWrite_NewFileMarksExistedFalse: capturing a non-existent path stores Existed=false.
+func TestCapturePreWrite_NewFileMarksExistedFalse(t *testing.T) {
+	store, workdir := newTestStore(t)
+	abs := filepath.Join(workdir, "ghost.txt")
+
+	v, err := store.CapturePreWrite(abs)
+	if err != nil {
+		t.Fatalf("capture missing file: %v", err)
+	}
+
+	hash := perEditPathHash(abs)
+	meta, err := store.readVersionMeta(hash, v)
+	if err != nil {
+		t.Fatalf("read meta: %v", err)
+	}
+	if meta.Existed {
+		t.Fatalf("Existed should be false for missing file")
+	}
+	bin, err := store.readVersionBin(hash, v)
+	if err != nil {
+		t.Fatalf("read bin: %v", err)
+	}
+	if len(bin) != 0 {
+		t.Fatalf("bin should be empty, got %d bytes", len(bin))
+	}
+}
+
+// TestRestore_UsesNextVersionAsTargetState: capture v1, modify, finalize cp1; capture v2, modify;
+// Restore(cp1) should put v2.bin (== state right after v1's edit) on disk.
+func TestRestore_UsesNextVersionAsTargetState(t *testing.T) {
+	store, workdir := newTestStore(t)
+	abs := writeWorkdirFile(t, workdir, "a.txt", "STATE_INITIAL")
+
+	// Turn 1: capture preX, simulate tool edit to STATE_AFTER_TURN_1, finalize cp1.
+	if _, err := store.CapturePreWrite(abs); err != nil {
+		t.Fatalf("turn1 capture: %v", err)
+	}
+	if err := os.WriteFile(abs, []byte("STATE_AFTER_TURN_1"), 0o644); err != nil {
+		t.Fatalf("turn1 edit: %v", err)
+	}
+	if written, err := store.Finalize("cp1"); err != nil || !written {
+		t.Fatalf("turn1 finalize: written=%v err=%v", written, err)
+	}
+	store.Reset()
+
+	// Turn 2: capture (current=STATE_AFTER_TURN_1), simulate edit to STATE_AFTER_TURN_2, finalize cp2.
+	if _, err := store.CapturePreWrite(abs); err != nil {
+		t.Fatalf("turn2 capture: %v", err)
+	}
+	if err := os.WriteFile(abs, []byte("STATE_AFTER_TURN_2"), 0o644); err != nil {
+		t.Fatalf("turn2 edit: %v", err)
+	}
+	if _, err := store.Finalize("cp2"); err != nil {
+		t.Fatalf("turn2 finalize: %v", err)
+	}
+	store.Reset()
+
+	// Workdir is now STATE_AFTER_TURN_2.
+	if got := mustReadFile(t, abs); got != "STATE_AFTER_TURN_2" {
+		t.Fatalf("pre-restore: %q", got)
+	}
+
+	// Restore cp1: should write STATE_AFTER_TURN_1 (== v2.bin == content captured at start of turn 2).
+	if err := store.Restore(context.Background(), "cp1"); err != nil {
+		t.Fatalf("restore cp1: %v", err)
+	}
+	if got := mustReadFile(t, abs); got != "STATE_AFTER_TURN_1" {
+		t.Fatalf("after restore cp1 want %q got %q", "STATE_AFTER_TURN_1", got)
+	}
+}
+
+// TestRestore_NoNextVersionIsNoOp: restoring the latest checkpoint doesn't change workdir.
+func TestRestore_NoNextVersionIsNoOp(t *testing.T) {
+	store, workdir := newTestStore(t)
+	abs := writeWorkdirFile(t, workdir, "a.txt", "BEFORE")
+
+	if _, err := store.CapturePreWrite(abs); err != nil {
+		t.Fatalf("capture: %v", err)
+	}
+	if err := os.WriteFile(abs, []byte("AFTER"), 0o644); err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+	if _, err := store.Finalize("cp1"); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+	store.Reset()
+
+	if err := store.Restore(context.Background(), "cp1"); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if got := mustReadFile(t, abs); got != "AFTER" {
+		t.Fatalf("workdir after restore should be unchanged AFTER, got %q", got)
+	}
+}
+
+// TestRestore_PreservesUntrackedFiles: files not in cp.FileVersions stay untouched.
+func TestRestore_PreservesUntrackedFiles(t *testing.T) {
+	store, workdir := newTestStore(t)
+	tracked := writeWorkdirFile(t, workdir, "tracked.txt", "TR_INITIAL")
+	untracked := writeWorkdirFile(t, workdir, "untracked.txt", "UN_INITIAL")
+
+	// Turn 1: only touch tracked.
+	if _, err := store.CapturePreWrite(tracked); err != nil {
+		t.Fatalf("capture tracked: %v", err)
+	}
+	if err := os.WriteFile(tracked, []byte("TR_AFTER_T1"), 0o644); err != nil {
+		t.Fatalf("edit tracked: %v", err)
+	}
+	if _, err := store.Finalize("cp1"); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+	store.Reset()
+
+	// Turn 2: edit tracked again so cp1 has a usable v_next.
+	if _, err := store.CapturePreWrite(tracked); err != nil {
+		t.Fatalf("capture tracked t2: %v", err)
+	}
+	if err := os.WriteFile(tracked, []byte("TR_AFTER_T2"), 0o644); err != nil {
+		t.Fatalf("edit tracked t2: %v", err)
+	}
+	// External (non-agent) edit to untracked file at any time; should NOT be reverted.
+	if err := os.WriteFile(untracked, []byte("UN_EXTERNAL"), 0o644); err != nil {
+		t.Fatalf("edit untracked: %v", err)
+	}
+	if _, err := store.Finalize("cp2"); err != nil {
+		t.Fatalf("finalize cp2: %v", err)
+	}
+	store.Reset()
+
+	if err := store.Restore(context.Background(), "cp1"); err != nil {
+		t.Fatalf("restore cp1: %v", err)
+	}
+	if got := mustReadFile(t, tracked); got != "TR_AFTER_T1" {
+		t.Fatalf("tracked after restore want TR_AFTER_T1 got %q", got)
+	}
+	if got := mustReadFile(t, untracked); got != "UN_EXTERNAL" {
+		t.Fatalf("untracked must stay UN_EXTERNAL, got %q", got)
+	}
+}
+
+// TestDiff_EndToEnd_SameLineMultipleEdits: a→b→a→b→a sequence; Diff(first, last) is empty.
+func TestDiff_EndToEnd_SameLineMultipleEdits(t *testing.T) {
+	store, workdir := newTestStore(t)
+	abs := writeWorkdirFile(t, workdir, "f.txt", "X\n")
+
+	transitions := []string{"A\n", "B\n", "A\n", "B\n", "A\n"}
+	for i, target := range transitions {
+		if _, err := store.CapturePreWrite(abs); err != nil {
+			t.Fatalf("capture turn %d: %v", i+1, err)
+		}
+		if err := os.WriteFile(abs, []byte(target), 0o644); err != nil {
+			t.Fatalf("edit turn %d: %v", i+1, err)
+		}
+		cpID := "cp" + string(rune('0'+i+1))
+		if _, err := store.Finalize(cpID); err != nil {
+			t.Fatalf("finalize %s: %v", cpID, err)
+		}
+		store.Reset()
+	}
+
+	// State at cp1 (== content right after turn 1) should be "A".
+	// State at cp5 (== current workdir, since v5 has no v_next) should also be "A".
+	patch, err := store.Diff(context.Background(), "cp1", "cp5")
+	if err != nil {
+		t.Fatalf("diff: %v", err)
+	}
+	if strings.TrimSpace(patch) != "" {
+		t.Fatalf("expected empty diff for endpoints both 'A', got:\n%s", patch)
+	}
+}
+
+// TestDiff_NoNextVersionFallsBackToWorkdir: latest checkpoint uses current workdir for its content.
+func TestDiff_NoNextVersionFallsBackToWorkdir(t *testing.T) {
+	store, workdir := newTestStore(t)
+	abs := writeWorkdirFile(t, workdir, "f.txt", "X")
+
+	// Turn 1: X → A
+	if _, err := store.CapturePreWrite(abs); err != nil {
+		t.Fatalf("capture t1: %v", err)
+	}
+	if err := os.WriteFile(abs, []byte("A"), 0o644); err != nil {
+		t.Fatalf("edit t1: %v", err)
+	}
+	if _, err := store.Finalize("cp1"); err != nil {
+		t.Fatalf("finalize cp1: %v", err)
+	}
+	store.Reset()
+
+	// Turn 2: A → B
+	if _, err := store.CapturePreWrite(abs); err != nil {
+		t.Fatalf("capture t2: %v", err)
+	}
+	if err := os.WriteFile(abs, []byte("B"), 0o644); err != nil {
+		t.Fatalf("edit t2: %v", err)
+	}
+	if _, err := store.Finalize("cp2"); err != nil {
+		t.Fatalf("finalize cp2: %v", err)
+	}
+	store.Reset()
+
+	// content_at_cp1 = v2.bin = "A"
+	// content_at_cp2 = current workdir = "B"
+	patch, err := store.Diff(context.Background(), "cp1", "cp2")
+	if err != nil {
+		t.Fatalf("diff: %v", err)
+	}
+	if !strings.Contains(patch, "-A") || !strings.Contains(patch, "+B") {
+		t.Fatalf("expected diff A→B, got:\n%s", patch)
+	}
+}
+
+// TestIndexReload_SurvivesProcessRestart: reconstruct store from disk, verify pathToVersions/displayPaths.
+func TestIndexReload_SurvivesProcessRestart(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "project")
+	workdir := filepath.Join(root, "workdir")
+	if err := os.MkdirAll(workdir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	abs := filepath.Join(workdir, "a.txt")
+	if err := os.WriteFile(abs, []byte("X"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	{
+		store := NewPerEditSnapshotStore(projectDir, workdir)
+		if _, err := store.CapturePreWrite(abs); err != nil {
+			t.Fatalf("first capture: %v", err)
+		}
+		if err := os.WriteFile(abs, []byte("Y"), 0o644); err != nil {
+			t.Fatalf("edit1: %v", err)
+		}
+		if _, err := store.Finalize("cp1"); err != nil {
+			t.Fatalf("finalize: %v", err)
+		}
+		store.Reset()
+
+		if _, err := store.CapturePreWrite(abs); err != nil {
+			t.Fatalf("second capture: %v", err)
+		}
+	}
+
+	// Simulate process restart: build fresh store from same dirs.
+	revived := NewPerEditSnapshotStore(projectDir, workdir)
+	hash := perEditPathHash(abs)
+	versions := revived.pathToVersions[hash]
+	if len(versions) != 2 || versions[0] != 1 || versions[1] != 2 {
+		t.Fatalf("revived versions = %v, want [1 2]", versions)
+	}
+	if revived.displayPaths[hash] != filepath.Clean(abs) {
+		t.Fatalf("revived display = %q, want %q", revived.displayPaths[hash], filepath.Clean(abs))
+	}
+
+	// Restore on revived store should still work (verifies cp1.json + version files are usable).
+	// Workdir is "Y" right now (we never edited again post second capture).
+	// cp1 -> v_next(v1) = v2 -> meta.Existed=true, content="Y"
+	// So Restore writes "Y" back which is no-op effectively.
+	if err := revived.Restore(context.Background(), "cp1"); err != nil {
+		t.Fatalf("revived restore: %v", err)
+	}
+	if got := mustReadFile(t, abs); got != "Y" {
+		t.Fatalf("post-restore want Y got %q", got)
+	}
+}
+
+// TestFinalize_EmptyPendingReturnsFalse: Finalize with no captures should be a no-op.
+func TestFinalize_EmptyPendingReturnsFalse(t *testing.T) {
+	store, _ := newTestStore(t)
+	written, err := store.Finalize("cp_empty")
+	if err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+	if written {
+		t.Fatalf("written should be false on empty pending")
+	}
+	if _, err := os.Stat(store.checkpointMetaPath("cp_empty")); !os.IsNotExist(err) {
+		t.Fatalf("checkpoint meta should not exist, stat err=%v", err)
+	}
+}
+
+// TestRestore_RemovesFileWhenVNextExistedFalse: capture-existing → delete → restore should NOT
+// recreate the file because the next captured version has Existed=false.
+func TestRestore_RemovesFileWhenVNextExistedFalse(t *testing.T) {
+	store, workdir := newTestStore(t)
+	abs := writeWorkdirFile(t, workdir, "doomed.txt", "I_LIVE")
+
+	// Turn 1: edit
+	if _, err := store.CapturePreWrite(abs); err != nil {
+		t.Fatalf("capture t1: %v", err)
+	}
+	if err := os.WriteFile(abs, []byte("STILL_LIVE"), 0o644); err != nil {
+		t.Fatalf("edit t1: %v", err)
+	}
+	if _, err := store.Finalize("cp1"); err != nil {
+		t.Fatalf("finalize cp1: %v", err)
+	}
+	store.Reset()
+
+	// Turn 2: capture existing then delete; v2.bin contains "STILL_LIVE", v2.meta.Existed=true.
+	// We need a v3 that has Existed=false to model "restore should delete".
+	// So: turn 2 deletes, capture pre-delete: v2.bin="STILL_LIVE", Existed=true; remove file.
+	if _, err := store.CapturePreWrite(abs); err != nil {
+		t.Fatalf("capture t2: %v", err)
+	}
+	if err := os.Remove(abs); err != nil {
+		t.Fatalf("delete t2: %v", err)
+	}
+	if _, err := store.Finalize("cp2"); err != nil {
+		t.Fatalf("finalize cp2: %v", err)
+	}
+	store.Reset()
+
+	// Turn 3: re-create file; capture pre-create finds Existed=false.
+	if _, err := store.CapturePreWrite(abs); err != nil {
+		t.Fatalf("capture t3: %v", err)
+	}
+	if err := os.WriteFile(abs, []byte("RECREATED"), 0o644); err != nil {
+		t.Fatalf("recreate t3: %v", err)
+	}
+	if _, err := store.Finalize("cp3"); err != nil {
+		t.Fatalf("finalize cp3: %v", err)
+	}
+	store.Reset()
+
+	// Restore cp2: v2 captured "STILL_LIVE"; v_next(v2)=v3 has Existed=false → delete file.
+	if err := store.Restore(context.Background(), "cp2"); err != nil {
+		t.Fatalf("restore cp2: %v", err)
+	}
+	if _, err := os.Stat(abs); !os.IsNotExist(err) {
+		t.Fatalf("file should be deleted, stat err=%v", err)
+	}
+}
+
+// TestCaptureBatch_DedupesAndCaptures: batch is just sequential CapturePreWrite, dedupe works.
+func TestCaptureBatch_DedupesAndCaptures(t *testing.T) {
+	store, workdir := newTestStore(t)
+	a := writeWorkdirFile(t, workdir, "a.txt", "A")
+	b := writeWorkdirFile(t, workdir, "b.txt", "B")
+
+	captured, err := store.CaptureBatch([]string{a, b, a, " ", "", b})
+	if err != nil {
+		t.Fatalf("batch: %v", err)
+	}
+	if len(captured) != 4 {
+		t.Fatalf("captured paths len = %d, want 4 (empty/whitespace skipped)", len(captured))
+	}
+
+	// pending should have exactly two unique hashes.
+	store.pendingMu.Lock()
+	count := len(store.pending)
+	store.pendingMu.Unlock()
+	if count != 2 {
+		t.Fatalf("pending count = %d, want 2", count)
+	}
+}

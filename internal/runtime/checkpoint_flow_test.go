@@ -1,0 +1,391 @@
+package runtime
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"neo-code/internal/checkpoint"
+	providertypes "neo-code/internal/provider/types"
+	agentsession "neo-code/internal/session"
+)
+
+type checkpointStoreSpy struct {
+	lastResume    agentsession.ResumeCheckpoint
+	listRecords   []agentsession.CheckpointRecord
+	listSessionID string
+	listOpts      checkpoint.ListCheckpointOpts
+	listErr       error
+}
+
+func (s *checkpointStoreSpy) CreateCheckpoint(_ context.Context, in checkpoint.CreateCheckpointInput) (agentsession.CheckpointRecord, error) {
+	return in.Record, nil
+}
+
+func (s *checkpointStoreSpy) ListCheckpoints(_ context.Context, sessionID string, opts checkpoint.ListCheckpointOpts) ([]agentsession.CheckpointRecord, error) {
+	s.listSessionID = sessionID
+	s.listOpts = opts
+	return s.listRecords, s.listErr
+}
+
+func (s *checkpointStoreSpy) GetCheckpoint(context.Context, string) (agentsession.CheckpointRecord, *agentsession.SessionCheckpoint, error) {
+	return agentsession.CheckpointRecord{}, nil, nil
+}
+
+func (s *checkpointStoreSpy) UpdateCheckpointStatus(context.Context, string, agentsession.CheckpointStatus) error {
+	return nil
+}
+
+func (s *checkpointStoreSpy) GetLatestResumeCheckpoint(context.Context, string) (*agentsession.ResumeCheckpoint, error) {
+	return nil, nil
+}
+
+func (s *checkpointStoreSpy) RestoreCheckpoint(context.Context, checkpoint.RestoreCheckpointInput) error {
+	return nil
+}
+
+func (s *checkpointStoreSpy) SetResumeCheckpoint(_ context.Context, rc agentsession.ResumeCheckpoint) error {
+	s.lastResume = rc
+	return nil
+}
+
+func (s *checkpointStoreSpy) PruneExpiredCheckpoints(context.Context, string, int) (int, error) {
+	return 0, nil
+}
+
+func (s *checkpointStoreSpy) RepairCreatingCheckpoints(context.Context) (int, error) {
+	return 0, nil
+}
+
+type runtimeCheckpointFixture struct {
+	service         *Service
+	sessionStore    *agentsession.SQLiteStore
+	checkpointStore *checkpoint.SQLiteCheckpointStore
+	perEditStore    *checkpoint.PerEditSnapshotStore
+	workdir         string
+	projectDir      string
+	session         agentsession.Session
+}
+
+func newRuntimeCheckpointFixture(t *testing.T) runtimeCheckpointFixture {
+	t.Helper()
+
+	baseDir := t.TempDir()
+	workdir := t.TempDir()
+	projectDir := t.TempDir()
+
+	sessionStore := agentsession.NewSQLiteStore(baseDir, workdir)
+	t.Cleanup(func() { _ = sessionStore.Close() })
+
+	checkpointStore := checkpoint.NewSQLiteCheckpointStore(agentsession.DatabasePath(baseDir, workdir))
+	t.Cleanup(func() { _ = checkpointStore.Close() })
+
+	perEditStore := checkpoint.NewPerEditSnapshotStore(projectDir, workdir)
+
+	created, err := sessionStore.CreateSession(context.Background(), agentsession.CreateSessionInput{
+		ID:    "runtime-checkpoint-session",
+		Title: "runtime checkpoint",
+		Head: agentsession.SessionHead{
+			Provider: "openai",
+			Model:    "gpt-test",
+			Workdir:  workdir,
+			TaskState: agentsession.TaskState{
+				Goal:                "initial goal",
+				VerificationProfile: agentsession.VerificationProfileTaskOnly,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	if err := sessionStore.AppendMessages(context.Background(), agentsession.AppendMessagesInput{
+		SessionID: created.ID,
+		Messages: []providertypes.Message{
+			{
+				Role: providertypes.RoleUser,
+				Parts: []providertypes.ContentPart{
+					providertypes.NewTextPart("before restore"),
+				},
+			},
+		},
+		UpdatedAt: time.Now(),
+		Provider:  "openai",
+		Model:     "gpt-test",
+		Workdir:   workdir,
+	}); err != nil {
+		t.Fatalf("AppendMessages() error = %v", err)
+	}
+	loaded, err := sessionStore.LoadSession(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("LoadSession() error = %v", err)
+	}
+
+	return runtimeCheckpointFixture{
+		service: &Service{
+			sessionStore:    sessionStore,
+			checkpointStore: checkpointStore,
+			perEditStore:    perEditStore,
+			events:          make(chan RuntimeEvent, 32),
+		},
+		sessionStore:    sessionStore,
+		checkpointStore: checkpointStore,
+		perEditStore:    perEditStore,
+		workdir:         workdir,
+		projectDir:      projectDir,
+		session:         loaded,
+	}
+}
+
+// captureFile is a test helper that drops a file at workdir-relative path and asks
+// the per-edit store to capture its current content as a pending pre-write version.
+func (f runtimeCheckpointFixture) captureFile(t *testing.T, relPath string, content []byte) string {
+	t.Helper()
+	abs := filepath.Join(f.workdir, relPath)
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(abs, content, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if _, err := f.perEditStore.CapturePreWrite(abs); err != nil {
+		t.Fatalf("CapturePreWrite() error = %v", err)
+	}
+	return abs
+}
+
+func TestCreateStartOfTurnCheckpoint_PendingWrite(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+	fixture.captureFile(t, "main.go", []byte("package main\nconst v = 1\n"))
+
+	state := newRunState("run-pending", fixture.session)
+	if err := fixture.service.createStartOfTurnCheckpoint(context.Background(), &state); err != nil {
+		t.Fatalf("createStartOfTurnCheckpoint() error = %v", err)
+	}
+
+	records, err := fixture.checkpointStore.ListCheckpoints(context.Background(), fixture.session.ID, checkpoint.ListCheckpointOpts{})
+	if err != nil {
+		t.Fatalf("ListCheckpoints() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records count = %d, want 1: %#v", len(records), records)
+	}
+	if records[0].Reason != agentsession.CheckpointReasonPreWrite {
+		t.Fatalf("reason = %s, want pre_write", records[0].Reason)
+	}
+	if !checkpoint.IsPerEditRef(records[0].CodeCheckpointRef) {
+		t.Fatalf("code ref = %q, want peredit ref", records[0].CodeCheckpointRef)
+	}
+}
+
+func TestCreateStartOfTurnCheckpoint_NoPending_SessionOnly(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+
+	state := newRunState("run-empty", fixture.session)
+	if err := fixture.service.createStartOfTurnCheckpoint(context.Background(), &state); err != nil {
+		t.Fatalf("createStartOfTurnCheckpoint() error = %v", err)
+	}
+
+	records, err := fixture.checkpointStore.ListCheckpoints(context.Background(), fixture.session.ID, checkpoint.ListCheckpointOpts{})
+	if err != nil {
+		t.Fatalf("ListCheckpoints() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %#v, want one session-only checkpoint", records)
+	}
+	if records[0].Reason != agentsession.CheckpointReasonPreWrite {
+		t.Fatalf("reason = %s, want pre_write", records[0].Reason)
+	}
+	if records[0].CodeCheckpointRef != "" {
+		t.Fatalf("code ref = %q, want empty (session-only)", records[0].CodeCheckpointRef)
+	}
+}
+
+func TestCreateEndOfTurnCheckpoint_NoWriteSkipped(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+	fixture.captureFile(t, "main.go", []byte("package main\n"))
+
+	state := newRunState("run-no-write", fixture.session)
+	fixture.service.createEndOfTurnCheckpoint(context.Background(), &state, false)
+
+	records, err := fixture.checkpointStore.ListCheckpoints(context.Background(), fixture.session.ID, checkpoint.ListCheckpointOpts{})
+	if err != nil {
+		t.Fatalf("ListCheckpoints() error = %v", err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("records = %#v, want no checkpoint when hasWorkspaceWrite=false", records)
+	}
+}
+
+func TestCreateEndOfTurnCheckpoint_PerEditSkipsEmpty(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+
+	state := newRunState("run-empty", fixture.session)
+	fixture.service.createEndOfTurnCheckpoint(context.Background(), &state, true)
+
+	records, err := fixture.checkpointStore.ListCheckpoints(context.Background(), fixture.session.ID, checkpoint.ListCheckpointOpts{})
+	if err != nil {
+		t.Fatalf("ListCheckpoints() error = %v", err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("records = %#v, want no checkpoint when no pending writes captured", records)
+	}
+}
+
+func TestCreateEndOfTurnCheckpoint_WithPending(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+	fixture.captureFile(t, "lib.go", []byte("package lib\n"))
+
+	state := newRunState("run-eot", fixture.session)
+	fixture.service.createEndOfTurnCheckpoint(context.Background(), &state, true)
+
+	records, err := fixture.checkpointStore.ListCheckpoints(context.Background(), fixture.session.ID, checkpoint.ListCheckpointOpts{})
+	if err != nil {
+		t.Fatalf("ListCheckpoints() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %#v, want 1 end-of-turn checkpoint", records)
+	}
+	if records[0].Reason != agentsession.CheckpointReasonEndOfTurn {
+		t.Fatalf("reason = %s, want end_of_turn", records[0].Reason)
+	}
+	if !checkpoint.IsPerEditRef(records[0].CodeCheckpointRef) {
+		t.Fatalf("code ref = %q, want peredit ref", records[0].CodeCheckpointRef)
+	}
+}
+
+func TestCreateCompactCheckpoint(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+	if err := os.WriteFile(filepath.Join(fixture.workdir, "compact.txt"), []byte("compact"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	fixture.service.createCompactCheckpoint(context.Background(), "run-compact", fixture.session)
+
+	records, err := fixture.checkpointStore.ListCheckpoints(context.Background(), fixture.session.ID, checkpoint.ListCheckpointOpts{})
+	if err != nil {
+		t.Fatalf("ListCheckpoints() error = %v", err)
+	}
+	if len(records) != 1 || records[0].Reason != agentsession.CheckpointReasonCompact {
+		t.Fatalf("records = %#v, want compact checkpoint", records)
+	}
+}
+
+func TestUpdateResumeCheckpoint(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+	state := newRunState("run-resume", fixture.session)
+	state.turn = 3
+	spy := &checkpointStoreSpy{}
+	service := &Service{checkpointStore: spy}
+	service.updateResumeCheckpoint(context.Background(), &state, "verify", "running")
+
+	if spy.lastResume.SessionID != fixture.session.ID || spy.lastResume.RunID != "run-resume" || spy.lastResume.Turn != 3 || spy.lastResume.Phase != "verify" {
+		t.Fatalf("SetResumeCheckpoint() captured %#v", spy.lastResume)
+	}
+}
+
+func TestRuntimeCheckpointFacadeMethods(t *testing.T) {
+	t.Run("list checkpoints delegates to store", func(t *testing.T) {
+		spy := &checkpointStoreSpy{
+			listRecords: []agentsession.CheckpointRecord{{CheckpointID: "cp-1"}},
+		}
+		service := &Service{checkpointStore: spy}
+
+		records, err := service.ListCheckpoints(context.Background(), "session-1", checkpoint.ListCheckpointOpts{
+			Limit:          5,
+			RestorableOnly: true,
+		})
+		if err != nil {
+			t.Fatalf("ListCheckpoints() error = %v", err)
+		}
+		if spy.listSessionID != "session-1" || spy.listOpts.Limit != 5 || !spy.listOpts.RestorableOnly {
+			t.Fatalf("spy captured session=%q opts=%#v", spy.listSessionID, spy.listOpts)
+		}
+		if len(records) != 1 || records[0].CheckpointID != "cp-1" {
+			t.Fatalf("records = %#v", records)
+		}
+	})
+
+	t.Run("list checkpoints reports unavailable store", func(t *testing.T) {
+		service := &Service{}
+		if _, err := service.ListCheckpoints(context.Background(), "session-1", checkpoint.ListCheckpointOpts{}); err == nil {
+			t.Fatal("expected error when checkpoint store is unavailable")
+		}
+	})
+
+	t.Run("set checkpoint dependencies stores references", func(t *testing.T) {
+		service := &Service{}
+		store := &checkpointStoreSpy{}
+		perEdit := checkpoint.NewPerEditSnapshotStore(t.TempDir(), t.TempDir())
+
+		service.SetCheckpointDependencies(store, perEdit)
+		if service.checkpointStore != store || service.perEditStore != perEdit {
+			t.Fatalf("service checkpoint dependencies not set correctly")
+		}
+	})
+
+	t.Run("update runtime session after restore invalidates cache", func(t *testing.T) {
+		service := &Service{
+			runtimeSnapshots: map[string]RuntimeSnapshot{
+				"session-1": {SessionID: "session-1", Phase: "execute"},
+			},
+		}
+		service.updateRuntimeSessionAfterRestore("session-1", agentsession.SessionHead{}, nil)
+		if _, ok := service.runtimeSnapshots["session-1"]; ok {
+			t.Fatal("expected cached snapshot to be deleted after restore")
+		}
+	})
+}
+
+func TestRestoreCheckpoint_RecoversCapturedFile(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+	target := filepath.Join(fixture.workdir, "restore.txt")
+	if err := os.WriteFile(target, []byte("version one"), 0o644); err != nil {
+		t.Fatalf("WriteFile(version one) error = %v", err)
+	}
+	if _, err := fixture.perEditStore.CapturePreWrite(target); err != nil {
+		t.Fatalf("CapturePreWrite() error = %v", err)
+	}
+
+	state := newRunState("run-restore", fixture.session)
+	if err := fixture.service.createStartOfTurnCheckpoint(context.Background(), &state); err != nil {
+		t.Fatalf("createStartOfTurnCheckpoint() error = %v", err)
+	}
+	records, err := fixture.checkpointStore.ListCheckpoints(context.Background(), fixture.session.ID, checkpoint.ListCheckpointOpts{})
+	if err != nil {
+		t.Fatalf("ListCheckpoints() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %#v, want 1", records)
+	}
+	cpRecord := records[0]
+
+	// mark checkpoint available so RestoreCheckpoint accepts it
+	if err := fixture.checkpointStore.UpdateCheckpointStatus(context.Background(), cpRecord.CheckpointID, agentsession.CheckpointStatusAvailable); err != nil {
+		t.Fatalf("UpdateCheckpointStatus() error = %v", err)
+	}
+
+	// agent rewrites the file (capture v2 mid-flight)
+	if _, err := fixture.perEditStore.CapturePreWrite(target); err != nil {
+		t.Fatalf("CapturePreWrite(v2) error = %v", err)
+	}
+	if err := os.WriteFile(target, []byte("version two"), 0o644); err != nil {
+		t.Fatalf("WriteFile(version two) error = %v", err)
+	}
+
+	if _, err := fixture.service.RestoreCheckpoint(context.Background(), GatewayRestoreInput{
+		SessionID:    fixture.session.ID,
+		CheckpointID: cpRecord.CheckpointID,
+	}); err != nil {
+		t.Fatalf("RestoreCheckpoint() error = %v", err)
+	}
+
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if string(got) != "version one" {
+		t.Fatalf("restored content = %q, want %q", string(got), "version one")
+	}
+}

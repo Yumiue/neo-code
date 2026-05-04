@@ -12,6 +12,7 @@ const (
 	CheckpointReasonManual           CheckpointReason = "manual"
 	CheckpointReasonGuard            CheckpointReason = "pre_restore_guard"
 	CheckpointReasonPreWriteDegraded CheckpointReason = "pre_write_degraded"
+	CheckpointReasonEndOfTurn        CheckpointReason = "end_of_turn"
 )
 
 // CheckpointStatus 描述 checkpoint 的生命周期状态。

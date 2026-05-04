@@ -152,7 +152,7 @@ type Service struct {
 	budgetResolver    BudgetResolver
 	hookExecutor      HookExecutor
 	checkpointStore   checkpoint.CheckpointStore
-	shadowRepo        *checkpoint.ShadowRepo
+	perEditStore      *checkpoint.PerEditSnapshotStore
 
 	events             chan RuntimeEvent
 	runtimeSnapshotMu  sync.Mutex
@@ -457,8 +457,8 @@ func (s *Service) SetHookExecutor(executor HookExecutor) {
 	s.hookExecutor = executor
 }
 
-// SetCheckpointDependencies 注入 checkpoint 存储与影子仓库，用于 pre-write checkpoint gate。
-func (s *Service) SetCheckpointDependencies(store checkpoint.CheckpointStore, repo *checkpoint.ShadowRepo) {
+// SetCheckpointDependencies 注入 checkpoint 存储与版本化文件历史快照后端，用于 pre-write checkpoint gate。
+func (s *Service) SetCheckpointDependencies(store checkpoint.CheckpointStore, perEdit *checkpoint.PerEditSnapshotStore) {
 	s.checkpointStore = store
-	s.shadowRepo = repo
+	s.perEditStore = perEdit
 }

@@ -231,36 +231,34 @@ func BuildGatewayServerDeps(ctx context.Context, opts BootstrapOptions) (Runtime
 		))
 	}
 
-	// Checkpoint 基础设施：影子仓库 + SQLite checkpoint 存储
-	dbPath := agentsession.DatabasePath(sharedDeps.ConfigManager.BaseDir(), cfg.Workdir)
-	if gitAvail, _ := checkpoint.CheckGitAvailability(ctx); gitAvail {
-		projectDir := agentsession.HashWorkspaceRoot(cfg.Workdir)
-		shadowDir := filepath.Join(sharedDeps.ConfigManager.BaseDir(), "projects", projectDir)
-		shadowRepo := checkpoint.NewShadowRepo(shadowDir, cfg.Workdir)
-		if err := shadowRepo.Init(ctx); err != nil {
-			log.Printf("checkpoint shadow repo init warning: %v", err)
-		} else {
-			checkpointStore := checkpoint.NewSQLiteCheckpointStore(dbPath)
-			runtimeSvc.SetCheckpointDependencies(checkpointStore, shadowRepo)
+	// Checkpoint 基础设施：SQLite + per-edit 版本化文件历史（不依赖 git）。
+	// 优先复用 sessionStore 已打开的 *sql.DB；冷启动尚未建连时显式初始化，
+	// 避免 sessionStore.DB() 为 nil 时整条 checkpoint 链路被静默跳过。
+	sessionDB := sessionStore.DB()
+	if sessionDB == nil {
+		if initDB, initErr := sessionStore.InitDB(ctx); initErr == nil {
+			sessionDB = initDB
 		}
-	} else {
-		// 降级模式：git 不可用时仍可创建 session-only checkpoint
-		checkpointStore := checkpoint.NewSQLiteCheckpointStore(dbPath)
-		runtimeSvc.SetCheckpointDependencies(checkpointStore, nil)
+	}
+	var checkpointStore *checkpoint.SQLiteCheckpointStore
+	if sessionDB != nil {
+		checkpointStore = checkpoint.NewSQLiteCheckpointStoreWithDB(sessionDB)
+		projectDir := agentsession.HashWorkspaceRoot(cfg.Workdir)
+		snapshotRoot := filepath.Join(sharedDeps.ConfigManager.BaseDir(), "projects", projectDir)
+		perEditStore := checkpoint.NewPerEditSnapshotStore(snapshotRoot, cfg.Workdir)
+		runtimeSvc.SetCheckpointDependencies(checkpointStore, perEditStore)
 	}
 	// 启动时修复残留的 creating 状态 checkpoint
-	{
-		repairStore := checkpoint.NewSQLiteCheckpointStore(dbPath)
-		if repaired, err := repairStore.RepairCreatingCheckpoints(ctx); err != nil {
+	if checkpointStore != nil {
+		if repaired, err := checkpointStore.RepairCreatingCheckpoints(ctx); err != nil {
 			log.Printf("checkpoint repair warning: %v", err)
 		} else if repaired > 0 {
 			log.Printf("checkpoint repair: fixed %d stale checkpoints", repaired)
 		}
-		_ = repairStore.Close()
 	}
 
 	runtimeImpl := agentruntime.Runtime(runtimeSvc)
-	closeFns := []func() error{toolsCleanup, sessionStore.Close}
+	closeFns := []func() error{toolsCleanup, checkpointStore.Close, sessionStore.Close}
 
 	needCleanup = false
 
@@ -440,6 +438,11 @@ func buildToolRegistry(cfg config.Config) (*tools.Registry, func() error, error)
 	toolRegistry.Register(filesystem.NewGrep(cfg.Workdir))
 	toolRegistry.Register(filesystem.NewGlob(cfg.Workdir))
 	toolRegistry.Register(filesystem.NewEdit(cfg.Workdir))
+	toolRegistry.Register(filesystem.NewMove(cfg.Workdir))
+	toolRegistry.Register(filesystem.NewCopy(cfg.Workdir))
+	toolRegistry.Register(filesystem.NewDelete(cfg.Workdir))
+	toolRegistry.Register(filesystem.NewCreateDir(cfg.Workdir))
+	toolRegistry.Register(filesystem.NewRemoveDir(cfg.Workdir))
 	toolRegistry.Register(bash.New(cfg.Workdir, cfg.Shell, time.Duration(cfg.ToolTimeoutSec)*time.Second))
 	toolRegistry.Register(diagnosetool.New())
 	toolRegistry.Register(webfetch.New(webfetch.Config{

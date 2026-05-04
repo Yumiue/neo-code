@@ -138,6 +138,10 @@ func (s *runtimePortCompileStub) UndoRestore(_ context.Context, _ UndoRestoreInp
 	return CheckpointRestoreResult{}, nil
 }
 
+func (s *runtimePortCompileStub) CheckpointDiff(_ context.Context, _ CheckpointDiffInput) (CheckpointDiffResult, error) {
+	return CheckpointDiffResult{}, nil
+}
+
 var _ RuntimePort = (*runtimePortCompileStub)(nil)
 var _ TransportAdapter = (*Server)(nil)
 var _ TransportAdapter = (*NetworkServer)(nil)

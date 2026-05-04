@@ -469,6 +469,10 @@ func (s *runtimePortEventStub) UndoRestore(_ context.Context, _ UndoRestoreInput
 	return CheckpointRestoreResult{}, nil
 }
 
+func (s *runtimePortEventStub) CheckpointDiff(_ context.Context, _ CheckpointDiffInput) (CheckpointDiffResult, error) {
+	return CheckpointDiffResult{}, nil
+}
+
 func decodeJSONRPCResultFrame(response protocol.JSONRPCResponse) (MessageFrame, error) {
 	if response.Result == nil {
 		return MessageFrame{}, errors.New("rpc result is nil")

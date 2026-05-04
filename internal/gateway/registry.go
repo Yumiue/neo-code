@@ -74,6 +74,7 @@ func (r *ActionRegistry) initCore() {
 	r.core[FrameActionListCheckpoints] = handleListCheckpointsFrame
 	r.core[FrameActionRestoreCheckpoint] = handleRestoreCheckpointFrame
 	r.core[FrameActionUndoRestore] = handleUndoRestoreFrame
+	r.core[FrameActionCheckpointDiff] = handleCheckpointDiffFrame
 }
 
 // Lookup returns the handler for an action.

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
@@ -53,6 +54,7 @@ type SQLiteCheckpointStore struct {
 	dbPath string
 	initMu sync.Mutex
 	db     *sql.DB
+	ownsDB bool // true 表示本实例打开的连接，Close 时需释放
 }
 
 // NewSQLiteCheckpointStore 创建 checkpoint 存储实例。
@@ -63,9 +65,19 @@ func NewSQLiteCheckpointStore(dbPath string) *SQLiteCheckpointStore {
 	}
 }
 
-// Close 释放数据库连接。
+// NewSQLiteCheckpointStoreWithDB 创建 checkpoint 存储实例，复用已有的 *sql.DB 连接。
+// 适用于与 session store 共享同一数据库文件的场景，避免 Windows 上多连接文件锁定。
+// Close 不会关闭传入的连接，由调用方管理连接生命周期。
+func NewSQLiteCheckpointStoreWithDB(db *sql.DB) *SQLiteCheckpointStore {
+	return &SQLiteCheckpointStore{
+		db:     db,
+		ownsDB: false,
+	}
+}
+
+// Close 释放数据库连接。仅当本实例拥有连接时（ownsDB=true）才实际关闭。
 func (s *SQLiteCheckpointStore) Close() error {
-	if s == nil || s.db == nil {
+	if s == nil || s.db == nil || !s.ownsDB {
 		return nil
 	}
 	return s.db.Close()
@@ -97,6 +109,7 @@ func (s *SQLiteCheckpointStore) ensureDB(ctx context.Context) (*sql.DB, error) {
 		}
 	}
 	s.db = db
+	s.ownsDB = true
 	return db, nil
 }
 
@@ -411,7 +424,7 @@ func (s *SQLiteCheckpointStore) RestoreCheckpoint(ctx context.Context, input Res
 		toUnixMillis(input.UpdatedAt), h.Provider, h.Model, h.Workdir,
 		marshalHeadField(h.TaskState), marshalHeadField(h.Todos), marshalHeadField(h.ActivatedSkills),
 		h.TokenInputTotal, h.TokenOutputTotal, boolToInt(h.HasUnknownUsage), h.AgentMode,
-		marshalHeadField(h.CurrentPlan), h.LastFullPlanRevision,
+		marshalPlanField(h.CurrentPlan), h.LastFullPlanRevision,
 		boolToInt(h.PlanApprovalPendingFullAlign), boolToInt(h.PlanCompletionPendingFullReview),
 		boolToInt(h.PlanContextDirty), boolToInt(h.PlanRestorePendingAlign),
 		len(input.Messages), len(input.Messages), input.SessionID,
@@ -444,12 +457,25 @@ func (s *SQLiteCheckpointStore) RestoreCheckpoint(ctx context.Context, input Res
 }
 
 func marshalHeadField(value any) string {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "null"
+	}
+	return string(data)
+}
+
+// marshalPlanField 将可选计划字段编码为 session 兼容的持久化格式，nil 计划统一写为空串。
+func marshalPlanField(value any) string {
 	if value == nil {
-		return "{}"
+		return ""
+	}
+	rv := reflect.ValueOf(value)
+	if rv.Kind() == reflect.Pointer && rv.IsNil() {
+		return ""
 	}
 	data, err := json.Marshal(value)
 	if err != nil {
-		return "{}"
+		return ""
 	}
 	return string(data)
 }
