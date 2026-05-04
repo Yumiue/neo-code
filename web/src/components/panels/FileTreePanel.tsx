@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useUIStore } from '@/stores/useUIStore'
+import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 import { useGatewayAPI } from '@/context/RuntimeProvider'
 import { type FileEntry } from '@/api/protocol'
 import {
@@ -171,6 +172,9 @@ function FileTreeItem({ node, depth = 0, dirCache, onLoadDir }: FileTreeItemProp
 export default function FileTreePanel() {
   const toggleFileTreePanel = useUIStore((s) => s.toggleFileTreePanel)
   const gatewayAPI = useGatewayAPI()
+  const currentWorkspaceHash = useWorkspaceStore((s) => s.currentWorkspaceHash)
+  const workspaces = useWorkspaceStore((s) => s.workspaces)
+  const currentWorkspace = workspaces.find((w) => w.hash === currentWorkspaceHash)
   const [rootNodes, setRootNodes] = useState<FileTreeNode[]>([])
   const [dirCache, setDirCache] = useState<Map<string, FileTreeNode[]>>(new Map())
   const [loading, setLoading] = useState(false)
@@ -227,7 +231,7 @@ export default function FileTreePanel() {
             <PanelRightClose size={16} />
           </button>
         </div>
-        <div style={styles.headerPath}>{currentPath || '.'}</div>
+        <div style={styles.headerPath}>{currentPath || currentWorkspace?.name || currentWorkspace?.path || '.'}</div>
       </div>
 
       <div style={styles.scrollArea}>
