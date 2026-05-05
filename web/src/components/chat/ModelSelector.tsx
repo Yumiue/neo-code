@@ -34,8 +34,11 @@ export default function ModelSelector() {
         setModels(fetched)
         if (fetched.length > 0) {
           const prev = selectedRef.current
+          const byGlobal = result.payload.selected_model_id
+            ? fetched.find((f) => f.id === result.payload.selected_model_id)
+            : null
           const retained = prev ? fetched.find((f) => f.id === prev.id) : null
-          const effective = retained ?? fetched[0]
+          const effective = byGlobal ?? retained ?? fetched[0]
           setSelected(effective)
           if (currentSessionId && !isGenerating) {
             gatewayAPI.setSessionModel(currentSessionId, effective.id, effective.provider)
@@ -69,6 +72,11 @@ export default function ModelSelector() {
         await gatewayAPI.setSessionModel(currentSessionId, m.id, m.provider)
       } catch (err) {
         console.error('setSessionModel failed:', err)
+      }
+      try {
+        await gatewayAPI.selectProviderModel({ provider_id: m.provider, model_id: m.id })
+      } catch (err) {
+        console.error('selectProviderModel failed:', err)
       }
     }
   }

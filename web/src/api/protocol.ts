@@ -514,7 +514,7 @@ export interface ModelEntry {
 }
 
 /** gateway.listModels 响应 */
-export type ListModelsResult = RPCResult<{ models: ModelEntry[] }>
+export type ListModelsResult = RPCResult<{ models: ModelEntry[]; selected_model_id?: string }>
 
 /** gateway.setSessionModel 参数 */
 export interface SetSessionModelParams {

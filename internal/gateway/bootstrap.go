@@ -854,13 +854,19 @@ func handleListModelsFrame(ctx context.Context, frame MessageFrame, runtimePort 
 		return runtimeCallFailedFrame(callCtx, frame, err, "list_models")
 	}
 
+	sessionModel, _ := runtimePort.GetSessionModel(callCtx, GetSessionModelInput{
+		SubjectID: subjectID,
+		SessionID: strings.TrimSpace(frame.SessionID),
+	})
+
 	return MessageFrame{
 		Type:      FrameTypeAck,
 		Action:    FrameActionListModels,
 		RequestID: frame.RequestID,
 		SessionID: strings.TrimSpace(frame.SessionID),
 		Payload: map[string]any{
-			"models": models,
+			"models":            models,
+			"selected_model_id": sessionModel.ModelID,
 		},
 	}
 }
