@@ -296,7 +296,37 @@ func TestGatewayEventsMappedToMessagesAndPermissionCard(t *testing.T) {
 	}
 }
 
-func TestRunProgressIsRateLimited(t *testing.T) {
+func TestRunDonePrefersAssistantTextForUserFacingReply(t *testing.T) {
+	adapter := newTestAdapter(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go adapter.consumeGatewayEvents(ctx)
+
+	sessionID := BuildSessionID("chat-done-text")
+	runID := BuildRunID("msg-done-text")
+	adapter.trackSession(sessionID, runID, "chat-done-text")
+
+	pushGatewayEvent(t, adapterTestGateway(adapter), sessionID, runID, "run_done", map[string]any{
+		"runtime_event_type": "agent_done",
+		"payload": map[string]any{
+			"parts": []map[string]any{
+				{"type": "text", "text": "这是最终回复"},
+			},
+		},
+	})
+	time.Sleep(30 * time.Millisecond)
+
+	msgs := adapterTestMessenger(adapter).snapshot()
+	if len(msgs) == 0 {
+		t.Fatalf("expected at least one message")
+	}
+	last := msgs[len(msgs)-1]
+	if last.kind != "text" || !strings.Contains(last.text, "这是最终回复") {
+		t.Fatalf("expected assistant final text, got %#v", last)
+	}
+}
+
+func TestRunProgressInternalEventsAreNotUserFacing(t *testing.T) {
 	adapter := newTestAdapter(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -320,8 +350,8 @@ func TestRunProgressIsRateLimited(t *testing.T) {
 			textCount++
 		}
 	}
-	if textCount != 1 {
-		t.Fatalf("progress message count = %d, want 1", textCount)
+	if textCount != 0 {
+		t.Fatalf("progress message count = %d, want 0", textCount)
 	}
 }
 
@@ -338,6 +368,34 @@ func TestCardCallbackDedupeResolveOnce(t *testing.T) {
 	}
 	if adapterTestGateway(adapter).resolveCount != 1 {
 		t.Fatalf("resolve count = %d, want 1", adapterTestGateway(adapter).resolveCount)
+	}
+}
+
+func TestCardCallbackUrlVerificationAccepted(t *testing.T) {
+	adapter := newTestAdapter(t)
+	body := `{"type":"url_verification","challenge":"card-challenge","token":"verify","header":{"token":"verify"}}`
+	request := signedRequest(t, adapter.cfg.SigningSecret, body)
+	recorder := httptest.NewRecorder()
+	adapter.handleCardCallback(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), `"challenge":"card-challenge"`) {
+		t.Fatalf("response = %s, want challenge", recorder.Body.String())
+	}
+}
+
+func TestCardCallbackProbeWithoutActionReturnsOK(t *testing.T) {
+	adapter := newTestAdapter(t)
+	body := `{"token":"verify","header":{"token":"verify"}}`
+	request := signedRequest(t, adapter.cfg.SigningSecret, body)
+	recorder := httptest.NewRecorder()
+	adapter.handleCardCallback(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recorder.Code)
+	}
+	if adapterTestGateway(adapter).resolveCount != 0 {
+		t.Fatalf("resolve count = %d, want 0", adapterTestGateway(adapter).resolveCount)
 	}
 }
 

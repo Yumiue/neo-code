@@ -186,6 +186,17 @@ func (a *Adapter) handleCardCallback(writer http.ResponseWriter, request *http.R
 	if !ok {
 		return
 	}
+	var envelope inboundEnvelope
+	if err := json.Unmarshal(body, &envelope); err == nil {
+		if strings.EqualFold(strings.TrimSpace(envelope.Type), "url_verification") {
+			if !a.verifyCallbackToken(envelope.Token, envelope.Header.Token) {
+				http.Error(writer, "invalid verify token", http.StatusUnauthorized)
+				return
+			}
+			writeJSON(writer, http.StatusOK, map[string]string{"challenge": envelope.Challenge})
+			return
+		}
+	}
 	var callback inboundCardCallback
 	if err := json.Unmarshal(body, &callback); err != nil {
 		http.Error(writer, "invalid card callback body", http.StatusBadRequest)
@@ -198,7 +209,8 @@ func (a *Adapter) handleCardCallback(writer http.ResponseWriter, request *http.R
 	requestID := strings.TrimSpace(callback.Action.Value["request_id"])
 	decision := strings.TrimSpace(strings.ToLower(callback.Action.Value["decision"]))
 	if requestID == "" || (decision != "allow_once" && decision != "reject") {
-		http.Error(writer, "invalid card action", http.StatusBadRequest)
+		// 飞书后台在“回调地址验证”阶段可能下发不带 action 的探测请求，此处返回 200 以便完成校验。
+		writeJSON(writer, http.StatusOK, map[string]any{"toast": map[string]string{"type": "info", "content": "callback ready"}})
 		return
 	}
 	dedupeKey := "card:" + requestID + ":" + decision
@@ -285,7 +297,7 @@ func (a *Adapter) consumeGatewayEvents(ctx context.Context) {
 
 // handleGatewayEvent 将 gateway.event 映射成飞书文本或审批卡片。
 func (a *Adapter) handleGatewayEvent(ctx context.Context, raw json.RawMessage) {
-	eventType, sessionID, runID, envelope, err := parseGatewayRuntimeEvent(raw)
+	eventType, sessionID, _, envelope, err := parseGatewayRuntimeEvent(raw)
 	if err != nil {
 		a.safeLog("decode gateway event failed: %v", err)
 		return
@@ -296,7 +308,6 @@ func (a *Adapter) handleGatewayEvent(ctx context.Context, raw json.RawMessage) {
 	}
 	switch strings.ToLower(strings.TrimSpace(eventType)) {
 	case "run_progress":
-		text := "运行中"
 		if envelope != nil {
 			if runtimeType := readString(envelope, "runtime_event_type"); runtimeType != "" {
 				if strings.EqualFold(runtimeType, "permission_requested") {
@@ -309,21 +320,22 @@ func (a *Adapter) handleGatewayEvent(ctx context.Context, raw json.RawMessage) {
 						return
 					}
 				}
-				if !a.shouldEmitProgress(sessionID, runID, runtimeType) {
-					return
-				}
-				text = fmt.Sprintf("运行进度：%s", runtimeType)
-			} else if !a.shouldEmitProgress(sessionID, runID, "progress") {
-				return
 			}
-		} else if !a.shouldEmitProgress(sessionID, runID, "progress") {
-			return
 		}
-		_ = a.messenger.SendText(ctx, chatID, text)
+		// 除审批请求外，内部 runtime_event_type 不直接透出到飞书用户视图，避免暴露控制面细节。
+		return
 	case "run_done":
-		_ = a.messenger.SendText(ctx, chatID, fmt.Sprintf("任务完成（run_id=%s）", runID))
+		doneText := extractUserVisibleDoneText(envelope)
+		if doneText == "" {
+			doneText = "任务完成。"
+		}
+		_ = a.messenger.SendText(ctx, chatID, doneText)
 	case "run_error":
-		_ = a.messenger.SendText(ctx, chatID, fmt.Sprintf("任务失败（run_id=%s）", runID))
+		errText := extractUserVisibleErrorText(envelope)
+		if errText == "" {
+			errText = "任务失败，请稍后重试。"
+		}
+		_ = a.messenger.SendText(ctx, chatID, errText)
 	}
 }
 
@@ -484,6 +496,65 @@ func extractPermissionRequest(envelope map[string]any) (string, string) {
 		reason = "工具执行请求审批，请确认是否放行。"
 	}
 	return requestID, reason
+}
+
+// extractUserVisibleDoneText 从 run_done 事件中提取可展示给飞书用户的最终文本。
+func extractUserVisibleDoneText(envelope map[string]any) string {
+	if envelope == nil {
+		return ""
+	}
+	payload, _ := envelope["payload"].(map[string]any)
+	if payload == nil {
+		return ""
+	}
+	if text := strings.TrimSpace(readString(payload, "content")); text != "" {
+		return text
+	}
+	if text := strings.TrimSpace(readString(payload, "text")); text != "" {
+		return text
+	}
+	parts, _ := payload["parts"].([]any)
+	if len(parts) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(parts))
+	for _, raw := range parts {
+		part, _ := raw.(map[string]any)
+		if part == nil {
+			continue
+		}
+		partType := strings.TrimSpace(strings.ToLower(readString(part, "type")))
+		if partType != "" && partType != "text" {
+			continue
+		}
+		text := strings.TrimSpace(readString(part, "text"))
+		if text == "" {
+			text = strings.TrimSpace(readString(part, "content"))
+		}
+		if text != "" {
+			lines = append(lines, text)
+		}
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+// extractUserVisibleErrorText 从 run_error 事件中提取对用户友好的失败摘要。
+func extractUserVisibleErrorText(envelope map[string]any) string {
+	if envelope == nil {
+		return ""
+	}
+	payload, _ := envelope["payload"].(map[string]any)
+	if payload == nil {
+		return ""
+	}
+	message := strings.TrimSpace(readString(payload, "message"))
+	if message == "" {
+		message = strings.TrimSpace(readString(payload, "error"))
+	}
+	if message == "" {
+		return ""
+	}
+	return "任务失败：" + message
 }
 
 // nextBackoff 计算指数退避下一步等待时间。

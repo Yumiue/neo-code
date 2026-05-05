@@ -8,12 +8,12 @@ import (
 
 // BuildSessionID 基于飞书 chat_id 生成稳定会话标识。
 func BuildSessionID(chatID string) string {
-	return "feishu:" + stableHash(chatID)
+	return "feishu_" + stableHash(chatID)
 }
 
 // BuildRunID 基于飞书 message_id 生成稳定运行标识。
 func BuildRunID(messageID string) string {
-	return "feishu:" + stableHash(messageID)
+	return "feishu_" + stableHash(messageID)
 }
 
 // stableHash 对外部输入做稳定散列，避免直接暴露原始平台标识。
