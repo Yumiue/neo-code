@@ -1720,15 +1720,12 @@ func (a App) shouldCapturePasteTxnChunk(typed tea.KeyMsg) bool {
 	if typed.Paste {
 		return false
 	}
-	chunk := string(typed.Runes)
 	if a.pasteTxnActive {
-		// Do not lock the input while a paste transaction is open:
-		// only keep capturing obviously paste-like chunks.
-		if len(typed.Runes) > 1 {
-			return true
-		}
-		return strings.ContainsRune(chunk, '\n') || strings.ContainsRune(chunk, '\r') || strings.ContainsRune(chunk, '\t')
+		// Once a paste transaction starts, keep absorbing rune chunks until debounce flush.
+		// This avoids fragmenting one long paste into repeated summary tokens.
+		return true
 	}
+	chunk := string(typed.Runes)
 	if len(typed.Runes) > 1 {
 		return true
 	}
@@ -1750,7 +1747,7 @@ func (a App) shouldCaptureSingleRunePasteChunk(typed tea.KeyMsg) bool {
 		return false
 	}
 	clip = normalizeClipboardText(clip)
-	if strings.TrimSpace(clip) == "" {
+	if !shouldSummarizePastedText(clip) {
 		return false
 	}
 	chunk := normalizeClipboardText(string(typed.Runes))

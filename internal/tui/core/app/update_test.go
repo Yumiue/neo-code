@@ -1566,6 +1566,63 @@ func TestUpdateSingleRuneInputDoesNotPrimeFromClipboard(t *testing.T) {
 	}
 }
 
+func TestUpdateSingleRuneInputDoesNotCaptureClipboardPrefix(t *testing.T) {
+	app, _ := newTestApp(t)
+	clipboardText := "你好，你是谁？"
+
+	originalReadText := readClipboardText
+	defer func() { readClipboardText = originalReadText }()
+	readClipboardText = func() (string, error) { return clipboardText, nil }
+
+	model, cmd := app.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune("你"),
+		Paste: false,
+	})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	if app.input.Value() != "你" {
+		t.Fatalf("expected single-rune input to stay as regular typing, got %q", app.input.Value())
+	}
+}
+
+func TestUpdateSingleRuneChunksForMultilinePasteStaySingleToken(t *testing.T) {
+	app, _ := newTestApp(t)
+	clipboardText := "可以，已经解决并落地了\n改文件：\nupdate.go"
+
+	originalReadText := readClipboardText
+	defer func() { readClipboardText = originalReadText }()
+	readClipboardText = func() (string, error) { return clipboardText, nil }
+
+	for _, chunk := range []string{"可", "以", "，"} {
+		model, cmd := app.Update(tea.KeyMsg{
+			Type:  tea.KeyRunes,
+			Runes: []rune(chunk),
+			Paste: false,
+		})
+		if cmd != nil {
+			_ = cmd()
+		}
+		app = model.(App)
+	}
+
+	model, cmd := app.Update(pasteTxnFlushMsg{Version: app.pasteTxnVersion})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	if got := app.input.Value(); got != "[paste 3 LINE]" {
+		t.Fatalf("expected one summarized token after chunked multiline paste, got %q", got)
+	}
+	if len(app.pendingTextPastes) != 1 {
+		t.Fatalf("expected one pending text paste entry, got %d", len(app.pendingTextPastes))
+	}
+}
+
 func TestUpdateEnterDoesNotSendWhilePasteEchoPending(t *testing.T) {
 	app, runtime := newTestApp(t)
 	now := time.Now()
