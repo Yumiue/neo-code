@@ -37,6 +37,7 @@
 
 - 消息事件去重键：`event_id + message_id`（TTL 内只执行一次 run）。
 - 卡片回调去重键：`request_id + decision`（TTL 内只提交一次审批）。
+- 去重在 `run` 被网关受理后才标记成功；若受理失败会释放去重键，允许飞书重试恢复。
 
 ## 5. 审批闭环
 
@@ -56,6 +57,15 @@ Phase 1 仅支持最小动作：
 - `signing_secret`
 - `gateway token`
 - `Authorization` 头
+
+默认要求签名校验与回调 token 校验都开启：
+
+- `verify_token` 必填
+- `signing_secret` 必填
+
+仅在联调场景可显式设置 `insecure_skip_signature_verify=true` 跳过签名校验（不建议生产使用）。
+
+群聊消息默认仅在检测到 `@` 机器人时受理；私聊消息默认受理。
 
 用户可见错误仅返回摘要，不回传内部堆栈。
 
@@ -80,5 +90,4 @@ neocode feishu-adapter \
 
 ## 8. 配置示例
 
-参考 [docs/examples/feishu.yaml](/F:/Qiniu/neo-code/docs/examples/feishu.yaml)。
-
+参考 [../examples/feishu.yaml](../examples/feishu.yaml)。

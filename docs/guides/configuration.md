@@ -340,6 +340,7 @@ feishu:
   app_secret: "cli_secret_xxx"
   verify_token: "verify_token_xxx"
   signing_secret: "signing_secret_xxx"
+  insecure_skip_signature_verify: false
   callback_base_url: "https://example.com"
   adapter:
     listen: "127.0.0.1:18080"
@@ -365,6 +366,7 @@ neocode feishu-adapter
 
 - 本阶段不会新增 Gateway action，适配器只复用既有 `authenticate / bindStream / run / resolvePermission / gateway.event`。
 - `session_id` 与 `run_id` 由飞书 chat/message 标识稳定映射生成，用于去重与追踪。
+- 默认强制启用签名校验；仅在联调场景可显式设置 `insecure_skip_signature_verify=true` 跳过（不建议生产）。
 
 ## 常见错误
 

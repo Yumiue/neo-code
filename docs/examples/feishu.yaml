@@ -4,6 +4,7 @@ feishu:
   app_secret: "cli_secret_xxx"
   verify_token: "verify_token_xxx"
   signing_secret: "signing_secret_xxx"
+  insecure_skip_signature_verify: false
   callback_base_url: "https://example.com"
   adapter:
     listen: "127.0.0.1:18080"
@@ -17,4 +18,3 @@ feishu:
   gateway:
     listen: "127.0.0.1:8080"
     token_file: "~/.neocode/auth.json"
-
