@@ -81,18 +81,20 @@ func ConsumeMiniMaxStream(ctx context.Context, body io.Reader, events chan<- pro
 			}
 
 			// 优先使用 reasoning_details 作为 thinking 内容
+			useContent := choice.Delta.Content
 			if reasoning := strings.TrimSpace(choice.Delta.ReasoningDetails); reasoning != "" {
 				if err := provider.EmitThinkingDelta(ctx, events, reasoning); err != nil {
 					return err
 				}
 			} else if thinkText := ExtractThinkContent(choice.Delta.Content); thinkText != "" {
-				// 兜底：从 content 中剥离 <think> 标签
+				// 兜底：从 content 中剥离 <think> 标签，避免泄漏到正文
 				if err := provider.EmitThinkingDelta(ctx, events, thinkText); err != nil {
 					return err
 				}
+				useContent = thinkTagRe.ReplaceAllString(choice.Delta.Content, "")
 			}
 
-			if err := provider.EmitTextDelta(ctx, events, choice.Delta.Content); err != nil {
+			if err := provider.EmitTextDelta(ctx, events, useContent); err != nil {
 				return err
 			}
 		}

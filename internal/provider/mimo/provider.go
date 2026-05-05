@@ -113,7 +113,7 @@ func (p *Provider) generateOnce(ctx context.Context, payload chatcompletions.Req
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return chatcompletions.ParseError(resp)
+		return provider.WrapIfThinkingNotSupported(chatcompletions.ParseError(resp))
 	}
 
 	return chatcompletions.ConsumeStream(ctx, resp.Body, events)

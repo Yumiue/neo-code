@@ -163,6 +163,26 @@ func IsThinkingNotSupportedError(err error) bool {
 	return errors.Is(err, ErrThinkingNotSupported)
 }
 
+var thinkingNotSupportedFragments = []string{
+	"thinking",
+	"reasoning",
+}
+
+// WrapIfThinkingNotSupported 检查错误消息是否包含 thinking/reasoning 相关关键字，
+// 若是则用 ErrThinkingNotSupported 包装，供 runtime 降级重试。
+func WrapIfThinkingNotSupported(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := strings.ToLower(err.Error())
+	for _, f := range thinkingNotSupportedFragments {
+		if strings.Contains(msg, f) {
+			return fmt.Errorf("%w: %w", ErrThinkingNotSupported, err)
+		}
+	}
+	return err
+}
+
 // IsContextTooLong 判断 provider 错误是否表示请求上下文超出模型窗口。
 // 优先识别 typed error，必要时再回退到消息文本匹配，兼容不同厂商或额外包装层。
 // 已被归类为 rate_limited (429) 的错误不会因文本片段而被误判为 context_too_long。
