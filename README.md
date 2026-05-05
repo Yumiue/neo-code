@@ -251,6 +251,7 @@ go run ./cmd/neocode --session <session_id>
 - [MCP 工具接入（Guide）](https://neocode-docs.pages.dev/guide/mcp)
 - [Skills 使用（Guide）](https://neocode-docs.pages.dev/guide/skills)
 - [飞书远程接入配置（Guide）](https://neocode-docs.pages.dev/guide/feishu-remote-setup)
+- [飞书本地 SDK 长连接（免公网，个人开发推荐）](https://neocode-docs.pages.dev/guide/feishu-remote-setup)
 - [Hooks 使用（Guide）](https://neocode-docs.pages.dev/guide/hooks)
 - [工具与权限（Guide）](https://neocode-docs.pages.dev/guide/tools-permissions)
 - [Runtime / Provider 事件流（Repo Doc）](docs/runtime-provider-event-flow.md)
