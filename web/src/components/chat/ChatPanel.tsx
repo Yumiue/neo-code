@@ -7,6 +7,7 @@ import { PermissionDecision } from '@/api/protocol'
 import MessageList from './MessageList'
 import ChatInput from './ChatInput'
 import ModelSelector from './ModelSelector'
+import TodoStrip from './TodoStrip'
 import {
   PanelRightOpen,
   FileDiff,
@@ -186,6 +187,9 @@ export default function ChatPanel() {
       <div style={styles.messagesArea} data-scroll-root="1">
         <MessageList />
       </div>
+
+      {/* Todo strip (renders nothing when no todos) */}
+      <TodoStrip />
 
       {/* Input or Permission Request */}
       {currentPermission ? (

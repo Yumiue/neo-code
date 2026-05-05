@@ -1,11 +1,18 @@
 import { memo, useState } from 'react'
-import { type ChatMessage } from '@/stores/useChatStore'
+import { useChatStore, type ChatMessage } from '@/stores/useChatStore'
+import { useComposerStore } from '@/stores/useComposerStore'
+import { useSessionStore } from '@/stores/useSessionStore'
+import { useUIStore } from '@/stores/useUIStore'
+import { useGatewayAPI } from '@/context/RuntimeProvider'
+import { findCheckpointBeforeMessage } from '@/utils/findCheckpointBeforeMessage'
+import { resetEventBridgeCursors } from '@/utils/eventBridge'
 import ToolCallCard from './ToolCallCard'
 import VerificationMessage from './VerificationMessage'
 import AcceptanceMessage from './AcceptanceMessage'
 import CodeBlock from './CodeBlock'
 import MarkdownContent from './MarkdownContent'
-import { Bot, ChevronRight, Info } from 'lucide-react'
+import ConfirmDialog from '@/components/ui/ConfirmDialog'
+import { Bot, ChevronRight, Info, RotateCcw, Loader2 } from 'lucide-react'
 
 interface MessageItemProps {
   message: ChatMessage
@@ -56,11 +63,71 @@ const MessageItem = memo(function MessageItem({ message, isLast = false, grouped
 })
 
 function UserMessage({ message }: { message: ChatMessage }) {
+  const gatewayAPI = useGatewayAPI()
+  const checkpointId = useChatStore(
+    (s) => findCheckpointBeforeMessage(s.messages, message.id)?.checkpointId ?? null,
+  )
+  const setComposerText = useComposerStore((s) => s.setComposerText)
+  const truncateFromMessage = useChatStore((s) => s.truncateFromMessage)
+  const [confirming, setConfirming] = useState(false)
+  const [reverting, setReverting] = useState(false)
+
+  async function handleConfirm() {
+    setConfirming(false)
+    if (!checkpointId || !gatewayAPI) return
+    const sessionId = useSessionStore.getState().currentSessionId
+    if (!sessionId) {
+      useUIStore.getState().showToast('未绑定会话，无法回退', 'error')
+      return
+    }
+    setReverting(true)
+    try {
+      await gatewayAPI.restoreCheckpoint({ session_id: sessionId, checkpoint_id: checkpointId })
+      setComposerText(message.content)
+      resetEventBridgeCursors()
+      truncateFromMessage(message.id)
+      // 截断后本组件会被卸载，setReverting(false) 不会落到已卸载实例
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '回退失败'
+      useUIStore.getState().showToast('回退失败: ' + msg, 'error')
+      setReverting(false)
+    }
+  }
+
   return (
-    <div style={styles.userRow} className="animate-slide-up">
+    <div style={styles.userRow} className="animate-slide-up user-row-hoverable">
+      {checkpointId && (
+        <button
+          className="user-revert-btn"
+          style={{
+            ...styles.revertBtn,
+            opacity: reverting ? 1 : undefined,
+            cursor: reverting ? 'default' : 'pointer',
+          }}
+          title="回退到此处"
+          onClick={() => !reverting && setConfirming(true)}
+          disabled={reverting}
+        >
+          {reverting ? (
+            <Loader2 size={14} className="animate-spin" />
+          ) : (
+            <RotateCcw size={14} />
+          )}
+        </button>
+      )}
       <div style={styles.userContent}>
         <div style={styles.userBubble}>{message.content}</div>
       </div>
+      {confirming && (
+        <ConfirmDialog
+          title="回退到此处"
+          description="工作区文件将恢复到该消息发送时的状态，此条及之后的对话内容会从界面移除，原消息会回填到输入框以便重新编辑。"
+          variant="warning"
+          confirmLabel="回退"
+          onConfirm={handleConfirm}
+          onCancel={() => setConfirming(false)}
+        />
+      )}
     </div>
   )
 }
@@ -151,7 +218,10 @@ const styles: Record<string, React.CSSProperties> = {
   userRow: {
     display: 'flex',
     justifyContent: 'flex-end',
+    alignItems: 'flex-start',
     padding: '8px 0',
+    position: 'relative',
+    gap: 6,
   },
   userContent: {
     maxWidth: '85%',
@@ -164,6 +234,21 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 14,
     lineHeight: 1.6,
     textWrap: 'pretty' as any,
+  },
+  revertBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 26,
+    height: 26,
+    marginTop: 4,
+    flexShrink: 0,
+    borderRadius: 'var(--radius-md)',
+    border: '1px solid var(--border-primary)',
+    background: 'var(--bg-secondary)',
+    color: 'var(--text-secondary)',
+    opacity: 0,
+    transition: 'opacity 150ms ease, color 150ms ease, background 150ms ease',
   },
   aiRow: {
     display: 'flex',

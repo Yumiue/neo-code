@@ -56,7 +56,6 @@ const AcceptanceMessage = memo(function AcceptanceMessage({
           <div style={styles.metaRow}>
             {data.stop_reason && <span style={styles.meta}>停止原因: {data.stop_reason}</span>}
             {data.error_class && <span style={{ ...styles.meta, color: 'var(--error)' }}>错误: {data.error_class}</span>}
-            {data.continue_hint && <span style={styles.meta}>提示: {data.continue_hint}</span>}
           </div>
 
           {(data.internal_summary || data.completion_blocked_reason) && (

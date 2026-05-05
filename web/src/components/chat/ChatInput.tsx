@@ -3,6 +3,7 @@ import { useChatStore, createUserMessage } from '@/stores/useChatStore'
 import { useGatewayStore } from '@/stores/useGatewayStore'
 import { useSessionStore, isValidSessionId } from '@/stores/useSessionStore'
 import { useUIStore } from '@/stores/useUIStore'
+import { useComposerStore } from '@/stores/useComposerStore'
 import { useGatewayAPI } from '@/context/RuntimeProvider'
 import {
   builtinSlashCommands,
@@ -20,7 +21,8 @@ import { Send, Square, Paperclip, AtSign } from 'lucide-react'
 /** 聊天输入框 */
 export default function ChatInput() {
   const gatewayAPI = useGatewayAPI()
-  const [text, setText] = useState('')
+  const text = useComposerStore((s) => s.composerText)
+  const setText = useComposerStore((s) => s.setComposerText)
   const [rows, setRows] = useState(1)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)

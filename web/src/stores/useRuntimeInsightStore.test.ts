@@ -87,4 +87,33 @@ describe('useRuntimeInsightStore', () => {
     store.reset()
     expect(useRuntimeInsightStore.getState().verificationHistory).toHaveLength(0)
   })
+
+  it('setTodoSnapshot clears any stale todoConflict', () => {
+    const store = useRuntimeInsightStore.getState()
+    store.setTodoConflict({ action: 'todo_conflict', reason: 'todo_not_found' })
+    expect(useRuntimeInsightStore.getState().todoConflict?.reason).toBe('todo_not_found')
+
+    store.setTodoSnapshot({
+      items: [],
+      summary: { total: 0, required_total: 0, required_completed: 0, required_failed: 0, required_open: 0 },
+    })
+
+    expect(useRuntimeInsightStore.getState().todoConflict).toBeNull()
+    expect(useRuntimeInsightStore.getState().todoSnapshot?.summary?.required_total).toBe(0)
+  })
+
+  it('setTodoSnapshot accumulates todoHistory across replacements', () => {
+    const store = useRuntimeInsightStore.getState()
+    store.setTodoSnapshot({
+      items: [{ id: 'a', content: 'task a', status: 'pending', required: true, revision: 1 }],
+    })
+    store.setTodoSnapshot({
+      items: [{ id: 'b', content: 'task b', status: 'in_progress', required: true, revision: 1 }],
+    })
+
+    const state = useRuntimeInsightStore.getState()
+    expect(Object.keys(state.todoHistory).sort()).toEqual(['a', 'b'])
+    expect(state.todoSnapshot?.items?.map((i) => i.id)).toEqual(['b'])
+    expect(state.todoHistory.a.firstSeenAt).toBeLessThanOrEqual(state.todoHistory.b.firstSeenAt)
+  })
 })
