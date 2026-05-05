@@ -24,7 +24,11 @@ type fakeGatewayClient struct {
 	notifications chan GatewayNotification
 	runCount      int
 	resolveCount  int
+	authCount     int
 	pingErr       error
+	authErr       error
+	bindErr       error
+	resolveErr    error
 	runErr        error
 	runErrOnce    bool
 }
@@ -35,11 +39,16 @@ func newFakeGatewayClient() *fakeGatewayClient {
 
 func (f *fakeGatewayClient) Authenticate(context.Context) error {
 	f.record("authenticate")
-	return nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.authCount++
+	return f.authErr
 }
 func (f *fakeGatewayClient) BindStream(_ context.Context, sessionID string, runID string) error {
 	f.record("bind:" + sessionID + ":" + runID)
-	return nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.bindErr
 }
 func (f *fakeGatewayClient) Run(_ context.Context, sessionID string, runID string, inputText string) error {
 	f.record("run:" + sessionID + ":" + runID + ":" + inputText)
@@ -56,9 +65,9 @@ func (f *fakeGatewayClient) Run(_ context.Context, sessionID string, runID strin
 func (f *fakeGatewayClient) ResolvePermission(_ context.Context, requestID string, decision string) error {
 	f.record("resolve:" + requestID + ":" + decision)
 	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.resolveCount++
-	f.mu.Unlock()
-	return nil
+	return f.resolveErr
 }
 func (f *fakeGatewayClient) Ping(context.Context) error {
 	f.record("ping")
@@ -131,6 +140,62 @@ func TestBuildIDsStable(t *testing.T) {
 	}
 }
 
+func TestNewRejectsMissingDependencies(t *testing.T) {
+	cfg := Config{
+		ListenAddress:       "127.0.0.1:18080",
+		EventPath:           "/feishu/events",
+		CardPath:            "/feishu/cards",
+		AppID:               "app",
+		AppSecret:           "secret",
+		VerifyToken:         "verify",
+		SigningSecret:       "sign-secret",
+		RequestTimeout:      time.Second,
+		IdempotencyTTL:      time.Minute,
+		ReconnectBackoffMin: 100 * time.Millisecond,
+		ReconnectBackoffMax: time.Second,
+		RebindInterval:      time.Second,
+	}
+	if _, err := New(cfg, nil, &fakeMessenger{}, nil); err == nil {
+		t.Fatal("expected missing gateway error")
+	}
+	if _, err := New(cfg, newFakeGatewayClient(), nil, nil); err == nil {
+		t.Fatal("expected missing messenger error")
+	}
+}
+
+func TestRunReturnsAuthenticateFailure(t *testing.T) {
+	adapter := newTestAdapter(t)
+	gateway := adapterTestGateway(adapter)
+	gateway.mu.Lock()
+	gateway.authErr = assertErr("auth failed")
+	gateway.mu.Unlock()
+
+	err := adapter.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "authenticate gateway") {
+		t.Fatalf("run error = %v, want authenticate failure", err)
+	}
+}
+
+func TestRunStopsOnContextCancel(t *testing.T) {
+	adapter := newTestAdapter(t)
+	adapter.cfg.ListenAddress = "127.0.0.1:0"
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- adapter.Run(ctx)
+	}()
+	time.Sleep(30 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if err != context.Canceled {
+			t.Fatalf("run error = %v, want context canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for adapter shutdown")
+	}
+}
+
 func TestHandleFeishuEventChallenge(t *testing.T) {
 	adapter := newTestAdapter(t)
 	body := `{"type":"url_verification","challenge":"abc","token":"verify"}`
@@ -155,6 +220,32 @@ func TestHandleFeishuEventRejectsInvalidSignature(t *testing.T) {
 	adapter.handleFeishuEvent(recorder, request)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", recorder.Code)
+	}
+}
+
+func TestHandleFeishuEventCoversValidationFailures(t *testing.T) {
+	adapter := newTestAdapter(t)
+	testCases := []struct {
+		name string
+		body string
+		want int
+	}{
+		{name: "invalid json", body: `{`, want: http.StatusBadRequest},
+		{name: "ignored event", body: `{"header":{"event_type":"other","token":"verify"}}`, want: http.StatusOK},
+		{name: "invalid token", body: `{"header":{"event_type":"im.message.receive_v1","token":"bad"},"event":{}}`, want: http.StatusUnauthorized},
+		{name: "invalid event body", body: `{"header":{"event_type":"im.message.receive_v1","token":"verify"},"event":"oops"}`, want: http.StatusBadRequest},
+		{name: "missing ids", body: `{"header":{"event_type":"im.message.receive_v1","token":"verify"},"event":{"message":{"message_id":"","chat_id":""}}}`, want: http.StatusBadRequest},
+		{name: "invalid content", body: "{\"header\":{\"event_id\":\"evt-invalid-content\",\"event_type\":\"im.message.receive_v1\",\"token\":\"verify\"},\"event\":{\"message\":{\"message_id\":\"msg-invalid-content\",\"chat_id\":\"chat-invalid-content\",\"content\":\"{\"}}}", want: http.StatusBadRequest},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			request := signedRequest(t, adapter.cfg.SigningSecret, testCase.body)
+			recorder := httptest.NewRecorder()
+			adapter.handleFeishuEvent(recorder, request)
+			if recorder.Code != testCase.want {
+				t.Fatalf("status = %d, want %d body=%s", recorder.Code, testCase.want, recorder.Body.String())
+			}
+		})
 	}
 }
 
@@ -461,6 +552,25 @@ func TestCardCallbackDedupeResolveOnce(t *testing.T) {
 	}
 }
 
+func TestCardCallbackResolveFailureKeepsHTTP200(t *testing.T) {
+	adapter := newTestAdapter(t)
+	gateway := adapterTestGateway(adapter)
+	gateway.mu.Lock()
+	gateway.resolveErr = assertErr("deny")
+	gateway.mu.Unlock()
+
+	body := `{"action":{"value":{"request_id":"perm-3","decision":"reject"}},"token":"verify"}`
+	request := signedRequest(t, adapter.cfg.SigningSecret, body)
+	recorder := httptest.NewRecorder()
+	adapter.handleCardCallback(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), "审批提交失败") {
+		t.Fatalf("response = %s, want failure toast", recorder.Body.String())
+	}
+}
+
 func TestCardCallbackUrlVerificationAccepted(t *testing.T) {
 	adapter := newTestAdapter(t)
 	body := `{"type":"url_verification","challenge":"card-challenge","token":"verify","header":{"token":"verify"}}`
@@ -472,6 +582,28 @@ func TestCardCallbackUrlVerificationAccepted(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), `"challenge":"card-challenge"`) {
 		t.Fatalf("response = %s, want challenge", recorder.Body.String())
+	}
+}
+
+func TestHandleCardCallbackValidationFailures(t *testing.T) {
+	adapter := newTestAdapter(t)
+	testCases := []struct {
+		name string
+		body string
+		want int
+	}{
+		{name: "invalid token", body: `{"token":"bad","header":{"token":"bad"}}`, want: http.StatusUnauthorized},
+		{name: "invalid json", body: `{`, want: http.StatusBadRequest},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			request := signedRequest(t, adapter.cfg.SigningSecret, testCase.body)
+			recorder := httptest.NewRecorder()
+			adapter.handleCardCallback(recorder, request)
+			if recorder.Code != testCase.want {
+				t.Fatalf("status = %d, want %d", recorder.Code, testCase.want)
+			}
+		})
 	}
 }
 
@@ -552,6 +684,109 @@ func TestReconnectHealthyPathDoesNotRebind(t *testing.T) {
 	if strings.Contains(calls, "bind:session-steady:run-steady") {
 		t.Fatalf("did not expect steady-state rebind call in %v", calls)
 	}
+}
+
+func TestRetryAuthenticateAndRebindHandlesAuthFailure(t *testing.T) {
+	adapter := newTestAdapter(t)
+	gateway := adapterTestGateway(adapter)
+	gateway.mu.Lock()
+	gateway.authErr = assertErr("re-auth failed")
+	gateway.mu.Unlock()
+	adapter.trackSession("session-auth-fail", "run-auth-fail", "chat-auth-fail")
+
+	if ok := adapter.retryAuthenticateAndRebind(context.Background(), time.Millisecond); !ok {
+		t.Fatal("expected retry loop to continue after auth failure")
+	}
+	calls := strings.Join(gateway.snapshotCalls(), "|")
+	if strings.Contains(calls, "bind:session-auth-fail:run-auth-fail") {
+		t.Fatalf("did not expect rebind after auth failure: %v", calls)
+	}
+}
+
+func TestRetryAuthenticateAndRebindStopsWhenContextCanceled(t *testing.T) {
+	adapter := newTestAdapter(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if ok := adapter.retryAuthenticateAndRebind(ctx, time.Hour); ok {
+		t.Fatal("expected retry to stop when context is canceled")
+	}
+}
+
+func TestReadAndVerifyRequestRejectsNonPost(t *testing.T) {
+	adapter := newTestAdapter(t)
+	request := httptest.NewRequest(http.MethodGet, "/feishu/events", nil)
+	recorder := httptest.NewRecorder()
+	if body, ok := adapter.readAndVerifyRequest(recorder, request); ok || body != nil {
+		t.Fatalf("expected non-post request rejection, body=%q ok=%v", string(body), ok)
+	}
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", recorder.Code)
+	}
+}
+
+func TestReadAndVerifyRequestRejectsUnreadableBody(t *testing.T) {
+	adapter := newTestAdapter(t)
+	request := httptest.NewRequest(http.MethodPost, "/feishu/events", errReader{})
+	request.Header.Set(headerLarkTimestamp, strconvTimestamp(time.Now().UTC()))
+	request.Header.Set(headerLarkNonce, "nonce")
+	request.Header.Set(headerLarkSignature, "sig")
+	recorder := httptest.NewRecorder()
+	if _, ok := adapter.readAndVerifyRequest(recorder, request); ok {
+		t.Fatal("expected unreadable body to fail")
+	}
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", recorder.Code)
+	}
+}
+
+func TestShouldEmitProgressThrottlesRapidDuplicates(t *testing.T) {
+	adapter := newTestAdapter(t)
+	now := time.Now().UTC()
+	adapter.nowFn = func() time.Time { return now }
+	if !adapter.shouldEmitProgress("session", "run", "agent_chunk") {
+		t.Fatal("expected first progress event to emit")
+	}
+	if adapter.shouldEmitProgress("session", "run", "agent_chunk") {
+		t.Fatal("expected duplicate progress event to be throttled")
+	}
+	adapter.nowFn = func() time.Time { return now.Add(defaultProgressNotifyInterval + time.Millisecond) }
+	if !adapter.shouldEmitProgress("session", "run", "agent_chunk") {
+		t.Fatal("expected event after interval to emit")
+	}
+}
+
+func TestHelperFunctionsCoverFallbackBranches(t *testing.T) {
+	if text, err := decodeMessageText(""); err != nil || text != "" {
+		t.Fatalf("decode empty text = %q, %v", text, err)
+	}
+	if _, err := decodeMessageText("{"); err == nil {
+		t.Fatal("expected invalid message content error")
+	}
+	requestID, reason := extractPermissionRequest(nil)
+	if requestID != "" || reason == "" {
+		t.Fatalf("unexpected permission extraction: request=%q reason=%q", requestID, reason)
+	}
+	if text := extractUserVisibleDoneText(map[string]any{
+		"payload": map[string]any{"content": "done"},
+	}); text != "done" {
+		t.Fatalf("done text = %q, want direct content", text)
+	}
+	if text := extractUserVisibleErrorText(map[string]any{
+		"payload": map[string]any{"error": "boom"},
+	}); text != "任务失败：boom" {
+		t.Fatalf("error text = %q, want fallback error", text)
+	}
+	if text := extractUserVisibleErrorText(nil); text != "" {
+		t.Fatalf("error text = %q, want empty", text)
+	}
+	if delay := nextBackoff(time.Second, 1500*time.Millisecond); delay != 1500*time.Millisecond {
+		t.Fatalf("next backoff = %s, want capped max", delay)
+	}
+	if delay := delayWithJitter(0); delay != 200*time.Millisecond {
+		t.Fatalf("jitter delay = %s, want default fallback", delay)
+	}
+	safeLogAdapter := &Adapter{}
+	safeLogAdapter.safeLog("ignored")
 }
 
 func newTestAdapter(t *testing.T) *Adapter {
@@ -650,3 +885,9 @@ func pushGatewayEvent(t *testing.T, gw *fakeGatewayClient, sessionID string, run
 type assertErr string
 
 func (e assertErr) Error() string { return string(e) }
+
+type errReader struct{}
+
+func (errReader) Read([]byte) (int, error) {
+	return 0, assertErr("read failed")
+}
