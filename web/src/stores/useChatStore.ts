@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { type TokenUsage, type PermissionRequestPayload, type AcceptanceDecidedPayload } from '@/api/protocol'
 import { type VerificationRunRecord } from '@/stores/useRuntimeInsightStore'
+import { resetEventBridgeCursors } from '@/utils/eventBridge'
 
 /** 聊天消息 */
 export interface ChatMessage {
@@ -279,16 +280,19 @@ export const useChatStore = create<ChatState>((set) => ({
 
   setAgentMode: (agentMode) => set({ agentMode }),
 
-  /** 清理全部聊天状态，包括权限请求、token用量等 */
-  clearMessages: () => set({
-    messages: [],
-    streamingMessageId: '',
-    isGenerating: false,
-    permissionRequests: [],
-    tokenUsage: null,
-    phase: '',
-    stopReason: '',
-    isTransitioning: false,
-    agentMode: 'build',
-  }),
+  /** 清理全部聊天状态，包括权限请求、token用量等。同时重置 eventBridge 模块级游标，避免跨会话泄漏。 */
+  clearMessages: () => {
+    resetEventBridgeCursors()
+    set({
+      messages: [],
+      streamingMessageId: '',
+      isGenerating: false,
+      permissionRequests: [],
+      tokenUsage: null,
+      phase: '',
+      stopReason: '',
+      isTransitioning: false,
+      agentMode: 'build',
+    })
+  },
 }))

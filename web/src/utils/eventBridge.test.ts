@@ -4,7 +4,7 @@ import { useGatewayStore } from '@/stores/useGatewayStore'
 import { useSessionStore } from '@/stores/useSessionStore'
 import { useRuntimeInsightStore } from '@/stores/useRuntimeInsightStore'
 import { useUIStore } from '@/stores/useUIStore'
-import { handleGatewayEvent } from './eventBridge'
+import { handleGatewayEvent, resetEventBridgeCursors } from './eventBridge'
 import { EventType } from '@/api/protocol'
 
 function createMockGatewayAPI() {
@@ -16,6 +16,7 @@ function createMockGatewayAPI() {
 }
 
 beforeEach(() => {
+  resetEventBridgeCursors()
   useChatStore.setState({
     messages: [],
     isGenerating: false,
@@ -32,7 +33,7 @@ beforeEach(() => {
     authenticated: false,
   } as any)
   useRuntimeInsightStore.getState().reset()
-  useUIStore.setState({ toasts: [] } as any)
+  useUIStore.setState({ toasts: [], fileChanges: [] } as any)
 })
 
 describe('eventBridge', () => {
@@ -388,5 +389,55 @@ describe('eventBridge', () => {
     const toolMsg = useChatStore.getState().messages.find((m) => m.type === 'tool_call')
     expect(toolMsg?.checkpointId).toBe('cp1')
     expect(toolMsg?.checkpointStatus).toBe('available')
+  })
+
+  it('clearMessages resets eventBridge cursors so new session does not inherit prior checkpoint', () => {
+    const api = createMockGatewayAPI()
+
+    // 会话 A:tool_call + checkpoint,使 _latestCheckpointId=cp_old
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'filesystem_write_file', id: 'tcA1', arguments: '{"path":"a.txt"}' } } },
+      session_id: 'sess-A',
+      run_id: 'run-A',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.ToolResult,
+      payload: { payload: { runtime_event_type: EventType.ToolResult, payload: { tool_call_id: 'tcA1', content: 'ok' } } },
+      session_id: 'sess-A',
+      run_id: 'run-A',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.CheckpointCreated,
+      payload: { payload: { runtime_event_type: EventType.CheckpointCreated, payload: { checkpoint_id: 'cp_old', code_checkpoint_ref: 'c', session_checkpoint_ref: 's', commit_hash: 'abc', reason: 'pre_write' } } },
+      session_id: 'sess-A',
+      run_id: 'run-A',
+    }, api)
+
+    // 同一会话内的下一次写文件应继承 cp_old(确认游标确实已被设置)
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'filesystem_write_file', id: 'tcA2', arguments: '{"path":"a2.txt"}' } } },
+      session_id: 'sess-A',
+      run_id: 'run-A',
+    }, api)
+    const inheritedChange = useUIStore.getState().fileChanges.find((c) => c.path === 'a2.txt')
+    expect(inheritedChange?.checkpoint_id).toBe('cp_old')
+
+    // 模拟切换会话:clearMessages 是 switchSession/createSession/prepareNewChat 的统一入口
+    useUIStore.getState().clearFileChanges()
+    useChatStore.getState().clearMessages()
+
+    // 会话 B:再触发一次写文件,但不再有 CheckpointCreated 事件
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'filesystem_write_file', id: 'tcB', arguments: '{"path":"b.txt"}' } } },
+      session_id: 'sess-B',
+      run_id: 'run-B',
+    }, api)
+
+    const newChange = useUIStore.getState().fileChanges.find((c) => c.path === 'b.txt')
+    expect(newChange).toBeDefined()
+    expect(newChange?.checkpoint_id).toBeUndefined()
   })
 })
