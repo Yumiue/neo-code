@@ -72,7 +72,10 @@ interface RuntimeInsightState {
   completeVerification: (payload: VerificationCompletedPayload) => void
   failVerification: (payload: VerificationFailedPayload) => void
   setAcceptanceDecision: (payload: AcceptanceDecidedPayload | null) => void
+  /** 成功事件更新快照并清除冲突（用于 todo_updated / todo_summary_injected） */
   setTodoSnapshot: (snapshot: TodoSnapshot | null) => void
+  /** 仅更新快照，保留冲突状态（用于 todo_snapshot_updated） */
+  applyTodoSnapshot: (snapshot: TodoSnapshot | null) => void
   addTodoEvent: (event: TodoEventPayload) => void
   setTodoConflict: (event: TodoEventPayload | null) => void
   setBudgetChecked: (payload: BudgetCheckedPayload) => void
@@ -192,8 +195,7 @@ export const useRuntimeInsightStore = create<RuntimeInsightState>((set) => ({
   setTodoSnapshot: (todoSnapshot) => set((s) => {
     const items = todoSnapshot?.items ?? []
     if (items.length === 0) {
-      // 空 snapshot = 无效更新,保留当前 todoSnapshot/todoHistory,仅清 conflict。
-      // 后端 v7 起已禁止空 plan;此处作前端兜底,防止回归把活 todo 抹成 stale。
+      // 空 snapshot = 无效更新，保留当前 snapshot/history，仅清 conflict
       return { todoConflict: null }
     }
     const now = Date.now()
@@ -207,6 +209,23 @@ export const useRuntimeInsightStore = create<RuntimeInsightState>((set) => ({
       }
     }
     return { todoSnapshot, todoConflict: null, todoHistory }
+  }),
+  applyTodoSnapshot: (todoSnapshot) => set((s) => {
+    const items = todoSnapshot?.items ?? []
+    if (items.length === 0) {
+      return {}
+    }
+    const now = Date.now()
+    const todoHistory = { ...s.todoHistory }
+    for (const item of items) {
+      const prev = todoHistory[item.id]
+      todoHistory[item.id] = {
+        ...item,
+        lastSeenAt: now,
+        firstSeenAt: prev?.firstSeenAt ?? now,
+      }
+    }
+    return { todoSnapshot, todoHistory }
   }),
   addTodoEvent: (event) => set((s) => ({ todoEvents: [...s.todoEvents, event] })),
   setTodoConflict: (todoConflict) => set({ todoConflict }),

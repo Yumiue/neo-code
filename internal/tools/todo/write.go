@@ -286,7 +286,14 @@ func (t *Tool) Execute(ctx context.Context, call tools.ToolCallInput) (tools.Too
 	dispatchMeta, resultErr := t.dispatch(call, input)
 	if resultErr != nil {
 		reason := mapReason(resultErr)
-		return errorResult(reason, resultErr.Error(), map[string]any{"action": input.Action}), resultErr
+		extra := map[string]any{"action": input.Action}
+		if reason == reasonRevisionConflict && input.ID != "" {
+			if current, ok := call.SessionMutator.FindTodo(input.ID); ok {
+				extra["current_revision"] = current.Revision
+				extra["current_status"] = string(current.Status)
+			}
+		}
+		return errorResult(reason, resultErr.Error(), extra), resultErr
 	}
 
 	return successResultWithMetadata(input.Action, call.SessionMutator.ListTodos(), dispatchMeta), nil
@@ -375,11 +382,11 @@ func (t *Tool) dispatch(call tools.ToolCallInput, input writeInput) (map[string]
 			return nil, err
 		}
 		return map[string]any{
-			"state_fact":        "todo_failed",
-			"terminal_failure":  true,
-			"do_not_retry":      true,
-			"transition_path":   []string{"failed"},
-			"auto_claimed":      false,
+			"state_fact":         "todo_failed",
+			"terminal_failure":   true,
+			"do_not_retry":       true,
+			"transition_path":    []string{"failed"},
+			"auto_claimed":       false,
 			"failure_reason_set": strings.TrimSpace(input.Reason) != "",
 		}, nil
 	default:

@@ -3,6 +3,7 @@ import { useChatStore } from '@/stores/useChatStore'
 import { useGatewayStore } from '@/stores/useGatewayStore'
 import { useSessionStore } from '@/stores/useSessionStore'
 import { useRuntimeInsightStore } from '@/stores/useRuntimeInsightStore'
+import { useUIStore } from '@/stores/useUIStore'
 import { handleGatewayEvent } from './eventBridge'
 import { EventType } from '@/api/protocol'
 
@@ -31,6 +32,7 @@ beforeEach(() => {
     authenticated: false,
   } as any)
   useRuntimeInsightStore.getState().reset()
+  useUIStore.setState({ toasts: [] } as any)
 })
 
 describe('eventBridge', () => {
@@ -201,6 +203,80 @@ describe('eventBridge', () => {
     }, api)
 
     expect(useRuntimeInsightStore.getState().todoSnapshot?.items?.[0].blocked_reason).toBe('wait')
+  })
+
+  it('TodoSnapshotUpdated does NOT clear TodoConflict', () => {
+    const api = createMockGatewayAPI()
+    // First, trigger a conflict
+    handleGatewayEvent({
+      type: EventType.TodoConflict,
+      payload: { payload: { runtime_event_type: EventType.TodoConflict, payload: { action: 'update', reason: 'revision_conflict', items: [{ id: 't1', content: 'x', status: 'in_progress', required: true, revision: 1 }] } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    expect(useRuntimeInsightStore.getState().todoConflict?.reason).toBe('revision_conflict')
+
+    // Then, snapshot update should preserve conflict
+    handleGatewayEvent({
+      type: EventType.TodoSnapshotUpdated,
+      payload: { payload: { runtime_event_type: EventType.TodoSnapshotUpdated, payload: { action: 'snapshot', items: [{ id: 't1', content: 'x', status: 'in_progress', required: true, revision: 1 }] } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    expect(useRuntimeInsightStore.getState().todoConflict?.reason).toBe('revision_conflict')
+    expect(useRuntimeInsightStore.getState().todoSnapshot?.items?.[0].id).toBe('t1')
+  })
+
+  it('TodoUpdated clears TodoConflict', () => {
+    const api = createMockGatewayAPI()
+    // Set conflict first
+    handleGatewayEvent({
+      type: EventType.TodoConflict,
+      payload: { payload: { runtime_event_type: EventType.TodoConflict, payload: { action: 'update', reason: 'revision_conflict' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    expect(useRuntimeInsightStore.getState().todoConflict).not.toBeNull()
+
+    // Successful update should clear conflict
+    handleGatewayEvent({
+      type: EventType.TodoUpdated,
+      payload: { payload: { runtime_event_type: EventType.TodoUpdated, payload: { action: 'update', items: [{ id: 't1', content: 'x', status: 'completed', required: true, revision: 2 }] } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    expect(useRuntimeInsightStore.getState().todoConflict).toBeNull()
+    expect(useRuntimeInsightStore.getState().todoSnapshot?.items?.[0].id).toBe('t1')
+  })
+
+  it('TodoConflict revision_conflict does NOT show toast', () => {
+    const api = createMockGatewayAPI()
+    handleGatewayEvent({
+      type: EventType.TodoConflict,
+      payload: { payload: { runtime_event_type: EventType.TodoConflict, payload: { action: 'update', reason: 'revision_conflict' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    expect(useRuntimeInsightStore.getState().todoConflict?.reason).toBe('revision_conflict')
+    expect(useUIStore.getState().toasts).toHaveLength(0)
+  })
+
+  it('TodoConflict invalid_arguments shows info toast', () => {
+    const api = createMockGatewayAPI()
+    handleGatewayEvent({
+      type: EventType.TodoConflict,
+      payload: { payload: { runtime_event_type: EventType.TodoConflict, payload: { action: 'update', reason: 'invalid_arguments' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    expect(useRuntimeInsightStore.getState().todoConflict?.reason).toBe('invalid_arguments')
+    expect(useUIStore.getState().toasts).toHaveLength(1)
+    expect(useUIStore.getState().toasts[0].type).toBe('info')
+    expect(useUIStore.getState().toasts[0].message).toContain('invalid_arguments')
   })
 
   it('Checkpoint events are stored in runtime insight state', () => {

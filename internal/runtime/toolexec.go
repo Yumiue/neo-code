@@ -407,7 +407,7 @@ func (s *Service) emitTodoToolEvent(
 		}
 		state.mu.Unlock()
 		s.emitRunScoped(ctx, EventTodoUpdated, state, payload)
-		s.emitRunScopedOptional(EventTodoSnapshotUpdated, state, payload)
+		s.emitRunScoped(ctx, EventTodoSnapshotUpdated, state, payload)
 		s.emitRuntimeSnapshotUpdated(ctx, state, "todo_updated")
 		return
 	}
@@ -441,7 +441,7 @@ func (s *Service) emitTodoToolEvent(
 		s.emitFactsUpdated(state, "todo_conflict")
 	}
 	s.emitRunScoped(ctx, EventTodoConflict, state, payload)
-	s.emitRunScopedOptional(EventTodoSnapshotUpdated, state, payload)
+	s.emitRunScoped(ctx, EventTodoSnapshotUpdated, state, payload)
 	s.emitRuntimeSnapshotUpdated(ctx, state, "todo_conflict")
 }
 
