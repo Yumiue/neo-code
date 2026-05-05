@@ -343,11 +343,6 @@ func (a App) renderPicker(width int, height int) string {
 		subtitle = sessionPickerSubtitle
 		body = a.sessionPicker.View()
 	}
-	if a.state.ActivePicker == pickerFile {
-		title = filePickerTitle
-		subtitle = filePickerSubtitle
-		body = a.fileBrowser.View()
-	}
 	if a.state.ActivePicker == pickerHelp {
 		title = helpPickerTitle
 		subtitle = helpPickerSubtitle

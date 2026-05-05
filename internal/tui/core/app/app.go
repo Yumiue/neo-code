@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/charmbracelet/bubbles/filepicker"
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/progress"
@@ -88,7 +87,6 @@ type appComponents struct {
 	modelPicker      list.Model
 	sessionPicker    list.Model
 	helpPicker       list.Model
-	fileBrowser      filepicker.Model
 	progress         progress.Model
 	transcript       viewport.Model
 	activity         viewport.Model
@@ -353,15 +351,6 @@ func newApp(container tuibootstrap.Container) (App, error) {
 
 	commandMenu := newCommandMenuModel(uiStyles)
 
-	fileBrowser := filepicker.New()
-	fileBrowser.SetHeight(10)
-	fileBrowser.AutoHeight = false
-	fileBrowser.ShowPermissions = false
-	fileBrowser.ShowSize = false
-	fileBrowser.FileAllowed = true
-	fileBrowser.DirAllowed = true
-	fileBrowser.CurrentDirectory = cfg.Workdir
-
 	progressBar := progress.New(progress.WithDefaultGradient(), progress.WithoutPercentage())
 	progressBar.Width = 22
 
@@ -390,7 +379,6 @@ func newApp(container tuibootstrap.Container) (App, error) {
 			modelPicker:      newSelectionPickerItems(nil),
 			sessionPicker:    newSelectionPickerItems(nil),
 			helpPicker:       newHelpPickerItems(nil),
-			fileBrowser:      fileBrowser,
 			progress:         progressBar,
 			transcript:       viewport.New(0, 0),
 			activity:         viewport.New(0, 0),

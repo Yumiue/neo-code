@@ -497,20 +497,6 @@ func TestStartupRegularInputDismissesStartup(t *testing.T) {
 	}
 }
 
-func TestStartupCtrlONavigatesToWorkspaceBrowser(t *testing.T) {
-	app, _ := newTestApp(t)
-	app.startupScreenLocked = true
-
-	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
-	next := model.(App)
-	if !next.startupScreenLocked {
-		t.Fatalf("expected opening workspace picker not to unlock startup")
-	}
-	if next.state.ActivePicker != pickerFile {
-		t.Fatalf("expected file picker active, got %v", next.state.ActivePicker)
-	}
-}
-
 func TestStartupCtrlNStartsDraftSession(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.startupScreenLocked = true
@@ -3087,16 +3073,6 @@ func TestManualSlashCompletionDoesNotMoveInput(t *testing.T) {
 	if app.commandMenuHasSuggestions() {
 		t.Fatalf("expected command menu to clear for complete slash command")
 	}
-}
-
-func TestFocusNextPrev(t *testing.T) {
-	app, _ := newTestApp(t)
-	app.focus = panelTranscript
-	app.focusNext()
-	if app.focus == panelTranscript {
-		t.Fatalf("expected focus to move")
-	}
-	app.focusPrev()
 }
 
 func TestHandleViewportKeys(t *testing.T) {

@@ -71,7 +71,6 @@ type sessionLogPersistenceRuntime interface {
 	SaveSessionLogEntries(ctx context.Context, sessionID string, entries []tuiservices.SessionLogEntry) error
 }
 
-var panelOrder = []panel{panelTranscript, panelInput}
 var supportsUserEnvPersistence = config.SupportsUserEnvPersistence
 var persistProviderUserEnvVar = config.PersistUserEnvVar
 var deleteProviderUserEnvVar = config.DeleteUserEnvVar
@@ -423,7 +422,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return a, batchUpdateCmds()
 			}
 		}
-		if a.focus == panelInput && key.Matches(typed, a.keys.NextPanel) {
+		if a.focus == panelInput && typed.Type == tea.KeyTab {
 			if a.applySelectedCommandSuggestion() {
 				return a, batchUpdateCmds()
 			}
@@ -431,14 +430,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				tabMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'	'}, Paste: typed.Paste}
 				return a.updateInputPanel(tabMsg, tabMsg, cmds)
 			}
-		}
-		if key.Matches(typed, a.keys.NextPanel) {
-			a.focusNext()
-			return a, batchUpdateCmds()
-		}
-		if key.Matches(typed, a.keys.PrevPanel) {
-			a.focusPrev()
-			return a, batchUpdateCmds()
 		}
 		if key.Matches(typed, a.keys.FocusInput) {
 			a.clearTextSelection()
@@ -451,11 +442,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.startupScreenLocked = true
 			return a, batchUpdateCmds()
 		}
-		if key.Matches(typed, a.keys.OpenWorkspace) {
-			a.openFileBrowser()
-			return a, batchUpdateCmds()
-		}
-
 		if key.Matches(typed, a.keys.LogViewer) {
 			a.logViewerVisible = true
 			a.logViewerOffset = 0
@@ -2066,30 +2052,6 @@ func (a App) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.sessionPicker, cmd = updateListPickerModel(a.sessionPicker, msg)
 	case pickerHelp:
 		a.helpPicker, cmd = updateListPickerModel(a.helpPicker, msg)
-	case pickerFile:
-		a.fileBrowser, cmd = a.fileBrowser.Update(msg)
-		if didSelect, path := a.fileBrowser.DidSelectFile(msg); didSelect {
-			a.closePicker()
-			if tuiinfra.IsSupportedImageFormat(path) {
-				if err := a.addImageAttachment(path); err != nil {
-					a.state.ExecutionError = err.Error()
-					a.state.StatusText = err.Error()
-					a.appendActivity("multimodal", "Failed to add image", err.Error(), true)
-					return a, cmd
-				}
-				return a, cmd
-			}
-			if err := a.applyFileReference(path); err != nil {
-				a.state.ExecutionError = err.Error()
-				a.state.StatusText = err.Error()
-				a.appendActivity("workspace", "Failed to apply file reference", err.Error(), true)
-				return a, cmd
-			}
-			return a, cmd
-		}
-		if disabled, path := a.fileBrowser.DidSelectDisabledFile(msg); disabled {
-			a.state.StatusText = fmt.Sprintf("[System] %s is not selectable.", filepath.Base(path))
-		}
 	case pickerProviderAdd:
 		return a.handleProviderAddFormInput(msg)
 	case pickerModelScope:
@@ -4982,39 +4944,6 @@ func (a App) shouldHandleTabAsInput(typed tea.KeyMsg) bool {
 	return strings.TrimSpace(a.input.Value()) != ""
 }
 
-func (a *App) focusNext() {
-	order := panelOrder
-	current := 0
-	for i, item := range order {
-		if item == a.focus {
-			current = i
-			break
-		}
-	}
-
-	a.focus = order[(current+1)%len(order)]
-	a.applyFocus()
-}
-
-func (a *App) focusPrev() {
-	order := panelOrder
-	current := 0
-	for i, item := range order {
-		if item == a.focus {
-			current = i
-			break
-		}
-	}
-
-	if current == 0 {
-		a.focus = order[len(order)-1]
-	} else {
-		a.focus = order[current-1]
-	}
-
-	a.applyFocus()
-}
-
 func (a *App) applyFocus() {
 	a.state.Focus = a.focus
 	if a.focus == panelInput && a.state.ActivePicker == pickerNone {
@@ -5072,7 +5001,6 @@ func (a *App) applyComponentLayout(rebuildTranscript bool) {
 		pickerLayout.listWidth,
 		tuiutils.Clamp(helpPickerDesiredHeight, pickerListMinHeight, pickerLayout.listHeight),
 	)
-	a.fileBrowser.SetHeight(max(pickerListMinHeight, pickerLayout.listHeight))
 	if rebuildTranscript || prevTranscriptWidth != a.transcript.Width {
 		a.rebuildTranscript()
 	} else if a.transcript.AtBottom() {
@@ -5930,7 +5858,7 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.state.ActivePicker = pickerNone
 			a.state.StatusText = statusReady
 			return a, nil
-		case key.Matches(typed, a.keys.PrevPanel):
+		case typed.Type == tea.KeyShiftTab:
 			a.providerAddForm.Stage = providerAddFormStageFields
 			a.providerAddForm.Error = ""
 			a.providerAddForm.ErrorIsHard = false
@@ -5957,9 +5885,9 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch {
-	case key.Matches(typed, a.keys.PrevPanel):
+	case typed.Type == tea.KeyShiftTab:
 		a.providerAddForm.Step = (a.providerAddForm.Step + fieldCount - 1) % fieldCount
-	case key.Matches(typed, a.keys.NextPanel):
+	case typed.Type == tea.KeyTab:
 		a.providerAddForm.Step = (a.providerAddForm.Step + 1) % fieldCount
 	case key.Matches(typed, a.keys.Send):
 		return a, a.submitProviderAddForm()
