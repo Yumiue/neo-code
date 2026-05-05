@@ -16,6 +16,8 @@ type Config struct {
 	CardPath               string
 	AppID                  string
 	AppSecret              string
+	BotUserID              string
+	BotOpenID              string
 	VerifyToken            string
 	SigningSecret          string
 	InsecureSkipSignVerify bool

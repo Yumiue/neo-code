@@ -47,6 +47,9 @@ feishu:
   ingress: "sdk" # webhook | sdk
   app_id: "cli_xxx"
   app_secret: "xxx"
+  # 群聊 @ 命中建议至少配置一个
+  bot_user_id: "ou_xxx"
+  bot_open_id: "ou_xxx"
 
   # 仅 webhook 必填
   verify_token: "xxx"

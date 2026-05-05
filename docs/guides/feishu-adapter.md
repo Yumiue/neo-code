@@ -35,6 +35,7 @@
 
 - `feishu.ingress`：`webhook` 或 `sdk`，默认 `webhook`
 - `feishu.app_id` / `feishu.app_secret`
+- `feishu.bot_user_id` / `feishu.bot_open_id`（群聊 @ 命中建议至少配置一个）
 - `feishu.verify_token` / `feishu.signing_secret`（仅 `webhook` 强制）
 
 ## 4. 启动方式
@@ -66,7 +67,7 @@ SDK 模式下不要求公网回调地址，不要求 `adapter.listen/event_path/
 ## 5. 群聊触发规则
 
 - 私聊：默认处理。
-- 群聊：必须 `@` 当前 bot 才会触发 run。
+- 群聊：必须 `@` 当前 bot 才会触发 run，建议配置 `bot_user_id` 或 `bot_open_id` 作为命中目标。
 - 任意 mention（@其他用户）不会触发 NeoCode。
 
 ## 6. 幂等与重试

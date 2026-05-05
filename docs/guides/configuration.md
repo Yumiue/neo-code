@@ -349,8 +349,12 @@ go run ./cmd/neocode --workdir /path/to/workspace
 ```yaml
 feishu:
   enabled: true
+  ingress: "webhook" # webhook | sdk
   app_id: "cli_xxx"
   app_secret: "cli_secret_xxx"
+  # 群聊 @ 命中建议至少配置一个
+  bot_user_id: "ou_xxx"
+  bot_open_id: "ou_xxx"
   verify_token: "verify_token_xxx"
   signing_secret: "signing_secret_xxx"
   insecure_skip_signature_verify: false

@@ -34,6 +34,8 @@ type FeishuConfig struct {
 	Ingress                string                    `yaml:"ingress,omitempty"`
 	AppID                  string                    `yaml:"app_id,omitempty"`
 	AppSecret              string                    `yaml:"app_secret,omitempty"`
+	BotUserID              string                    `yaml:"bot_user_id,omitempty"`
+	BotOpenID              string                    `yaml:"bot_open_id,omitempty"`
 	VerifyToken            string                    `yaml:"verify_token,omitempty"`
 	SigningSecret          string                    `yaml:"signing_secret,omitempty"`
 	InsecureSkipSignVerify bool                      `yaml:"insecure_skip_signature_verify,omitempty"`

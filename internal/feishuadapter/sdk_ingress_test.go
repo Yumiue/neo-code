@@ -121,7 +121,7 @@ func TestHandleMessageSDKGroupOnlyBotMentionTriggersRun(t *testing.T) {
 		ContentText: "@neo hello",
 		HeaderAppID: "app",
 		Mentions: []FeishuMention{
-			{UserID: "app"},
+			{UserID: "ou_bot"},
 		},
 	})
 	if err != nil {

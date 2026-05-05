@@ -27,6 +27,8 @@ type feishuAdapterCommandOptions struct {
 	CardPath               string
 	AppID                  string
 	AppSecret              string
+	BotUserID              string
+	BotOpenID              string
 	VerifyToken            string
 	SigningSecret          string
 	InsecureSkipSignVerify bool
@@ -62,6 +64,8 @@ func newFeishuAdapterCommand() *cobra.Command {
 	cmd.Flags().StringVar(&options.CardPath, "card-path", "", "feishu card callback path")
 	cmd.Flags().StringVar(&options.AppID, "app-id", "", "feishu app id")
 	cmd.Flags().StringVar(&options.AppSecret, "app-secret", "", "feishu app secret")
+	cmd.Flags().StringVar(&options.BotUserID, "bot-user-id", "", "feishu bot user id for group mention matching")
+	cmd.Flags().StringVar(&options.BotOpenID, "bot-open-id", "", "feishu bot open id for group mention matching")
 	cmd.Flags().StringVar(&options.VerifyToken, "verify-token", "", "feishu verify token")
 	cmd.Flags().StringVar(&options.SigningSecret, "signing-secret", "", "feishu signing secret")
 	cmd.Flags().BoolVar(&options.InsecureSkipSignVerify, "insecure-skip-signature-verify", false, "skip feishu callback signature verification (unsafe)")
@@ -114,6 +118,8 @@ type mergedFeishuOptions struct {
 	CardPath               string
 	AppID                  string
 	AppSecret              string
+	BotUserID              string
+	BotOpenID              string
 	VerifyToken            string
 	SigningSecret          string
 	InsecureSkipSignVerify bool
@@ -141,6 +147,8 @@ func (o mergedFeishuOptions) ToAdapterConfig() feishuadapter.Config {
 		CardPath:               o.CardPath,
 		AppID:                  o.AppID,
 		AppSecret:              o.AppSecret,
+		BotUserID:              o.BotUserID,
+		BotOpenID:              o.BotOpenID,
 		VerifyToken:            o.VerifyToken,
 		SigningSecret:          o.SigningSecret,
 		InsecureSkipSignVerify: o.InsecureSkipSignVerify,
@@ -175,6 +183,8 @@ func mergeFeishuOptions(feishuCfg config.FeishuConfig, cliOptions feishuAdapterC
 		CardPath:               strings.TrimSpace(feishuCfg.Adapter.CardURI),
 		AppID:                  strings.TrimSpace(feishuCfg.AppID),
 		AppSecret:              strings.TrimSpace(feishuCfg.AppSecret),
+		BotUserID:              strings.TrimSpace(feishuCfg.BotUserID),
+		BotOpenID:              strings.TrimSpace(feishuCfg.BotOpenID),
 		VerifyToken:            strings.TrimSpace(feishuCfg.VerifyToken),
 		SigningSecret:          strings.TrimSpace(feishuCfg.SigningSecret),
 		InsecureSkipSignVerify: feishuCfg.InsecureSkipSignVerify,
@@ -212,6 +222,12 @@ func mergeFeishuOptions(feishuCfg config.FeishuConfig, cliOptions feishuAdapterC
 	}
 	if value := strings.TrimSpace(cliOptions.AppSecret); value != "" {
 		merged.AppSecret = value
+	}
+	if value := strings.TrimSpace(cliOptions.BotUserID); value != "" {
+		merged.BotUserID = value
+	}
+	if value := strings.TrimSpace(cliOptions.BotOpenID); value != "" {
+		merged.BotOpenID = value
 	}
 	if value := strings.TrimSpace(cliOptions.VerifyToken); value != "" {
 		merged.VerifyToken = value

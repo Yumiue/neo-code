@@ -249,7 +249,7 @@ func TestGroupMessageWithMentionAccepted(t *testing.T) {
 					{
 						"name": "neo",
 						"id": map[string]any{
-							"user_id": "app",
+							"user_id": "ou_bot",
 						},
 					},
 				},
@@ -554,6 +554,45 @@ func TestReconnectHealthyPathDoesNotRebind(t *testing.T) {
 	}
 }
 
+func TestIsMentionCurrentBotMatchesConfiguredBotIDs(t *testing.T) {
+	cfg := Config{AppID: "cli_app", BotUserID: "ou_bot", BotOpenID: "ou_open_bot"}
+	event := FeishuMessageEvent{
+		ChatType: "group",
+		Mentions: []FeishuMention{
+			{UserID: "ou_bot"},
+		},
+	}
+	if !isMentionCurrentBot(event, cfg) {
+		t.Fatal("expected mention match by bot_user_id")
+	}
+}
+
+func TestIsMentionCurrentBotDoesNotTreatAppIDAsUserID(t *testing.T) {
+	cfg := Config{AppID: "cli_app"}
+	event := FeishuMessageEvent{
+		ChatType: "group",
+		Mentions: []FeishuMention{
+			{UserID: "cli_app"},
+		},
+	}
+	if isMentionCurrentBot(event, cfg) {
+		t.Fatal("expected no match when only user_id equals app_id")
+	}
+}
+
+func TestIsMentionCurrentBotMatchesMentionAppID(t *testing.T) {
+	cfg := Config{AppID: "cli_app"}
+	event := FeishuMessageEvent{
+		ChatType: "group",
+		Mentions: []FeishuMention{
+			{AppID: "cli_app"},
+		},
+	}
+	if !isMentionCurrentBot(event, cfg) {
+		t.Fatal("expected mention match by mention.app_id")
+	}
+}
+
 func newTestAdapter(t *testing.T) *Adapter {
 	t.Helper()
 	gateway := newFakeGatewayClient()
@@ -564,6 +603,8 @@ func newTestAdapter(t *testing.T) *Adapter {
 		CardPath:            "/feishu/cards",
 		AppID:               "app",
 		AppSecret:           "secret",
+		BotUserID:           "ou_bot",
+		BotOpenID:           "ou_open_bot",
 		VerifyToken:         "verify",
 		SigningSecret:       "sign-secret",
 		RequestTimeout:      200 * time.Millisecond,

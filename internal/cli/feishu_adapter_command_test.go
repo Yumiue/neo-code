@@ -26,6 +26,8 @@ func TestNewFeishuAdapterCommandForwardsFlags(t *testing.T) {
 		"--card-path", "/card",
 		"--app-id", "app",
 		"--app-secret", "secret",
+		"--bot-user-id", "ou_bot",
+		"--bot-open-id", "ou_open_bot",
 		"--insecure-skip-signature-verify",
 		"--gateway-listen", "tcp://gateway",
 	})
@@ -40,6 +42,9 @@ func TestNewFeishuAdapterCommandForwardsFlags(t *testing.T) {
 	}
 	if captured.AppID != "app" || captured.AppSecret != "secret" || captured.GatewayListen != "tcp://gateway" {
 		t.Fatalf("unexpected credential/gateway options: %#v", captured)
+	}
+	if captured.BotUserID != "ou_bot" || captured.BotOpenID != "ou_open_bot" {
+		t.Fatalf("unexpected bot id options: %#v", captured)
 	}
 	if !captured.InsecureSkipSignVerify {
 		t.Fatalf("expected insecure skip flag to be forwarded, got %#v", captured)

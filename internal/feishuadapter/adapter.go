@@ -122,7 +122,7 @@ func (a *Adapter) HandleMessage(ctx context.Context, event FeishuMessageEvent) e
 	if chatType == "" {
 		chatType = "p2p"
 	}
-	if chatType == "group" && !isMentionCurrentBot(event, a.cfg.AppID) {
+	if chatType == "group" && !isMentionCurrentBot(event, a.cfg) {
 		return nil
 	}
 	if strings.TrimSpace(event.MessageID) == "" || strings.TrimSpace(event.ChatID) == "" {
@@ -392,27 +392,48 @@ func (a *Adapter) shouldEmitProgress(sessionID string, runID string, runtimeEven
 	return true
 }
 
-// isMentionCurrentBot 判断群聊消息是否明确 @ 到当前机器人应用。
-func isMentionCurrentBot(event FeishuMessageEvent, configuredAppID string) bool {
-	expected := strings.TrimSpace(strings.ToLower(configuredAppID))
-	if expected == "" {
-		expected = strings.TrimSpace(strings.ToLower(event.HeaderAppID))
+// isMentionCurrentBot 判断群聊消息是否明确 @ 到当前机器人。
+// 说明：app_id 仅用于匹配 mention.app_id；user/open/union 需使用 bot 身份标识匹配。
+func isMentionCurrentBot(event FeishuMessageEvent, cfg Config) bool {
+	expectedAppID := strings.TrimSpace(strings.ToLower(cfg.AppID))
+	if expectedAppID == "" {
+		expectedAppID = strings.TrimSpace(strings.ToLower(event.HeaderAppID))
 	}
-	if expected == "" {
+	expectedUserID := strings.TrimSpace(strings.ToLower(cfg.BotUserID))
+	expectedOpenID := strings.TrimSpace(strings.ToLower(cfg.BotOpenID))
+	if expectedAppID == "" && expectedUserID == "" && expectedOpenID == "" {
 		return false
 	}
+
 	for _, mention := range event.Mentions {
-		for _, candidate := range []string{mention.AppID, mention.UserID, mention.OpenID, mention.UnionID} {
-			if strings.TrimSpace(strings.ToLower(candidate)) == expected {
-				return true
-			}
+		appID := strings.TrimSpace(strings.ToLower(mention.AppID))
+		userID := strings.TrimSpace(strings.ToLower(mention.UserID))
+		openID := strings.TrimSpace(strings.ToLower(mention.OpenID))
+		if expectedAppID != "" && appID != "" && appID == expectedAppID {
+			return true
+		}
+		if expectedUserID != "" && userID != "" && userID == expectedUserID {
+			return true
+		}
+		if expectedOpenID != "" && openID != "" && openID == expectedOpenID {
+			return true
 		}
 	}
+
 	normalizedText := strings.TrimSpace(strings.ToLower(event.ContentText))
-	return strings.Contains(normalizedText, `<at user_id="`+expected+`"`) ||
-		strings.Contains(normalizedText, `<at user_id='`+expected+`'`) ||
-		strings.Contains(normalizedText, `<at id="`+expected+`"`) ||
-		strings.Contains(normalizedText, `<at id='`+expected+`'`)
+	if expectedUserID != "" && (strings.Contains(normalizedText, `<at user_id="`+expectedUserID+`"`) ||
+		strings.Contains(normalizedText, `<at user_id='`+expectedUserID+`'`) ||
+		strings.Contains(normalizedText, `<at id="`+expectedUserID+`"`) ||
+		strings.Contains(normalizedText, `<at id='`+expectedUserID+`'`)) {
+		return true
+	}
+	if expectedOpenID != "" && (strings.Contains(normalizedText, `<at user_id="`+expectedOpenID+`"`) ||
+		strings.Contains(normalizedText, `<at user_id='`+expectedOpenID+`'`) ||
+		strings.Contains(normalizedText, `<at id="`+expectedOpenID+`"`) ||
+		strings.Contains(normalizedText, `<at id='`+expectedOpenID+`'`)) {
+		return true
+	}
+	return false
 }
 
 // tryHandleTextPermission 处理 SDK 模式下的文本审批降级指令。
