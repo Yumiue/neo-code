@@ -2129,6 +2129,24 @@ func TestUpdatePastedTextLoadReadyAppendsSeparatorBeforeDeferredSend(t *testing.
 	}
 }
 
+func TestBeginAgentRunPropagatesCurrentMode(t *testing.T) {
+	app, runtime := newTestApp(t)
+	app.setCurrentAgentMode(string(agentsession.AgentModePlan))
+
+	cmd := app.beginAgentRun("hello", nil)
+	if cmd == nil {
+		t.Fatalf("expected beginAgentRun to return submit command")
+	}
+	_ = cmd()
+
+	if len(runtime.prepareInputs) != 1 {
+		t.Fatalf("expected one prepare input, got %d", len(runtime.prepareInputs))
+	}
+	if runtime.prepareInputs[0].Mode != string(agentsession.AgentModePlan) {
+		t.Fatalf("prepare input mode = %q, want %q", runtime.prepareInputs[0].Mode, agentsession.AgentModePlan)
+	}
+}
+
 func TestPasteSessionHelpers(t *testing.T) {
 	app, _ := newTestApp(t)
 	now := time.Now()
@@ -3014,6 +3032,45 @@ func TestShouldHandleTabAsInput(t *testing.T) {
 	app.input.SetValue("")
 	if app.shouldHandleTabAsInput(tea.KeyMsg{Type: tea.KeyTab}) {
 		t.Fatalf("expected tab to be ignored for empty input")
+	}
+}
+
+func TestTabSwitchesAgentModeWhenInputEmpty(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.focus = panelInput
+	app.state.ActivePicker = pickerNone
+	app.input.SetValue("")
+	app.state.InputText = ""
+	app.setCurrentAgentMode(string(agentsession.AgentModeBuild))
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyTab})
+	app = model.(App)
+	if app.currentAgentMode() != agentsession.AgentModePlan {
+		t.Fatalf("expected mode to switch to plan, got %q", app.currentAgentMode())
+	}
+	if !strings.Contains(strings.ToLower(app.state.StatusText), "plan") {
+		t.Fatalf("expected status to mention plan mode, got %q", app.state.StatusText)
+	}
+
+	model, _ = app.Update(tea.KeyMsg{Type: tea.KeyTab})
+	app = model.(App)
+	if app.currentAgentMode() != agentsession.AgentModeBuild {
+		t.Fatalf("expected mode to switch back to build, got %q", app.currentAgentMode())
+	}
+}
+
+func TestTabWithNonEmptyInputDoesNotSwitchAgentMode(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.focus = panelInput
+	app.state.ActivePicker = pickerNone
+	app.input.SetValue("x")
+	app.state.InputText = "x"
+	app.setCurrentAgentMode(string(agentsession.AgentModeBuild))
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyTab})
+	app = model.(App)
+	if app.currentAgentMode() != agentsession.AgentModeBuild {
+		t.Fatalf("expected mode to stay build, got %q", app.currentAgentMode())
 	}
 }
 

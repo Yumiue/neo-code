@@ -17,6 +17,7 @@ import (
 	configstate "neo-code/internal/config/state"
 	"neo-code/internal/memo"
 	providertypes "neo-code/internal/provider/types"
+	agentsession "neo-code/internal/session"
 	tuibootstrap "neo-code/internal/tui/bootstrap"
 	tuiservices "neo-code/internal/tui/services"
 	tuistate "neo-code/internal/tui/state"
@@ -356,9 +357,10 @@ func newApp(container tuibootstrap.Container) (App, error) {
 
 	app := App{
 		state: tuistate.UIState{
-			StatusText:      statusReady,
-			CurrentProvider: cfg.SelectedProvider,
-			CurrentModel:    cfg.CurrentModel,
+			StatusText:       statusReady,
+			CurrentProvider:  cfg.SelectedProvider,
+			CurrentModel:     cfg.CurrentModel,
+			CurrentAgentMode: string(agentsession.AgentModeBuild),
 			// CurrentWorkdir 初始化为启动配置中的工作目录，避免启动阶段丢失目录上下文。
 			CurrentWorkdir:     cfg.Workdir,
 			ActiveSessionTitle: draftSessionTitle,
@@ -401,6 +403,7 @@ func newApp(container tuibootstrap.Container) (App, error) {
 		styles: uiStyles,
 	}
 
+	app.setCurrentAgentMode(app.state.CurrentAgentMode)
 	app.syncActiveSessionTitle()
 	app.syncConfigState(configManager.Get())
 	if err := app.refreshProviderPicker(); err != nil {

@@ -110,10 +110,16 @@ func (a App) renderHeader(width int) string {
 	status = tuiutils.Fallback(status, statusReady)
 
 	model := tuiutils.Fallback(strings.TrimSpace(a.state.CurrentModel), "unknown-model")
+	mode := formatAgentModeLabel(a.state.CurrentAgentMode)
 	workdir := tuiutils.Fallback(strings.TrimSpace(a.state.CurrentWorkdir), "-")
-	leftText := fmt.Sprintf("NeoCode / %s / %s", model, status)
+	leftText := fmt.Sprintf("NeoCode / %s / %s / %s", model, mode, status)
 	rightText := "cwd: " + workdir
 	headerText := composeHeaderLine(leftText, rightText, width)
+	modeStyled := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(modeAccent(a.currentAgentMode()))).
+		Bold(true).
+		Render(mode)
+	headerText = strings.Replace(headerText, mode, modeStyled, 1)
 	return a.styles.headerBar.Width(width).Height(headerBarHeight).Render(headerText)
 }
 

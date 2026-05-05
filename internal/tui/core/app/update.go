@@ -430,6 +430,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				tabMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'	'}, Paste: typed.Paste}
 				return a.updateInputPanel(tabMsg, tabMsg, cmds)
 			}
+			if a.shouldToggleAgentModeOnTab(typed) {
+				mode := a.toggleAgentMode()
+				a.state.StatusText = fmt.Sprintf("Mode switched to %s", strings.ToUpper(string(mode)))
+				return a, batchUpdateCmds()
+			}
 		}
 		if key.Matches(typed, a.keys.FocusInput) {
 			a.clearTextSelection()
@@ -1992,6 +1997,7 @@ func (a *App) beginAgentRun(input string, images []tuiservices.UserImageInput) t
 		SessionID: a.state.ActiveSessionID,
 		RunID:     runID,
 		Workdir:   requestedWorkdir,
+		Mode:      string(a.currentAgentMode()),
 		Text:      normalizedInput,
 		Images:    clonedImages,
 	})
@@ -2560,6 +2566,7 @@ func (a *App) applySessionSnapshot(session agentsession.Session, warnOnMissingWo
 	a.clearActivities()
 	a.syncTodos(session.Todos)
 	a.state.ActiveSessionTitle = session.Title
+	a.setCurrentAgentMode(string(session.AgentMode))
 	a.syncSessionWorkdir(session.Workdir, warnOnMissingWorkdir)
 	a.loadLogEntriesForSession(session.ID)
 	a.refreshRuntimeSourceSnapshot()
@@ -2573,6 +2580,7 @@ func (a *App) resetSessionRuntimeState() {
 	a.lastUserMessageRunID = ""
 	a.state.ToolStates = nil
 	a.state.RunContext = tuistate.ContextWindowState{}
+	a.setCurrentAgentMode(string(agentsession.AgentModeBuild))
 	a.state.TokenUsage = tuistate.TokenUsageState{}
 	a.pendingPermission = nil
 	a.queuedIntervention = nil
@@ -2690,7 +2698,9 @@ func (a *App) refreshRuntimeSourceSnapshot() {
 					a.state.RunContext.Provider = mapped.Provider
 					a.state.RunContext.Model = mapped.Model
 					a.state.RunContext.Workdir = mapped.Workdir
-					a.state.RunContext.Mode = mapped.Mode
+					if strings.TrimSpace(mapped.Mode) != "" {
+						a.setCurrentAgentMode(mapped.Mode)
+					}
 					a.state.RunContext.SessionID = mapped.SessionID
 				}
 			}
@@ -2716,8 +2726,11 @@ func (a *App) refreshRuntimeSourceSnapshot() {
 			runSnapshot, parsed := tuiservices.ParseRunSnapshot(raw)
 			if parsed {
 				contextVM, toolVM, usageVM := tuiservices.MapRunSnapshot(runSnapshot)
-				if strings.TrimSpace(contextVM.Provider) != "" {
+				if strings.TrimSpace(contextVM.Provider) != "" || strings.TrimSpace(contextVM.Mode) != "" {
 					a.state.RunContext = contextVM
+					if strings.TrimSpace(contextVM.Mode) != "" {
+						a.setCurrentAgentMode(contextVM.Mode)
+					}
 				}
 				if len(toolVM) > 0 {
 					a.state.ToolStates = append([]tuistate.ToolState(nil), toolVM...)
@@ -3863,6 +3876,9 @@ func runtimeEventRunContextHandler(a *App, event tuiservices.RuntimeEvent) bool 
 	}
 	if strings.TrimSpace(mapped.Workdir) != "" {
 		a.setCurrentWorkdir(mapped.Workdir)
+	}
+	if strings.TrimSpace(mapped.Mode) != "" {
+		a.setCurrentAgentMode(mapped.Mode)
 	}
 	return false
 }
@@ -5329,6 +5345,7 @@ func (a *App) startDraftSession() {
 	a.lastUserMessageRunID = ""
 	a.state.ToolStates = nil
 	a.state.RunContext = tuistate.ContextWindowState{}
+	a.setCurrentAgentMode(string(agentsession.AgentModeBuild))
 	a.state.TokenUsage = tuistate.TokenUsageState{}
 	a.pendingPermission = nil
 	a.queuedIntervention = nil
@@ -5454,6 +5471,16 @@ func (a *App) setActiveSessionID(sessionID string) {
 	if current == "" && len(previousEntries) > 0 {
 		a.persistLogEntriesForActiveSession()
 	}
+}
+
+func (a App) shouldToggleAgentModeOnTab(typed tea.KeyMsg) bool {
+	if a.focus != panelInput || a.state.ActivePicker != pickerNone || typed.Type != tea.KeyTab {
+		return false
+	}
+	if a.input.Value() != "" {
+		return false
+	}
+	return !typed.Paste && !a.pasteMode
 }
 
 func (a *App) loadLogEntriesForSession(sessionID string) {
