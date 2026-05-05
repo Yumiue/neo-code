@@ -224,10 +224,20 @@ func (s *Service) executeOneToolCall(
 			if err != nil {
 				continue
 			}
+			kind, err := snap.Kind()
+			if err != nil {
+				continue
+			}
+			// 跳过完全无变化的快照(典型场景: copy 的 source 文件)
+			// 删除时 diff 非空且 kind=deleted，不会被这里过滤
+			if kind == FileChangeKindUnchanged {
+				continue
+			}
 			diffs = append(diffs, map[string]any{
 				"path":    path,
 				"diff":    diff,
 				"was_new": snap.WasNew(),
+				"kind":    kind,
 			})
 		}
 		if len(diffs) > 0 {

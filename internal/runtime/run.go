@@ -715,6 +715,7 @@ func (s *Service) emitToolDiffs(ctx context.Context, state *runState, summary to
 // buildToolDiffPayload 将工具结果 metadata 中的 diff 信息组装成 ToolDiffPayload。
 // 多文件工具(filesystem_move_file 等)使用 Files+Diffs 多路径字段；
 // 其他写工具继续填充兼容字段 FilePath/Diff/WasNew，保持现有消费者不破。
+// FileChange.Kind 优先取 entry.Kind（toolexec 收集层填充），缺失时回退到 WasNew 二分以兼容旧 metadata。
 func buildToolDiffPayload(result tools.ToolResult) (ToolDiffPayload, bool) {
 	payload := ToolDiffPayload{
 		ToolCallID: result.ToolCallID,
@@ -724,9 +725,12 @@ func buildToolDiffPayload(result tools.ToolResult) (ToolDiffPayload, bool) {
 		payload.Diffs = multi
 		payload.Files = make([]FileChange, 0, len(multi))
 		for _, entry := range multi {
-			kind := "modified"
-			if entry.WasNew {
-				kind = "added"
+			kind := entry.Kind
+			if kind == "" {
+				kind = FileChangeKindModified
+				if entry.WasNew {
+					kind = FileChangeKindAdded
+				}
 			}
 			payload.Files = append(payload.Files, FileChange{Path: entry.Path, Kind: kind})
 		}
@@ -749,6 +753,7 @@ func buildToolDiffPayload(result tools.ToolResult) (ToolDiffPayload, bool) {
 }
 
 // toolResultMultiDiffs 从工具结果 metadata 解析多文件 diff 列表。
+// kind=="unchanged" 的条目（典型场景: copy 的 source 文件）会被过滤，不进入 UI。
 func toolResultMultiDiffs(metadata map[string]any) ([]FileDiffEntry, bool) {
 	if metadata == nil {
 		return nil, false
@@ -770,10 +775,15 @@ func toolResultMultiDiffs(metadata map[string]any) ([]FileDiffEntry, bool) {
 		}
 		diff, _ := entry["diff"].(string)
 		wasNew, _ := entry["was_new"].(bool)
+		kind, _ := entry["kind"].(string)
+		if kind == FileChangeKindUnchanged {
+			continue
+		}
 		out = append(out, FileDiffEntry{
 			Path:   path,
 			Diff:   diff,
 			WasNew: wasNew,
+			Kind:   kind,
 		})
 	}
 	if len(out) == 0 {
