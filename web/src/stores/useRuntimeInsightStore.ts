@@ -12,6 +12,7 @@ import {
   type LedgerReconciledPayload,
   type TodoEventPayload,
   type TodoSnapshot,
+  type TodoViewItem,
   type VerificationCompletedPayload,
   type VerificationFailedPayload,
   type VerificationFinishedPayload,
@@ -32,6 +33,12 @@ export interface VerificationRunRecord {
   status: 'running' | 'finished' | 'completed' | 'failed'
 }
 
+/** 会话内 todo 累积历史:每次 snapshot 合并写入,旧条目即使被新 snapshot 移除也保留 */
+export interface TodoHistoryEntry extends TodoViewItem {
+  lastSeenAt: number
+  firstSeenAt: number
+}
+
 interface RuntimeInsightState {
   checkpoints: CheckpointEntry[]
   checkpointDiff: CheckpointDiffResultPayload | null
@@ -49,6 +56,7 @@ interface RuntimeInsightState {
   todoSnapshot: TodoSnapshot | null
   todoEvents: TodoEventPayload[]
   todoConflict: TodoEventPayload | null
+  todoHistory: Record<string, TodoHistoryEntry>
   budgetChecked: BudgetCheckedPayload | null
   budgetEstimateFailed: BudgetEstimateFailedPayload | null
   ledgerReconciled: LedgerReconciledPayload | null
@@ -89,6 +97,7 @@ const initialState = {
   todoSnapshot: null as TodoSnapshot | null,
   todoEvents: [] as TodoEventPayload[],
   todoConflict: null as TodoEventPayload | null,
+  todoHistory: {} as Record<string, TodoHistoryEntry>,
   budgetChecked: null as BudgetCheckedPayload | null,
   budgetEstimateFailed: null as BudgetEstimateFailedPayload | null,
   ledgerReconciled: null as LedgerReconciledPayload | null,
@@ -180,7 +189,23 @@ export const useRuntimeInsightStore = create<RuntimeInsightState>((set) => ({
     })),
   })),
   setAcceptanceDecision: (acceptanceDecision) => set({ acceptanceDecision }),
-  setTodoSnapshot: (todoSnapshot) => set({ todoSnapshot }),
+  setTodoSnapshot: (todoSnapshot) => set((s) => {
+    const items = todoSnapshot?.items ?? []
+    if (items.length === 0) {
+      return { todoSnapshot, todoConflict: null }
+    }
+    const now = Date.now()
+    const todoHistory = { ...s.todoHistory }
+    for (const item of items) {
+      const prev = todoHistory[item.id]
+      todoHistory[item.id] = {
+        ...item,
+        lastSeenAt: now,
+        firstSeenAt: prev?.firstSeenAt ?? now,
+      }
+    }
+    return { todoSnapshot, todoConflict: null, todoHistory }
+  }),
   addTodoEvent: (event) => set((s) => ({ todoEvents: [...s.todoEvents, event] })),
   setTodoConflict: (todoConflict) => set({ todoConflict }),
   setBudgetChecked: (budgetChecked) => set({

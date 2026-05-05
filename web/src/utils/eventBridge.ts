@@ -32,6 +32,12 @@ type PayloadRecord = Record<string, unknown> | undefined
 let _latestVerificationMsgId: string | undefined
 let _latestDoneToolCallId: string | undefined
 
+/** 重置模块级游标 —— 在截断聊天历史 / 切换会话等场景调用，避免后续事件挂到已被移除的消息上 */
+export function resetEventBridgeCursors() {
+  _latestVerificationMsgId = undefined
+  _latestDoneToolCallId = undefined
+}
+
 function normalizePermissionPayload(raw: unknown): PermissionRequestPayload | null {
   const r = raw as Record<string, unknown> | undefined
   if (!r || typeof r !== 'object') return null

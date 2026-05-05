@@ -59,6 +59,8 @@ interface ChatState {
   // Actions
   addMessage: (msg: ChatMessage) => void
   removeMessage: (id: string) => void
+  /** 从指定消息（含）开始截断 messages 数组并清理生成相关状态 */
+  truncateFromMessage: (messageId: string) => void
   appendChunk: (text: string) => void
   /** 原子操作：创建流式 assistant 消息 + 加入列表 + 设置 streamingMessageId */
   startStreamingMessage: () => string
@@ -153,6 +155,20 @@ export const useChatStore = create<ChatState>((set) => ({
 
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
   removeMessage: (id) => set((s) => ({ messages: s.messages.filter((m) => m.id !== id) })),
+
+  truncateFromMessage: (messageId) =>
+    set((s) => {
+      const idx = s.messages.findIndex((m) => m.id === messageId)
+      if (idx === -1) return s
+      return {
+        messages: s.messages.slice(0, idx),
+        streamingMessageId: '',
+        isGenerating: false,
+        permissionRequests: [],
+        phase: '',
+        stopReason: '',
+      }
+    }),
 
   appendChunk: (text) =>
     set((s) => {
