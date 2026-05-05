@@ -3,9 +3,14 @@ package cli
 import (
 	"context"
 	"errors"
+	"log"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"neo-code/internal/config"
+	"neo-code/internal/feishuadapter"
 )
 
 func TestNewFeishuAdapterCommandForwardsFlags(t *testing.T) {
@@ -75,6 +80,45 @@ func TestMergeFeishuOptionsAppliesDefaultsAndOverrides(t *testing.T) {
 	}
 }
 
+func TestMergeFeishuOptionsAppliesAllCLIOverrides(t *testing.T) {
+	merged := mergeFeishuOptions(config.FeishuConfig{
+		Enabled: false,
+	}, feishuAdapterCommandOptions{
+		Ingress:                "sdk",
+		EventPath:              "/event",
+		CardPath:               "/card",
+		VerifyToken:            "verify",
+		BotUserID:              "ou_bot",
+		BotOpenID:              "ou_open_bot",
+		InsecureSkipSignVerify: true,
+		IdempotencyTTLSec:      120,
+		ReconnectBackoffMinM:   30,
+		ReconnectBackoffMaxM:   60,
+		RebindIntervalSec:      7,
+		GatewayListen:          "unix:///tmp/gateway.sock",
+		GatewayTokenFile:       "/tmp/gateway.token",
+	}, config.GatewayConfig{})
+
+	if merged.Ingress != "sdk" {
+		t.Fatalf("ingress not overridden: %#v", merged)
+	}
+	if merged.EventPath != "/event" || merged.CardPath != "/card" {
+		t.Fatalf("paths not overridden: %#v", merged)
+	}
+	if merged.VerifyToken != "verify" || !merged.InsecureSkipSignVerify {
+		t.Fatalf("security settings not overridden: %#v", merged)
+	}
+	if merged.BotUserID != "ou_bot" || merged.BotOpenID != "ou_open_bot" {
+		t.Fatalf("bot ids not overridden: %#v", merged)
+	}
+	if merged.IdempotencyTTLSec != 120 || merged.ReconnectBackoffMinMs != 30 || merged.ReconnectBackoffMaxMs != 60 || merged.RebindIntervalSec != 7 {
+		t.Fatalf("numeric overrides not applied: %#v", merged)
+	}
+	if merged.GatewayListenAddress != "unix:///tmp/gateway.sock" || merged.GatewayTokenFile != "/tmp/gateway.token" {
+		t.Fatalf("gateway overrides not applied: %#v", merged)
+	}
+}
+
 func TestNewRootCommandContainsFeishuAdapter(t *testing.T) {
 	root := NewRootCommand()
 	found := false
@@ -104,6 +148,7 @@ func TestNewFeishuAdapterCommandPropagatesRunnerError(t *testing.T) {
 		return expected
 	}
 	cmd := newFeishuAdapterCommand()
+	cmd.SetArgs([]string{})
 	if err := cmd.ExecuteContext(context.Background()); !errors.Is(err, expected) {
 		t.Fatalf("error = %v, want %v", err, expected)
 	}
@@ -136,5 +181,197 @@ func TestInjectFeishuSecretsFromEnvLoadsSDKSecret(t *testing.T) {
 	}
 	if options.AppSecret != "app-secret" {
 		t.Fatalf("app secret = %q, want app-secret", options.AppSecret)
+	}
+}
+
+type stubFeishuGatewayClient struct {
+	closed bool
+}
+
+func (s *stubFeishuGatewayClient) Authenticate(context.Context) error { return nil }
+func (s *stubFeishuGatewayClient) BindStream(context.Context, string, string) error {
+	return nil
+}
+func (s *stubFeishuGatewayClient) Run(context.Context, string, string, string) error { return nil }
+func (s *stubFeishuGatewayClient) ResolvePermission(context.Context, string, string) error {
+	return nil
+}
+func (s *stubFeishuGatewayClient) Ping(context.Context) error { return nil }
+func (s *stubFeishuGatewayClient) Notifications() <-chan feishuadapter.GatewayNotification {
+	ch := make(chan feishuadapter.GatewayNotification)
+	close(ch)
+	return ch
+}
+func (s *stubFeishuGatewayClient) Close() error {
+	s.closed = true
+	return nil
+}
+
+type stubFeishuMessenger struct{}
+
+func (stubFeishuMessenger) SendText(context.Context, string, string) error { return nil }
+func (stubFeishuMessenger) SendPermissionCard(context.Context, string, feishuadapter.PermissionCardPayload) error {
+	return nil
+}
+func (stubFeishuMessenger) SendStatusCard(context.Context, string, feishuadapter.StatusCardPayload) (string, error) {
+	return "", nil
+}
+func (stubFeishuMessenger) UpdateCard(context.Context, string, feishuadapter.StatusCardPayload) error {
+	return nil
+}
+
+func writeFeishuAdapterConfig(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(config.FeishuAppSecretEnvVar, "secret")
+	t.Setenv(config.FeishuSigningSecretEnvVar, "sign")
+	loader := config.NewLoader(filepath.Join(home, ".neocode"), config.StaticDefaults())
+	cfg := loader.DefaultConfig()
+	cfg.Feishu = config.FeishuConfig{
+		Enabled:     true,
+		Ingress:     config.FeishuIngressWebhook,
+		AppID:       "app",
+		VerifyToken: "verify",
+		Adapter: config.FeishuAdapterConfig{
+			Listen:   "127.0.0.1:0",
+			EventURI: "/feishu/events",
+			CardURI:  "/feishu/cards",
+		},
+		RequestTimeoutSec:    1,
+		IdempotencyTTLSec:    60,
+		ReconnectBackoffMinM: 10,
+		ReconnectBackoffMaxM: 20,
+		RebindIntervalSec:    1,
+		GatewayClient: config.FeishuGatewayClientConfig{
+			ListenAddress: filepath.Join(home, "gateway.sock"),
+			TokenFile:     filepath.Join(home, "gateway.token"),
+		},
+	}
+	if err := loader.Save(context.Background(), &cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+}
+
+func TestDefaultFeishuAdapterCommandRunnerInitializesAdapter(t *testing.T) {
+	writeFeishuAdapterConfig(t)
+	t.Setenv(config.FeishuAppSecretEnvVar, "secret")
+	t.Setenv(config.FeishuSigningSecretEnvVar, "sign")
+
+	originalGatewayFactory := newGatewayRPCClientForFeishu
+	originalMessengerFactory := newFeishuMessenger
+	t.Cleanup(func() {
+		newGatewayRPCClientForFeishu = originalGatewayFactory
+		newFeishuMessenger = originalMessengerFactory
+	})
+
+	var capturedGatewayConfig feishuadapter.GatewayClientConfig
+	newGatewayRPCClientForFeishu = func(cfg feishuadapter.GatewayClientConfig) (feishuadapter.GatewayClient, error) {
+		capturedGatewayConfig = cfg
+		return &stubFeishuGatewayClient{}, nil
+	}
+	newFeishuMessenger = func(appID string, appSecret string, httpClient feishuadapter.HTTPClient) feishuadapter.Messenger {
+		if appID != "app" || appSecret != "secret" {
+			t.Fatalf("unexpected messenger credentials: %q %q", appID, appSecret)
+		}
+		return stubFeishuMessenger{}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		cancel()
+	}()
+	err := defaultFeishuAdapterCommandRunner(ctx, feishuAdapterCommandOptions{})
+	if err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("runner error = %v, want nil or context canceled", err)
+	}
+	if capturedGatewayConfig.ListenAddress == "" || capturedGatewayConfig.TokenFile == "" {
+		t.Fatalf("gateway config not forwarded: %#v", capturedGatewayConfig)
+	}
+}
+
+func TestDefaultFeishuAdapterCommandRunnerClosesGatewayOnAdapterInitError(t *testing.T) {
+	writeFeishuAdapterConfig(t)
+	t.Setenv(config.FeishuAppSecretEnvVar, "secret")
+	t.Setenv(config.FeishuSigningSecretEnvVar, "sign")
+
+	originalGatewayFactory := newGatewayRPCClientForFeishu
+	originalMessengerFactory := newFeishuMessenger
+	originalAdapterFactory := newFeishuAdapter
+	t.Cleanup(func() {
+		newGatewayRPCClientForFeishu = originalGatewayFactory
+		newFeishuMessenger = originalMessengerFactory
+		newFeishuAdapter = originalAdapterFactory
+	})
+
+	gateway := &stubFeishuGatewayClient{}
+	newGatewayRPCClientForFeishu = func(cfg feishuadapter.GatewayClientConfig) (feishuadapter.GatewayClient, error) {
+		return gateway, nil
+	}
+	newFeishuMessenger = func(string, string, feishuadapter.HTTPClient) feishuadapter.Messenger {
+		return stubFeishuMessenger{}
+	}
+	newFeishuAdapter = func(cfg feishuadapter.Config, gateway feishuadapter.GatewayClient, messenger feishuadapter.Messenger, logger *log.Logger) (*feishuadapter.Adapter, error) {
+		return nil, errors.New("adapter init failed")
+	}
+
+	err := defaultFeishuAdapterCommandRunner(context.Background(), feishuAdapterCommandOptions{})
+	if err == nil || err.Error() != "adapter init failed" {
+		t.Fatalf("runner error = %v, want adapter init failed", err)
+	}
+	if !gateway.closed {
+		t.Fatal("expected gateway client to close on adapter init failure")
+	}
+}
+
+func TestDefaultFeishuAdapterCommandRunnerPropagatesGatewayInitError(t *testing.T) {
+	writeFeishuAdapterConfig(t)
+	t.Setenv(config.FeishuAppSecretEnvVar, "secret")
+	t.Setenv(config.FeishuSigningSecretEnvVar, "sign")
+
+	originalGatewayFactory := newGatewayRPCClientForFeishu
+	t.Cleanup(func() {
+		newGatewayRPCClientForFeishu = originalGatewayFactory
+	})
+	newGatewayRPCClientForFeishu = func(cfg feishuadapter.GatewayClientConfig) (feishuadapter.GatewayClient, error) {
+		return nil, errors.New("dial failed")
+	}
+
+	err := defaultFeishuAdapterCommandRunner(context.Background(), feishuAdapterCommandOptions{})
+	if err == nil || err.Error() != "init gateway client: dial failed" {
+		t.Fatalf("runner error = %v, want wrapped gateway init error", err)
+	}
+}
+
+func TestDefaultFeishuAdapterCommandRunnerPropagatesLoadAndValidateError(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configDir := filepath.Join(home, ".neocode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(":\n"), 0o644); err != nil {
+		t.Fatalf("write invalid config: %v", err)
+	}
+	if err := defaultFeishuAdapterCommandRunner(context.Background(), feishuAdapterCommandOptions{}); err == nil {
+		t.Fatal("expected config load error")
+	}
+
+	t.Setenv(config.FeishuAppSecretEnvVar, "secret")
+	t.Setenv(config.FeishuSigningSecretEnvVar, "sign")
+	home = t.TempDir()
+	t.Setenv("HOME", home)
+	configDir = filepath.Join(home, ".neocode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	invalidFeishu := "selected_provider: openai\ncurrent_model: gpt-4.1\nshell: bash\nfeishu:\n  enabled: true\n  ingress: webhook\n  app_id: app\n  signing_secret: sign\n  adapter:\n    listen: 127.0.0.1:18080\n    event_path: /feishu/events\n    card_path: /feishu/cards\n  request_timeout_sec: 1\n  idempotency_ttl_sec: 60\n  reconnect_backoff_min_ms: 10\n  reconnect_backoff_max_ms: 20\n  rebind_interval_sec: 1\n"
+	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(invalidFeishu), 0o644); err != nil {
+		t.Fatalf("write invalid feishu config: %v", err)
+	}
+	err := defaultFeishuAdapterCommandRunner(context.Background(), feishuAdapterCommandOptions{})
+	if err == nil {
+		t.Fatal("expected validation error from config")
 	}
 }
