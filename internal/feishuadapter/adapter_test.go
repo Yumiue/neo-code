@@ -25,6 +25,8 @@ type fakeGatewayClient struct {
 	runCount      int
 	resolveCount  int
 	pingErr       error
+	runErr        error
+	runErrOnce    bool
 }
 
 func newFakeGatewayClient() *fakeGatewayClient {
@@ -43,8 +45,13 @@ func (f *fakeGatewayClient) Run(_ context.Context, sessionID string, runID strin
 	f.record("run:" + sessionID + ":" + runID + ":" + inputText)
 	f.mu.Lock()
 	f.runCount++
+	runErr := f.runErr
+	if f.runErrOnce {
+		f.runErr = nil
+		f.runErrOnce = false
+	}
 	f.mu.Unlock()
-	return nil
+	return runErr
 }
 func (f *fakeGatewayClient) ResolvePermission(_ context.Context, requestID string, decision string) error {
 	f.record("resolve:" + requestID + ":" + decision)
@@ -167,6 +174,75 @@ func TestMessageEventDedupeOnlyRunsOnce(t *testing.T) {
 	}
 }
 
+func TestMessageEventRetryAfterRunFailure(t *testing.T) {
+	adapter := newTestAdapter(t)
+	gateway := adapterTestGateway(adapter)
+	gateway.mu.Lock()
+	gateway.runErr = assertErr("transient")
+	gateway.runErrOnce = true
+	gateway.mu.Unlock()
+
+	body := messageEventBody("evt-retry", "msg-retry", "chat-retry", "hello")
+	for i := 0; i < 2; i++ {
+		request := signedRequest(t, adapter.cfg.SigningSecret, body)
+		recorder := httptest.NewRecorder()
+		adapter.handleFeishuEvent(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", recorder.Code)
+		}
+	}
+	if adapterTestGateway(adapter).runCount != 2 {
+		t.Fatalf("run count = %d, want 2", adapterTestGateway(adapter).runCount)
+	}
+}
+
+func TestGroupMessageWithoutMentionIgnored(t *testing.T) {
+	adapter := newTestAdapter(t)
+	body := messageEventBodyWithChatType("evt-group", "msg-group", "chat-group", "hello group", "group")
+	request := signedRequest(t, adapter.cfg.SigningSecret, body)
+	recorder := httptest.NewRecorder()
+	adapter.handleFeishuEvent(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recorder.Code)
+	}
+	if adapterTestGateway(adapter).runCount != 0 {
+		t.Fatalf("run count = %d, want 0", adapterTestGateway(adapter).runCount)
+	}
+}
+
+func TestGroupMessageWithMentionAccepted(t *testing.T) {
+	adapter := newTestAdapter(t)
+	content, _ := json.Marshal(map[string]string{"text": "<at user_id=\"ou_xxx\">neo</at> hi"})
+	payload := map[string]any{
+		"header": map[string]any{
+			"event_id":   "evt-group-mention",
+			"event_type": "im.message.receive_v1",
+			"token":      "verify",
+		},
+		"event": map[string]any{
+			"message": map[string]any{
+				"message_id": "msg-group-mention",
+				"chat_id":    "chat-group-mention",
+				"chat_type":  "group",
+				"content":    string(content),
+				"mentions": []map[string]any{
+					{"name": "neo", "key": "@_user_1"},
+				},
+			},
+		},
+	}
+	raw, _ := json.Marshal(payload)
+	request := signedRequest(t, adapter.cfg.SigningSecret, string(raw))
+	recorder := httptest.NewRecorder()
+	adapter.handleFeishuEvent(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recorder.Code)
+	}
+	if adapterTestGateway(adapter).runCount != 1 {
+		t.Fatalf("run count = %d, want 1", adapterTestGateway(adapter).runCount)
+	}
+}
+
 func TestCallOrderAuthenticateBindRun(t *testing.T) {
 	adapter := newTestAdapter(t)
 	body := messageEventBody("evt-2", "msg-2", "chat-2", "run it")
@@ -217,6 +293,35 @@ func TestGatewayEventsMappedToMessagesAndPermissionCard(t *testing.T) {
 	}
 	if !foundCard {
 		t.Fatalf("expected permission card message, got %#v", msgs)
+	}
+}
+
+func TestRunProgressIsRateLimited(t *testing.T) {
+	adapter := newTestAdapter(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go adapter.consumeGatewayEvents(ctx)
+
+	sessionID := BuildSessionID("chat-throttle")
+	runID := BuildRunID("msg-throttle")
+	adapter.trackSession(sessionID, runID, "chat-throttle")
+
+	pushGatewayEvent(t, adapterTestGateway(adapter), sessionID, runID, "run_progress", map[string]any{
+		"runtime_event_type": "agent_chunk",
+	})
+	pushGatewayEvent(t, adapterTestGateway(adapter), sessionID, runID, "run_progress", map[string]any{
+		"runtime_event_type": "agent_chunk",
+	})
+	time.Sleep(30 * time.Millisecond)
+
+	textCount := 0
+	for _, message := range adapterTestMessenger(adapter).snapshot() {
+		if message.kind == "text" && strings.Contains(message.text, "运行进度") {
+			textCount++
+		}
+	}
+	if textCount != 1 {
+		t.Fatalf("progress message count = %d, want 1", textCount)
 	}
 }
 
@@ -291,6 +396,10 @@ func adapterTestMessenger(adapter *Adapter) *fakeMessenger {
 }
 
 func messageEventBody(eventID string, messageID string, chatID string, text string) string {
+	return messageEventBodyWithChatType(eventID, messageID, chatID, text, "")
+}
+
+func messageEventBodyWithChatType(eventID string, messageID string, chatID string, text string, chatType string) string {
 	content, _ := json.Marshal(map[string]string{"text": text})
 	payload := map[string]any{
 		"header": map[string]any{
@@ -302,6 +411,7 @@ func messageEventBody(eventID string, messageID string, chatID string, text stri
 			"message": map[string]any{
 				"message_id": messageID,
 				"chat_id":    chatID,
+				"chat_type":  chatType,
 				"content":    string(content),
 			},
 		},

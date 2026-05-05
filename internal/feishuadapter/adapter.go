@@ -16,6 +16,7 @@ import (
 )
 
 const defaultSignatureMaxSkew = 5 * time.Minute
+const defaultProgressNotifyInterval = 5 * time.Second
 
 type sessionBinding struct {
 	ChatID string
@@ -34,6 +35,7 @@ type Adapter struct {
 
 	mu             sync.RWMutex
 	activeSessions map[string]sessionBinding
+	lastProgressAt map[string]time.Time
 }
 
 // New 创建飞书适配器实例。
@@ -58,6 +60,7 @@ func New(cfg Config, gateway GatewayClient, messenger Messenger, logger *log.Log
 		idem:           newIdempotencyStore(cfg.IdempotencyTTL),
 		nowFn:          func() time.Time { return time.Now().UTC() },
 		activeSessions: make(map[string]sessionBinding),
+		lastProgressAt: make(map[string]time.Time),
 	}, nil
 }
 
@@ -141,11 +144,23 @@ func (a *Adapter) handleFeishuEvent(writer http.ResponseWriter, request *http.Re
 		return
 	}
 
+	if !shouldHandleChatMessage(event) {
+		writeJSON(writer, http.StatusOK, map[string]string{"message": "ignored_not_mentioned"})
+		return
+	}
 	dedupeKey := "msg:" + strings.TrimSpace(envelope.Header.EventID) + ":" + strings.TrimSpace(event.Message.MessageID)
-	if a.idem.Seen(dedupeKey, a.nowFn()) {
+	if !a.idem.TryStart(dedupeKey, a.nowFn()) {
 		writeJSON(writer, http.StatusOK, map[string]string{"message": "duplicated"})
 		return
 	}
+	succeeded := false
+	defer func() {
+		if succeeded {
+			a.idem.MarkDone(dedupeKey, a.nowFn())
+			return
+		}
+		a.idem.MarkFailed(dedupeKey)
+	}()
 
 	text, err := decodeMessageText(event.Message.Content)
 	if err != nil {
@@ -161,6 +176,7 @@ func (a *Adapter) handleFeishuEvent(writer http.ResponseWriter, request *http.Re
 		writeJSON(writer, http.StatusOK, map[string]string{"message": "accepted_with_error"})
 		return
 	}
+	succeeded = true
 	writeJSON(writer, http.StatusOK, map[string]string{"message": "accepted"})
 }
 
@@ -186,10 +202,18 @@ func (a *Adapter) handleCardCallback(writer http.ResponseWriter, request *http.R
 		return
 	}
 	dedupeKey := "card:" + requestID + ":" + decision
-	if a.idem.Seen(dedupeKey, a.nowFn()) {
+	if !a.idem.TryStart(dedupeKey, a.nowFn()) {
 		writeJSON(writer, http.StatusOK, map[string]any{"toast": map[string]string{"type": "info", "content": "已处理"}})
 		return
 	}
+	succeeded := false
+	defer func() {
+		if succeeded {
+			a.idem.MarkDone(dedupeKey, a.nowFn())
+			return
+		}
+		a.idem.MarkFailed(dedupeKey)
+	}()
 	ctx, cancel := context.WithTimeout(request.Context(), a.cfg.RequestTimeout)
 	defer cancel()
 	if err := a.gateway.ResolvePermission(ctx, requestID, decision); err != nil {
@@ -197,6 +221,7 @@ func (a *Adapter) handleCardCallback(writer http.ResponseWriter, request *http.R
 		writeJSON(writer, http.StatusOK, map[string]any{"toast": map[string]string{"type": "error", "content": "审批提交失败"}})
 		return
 	}
+	succeeded = true
 	writeJSON(writer, http.StatusOK, map[string]any{"toast": map[string]string{"type": "success", "content": "审批已提交"}})
 }
 
@@ -274,7 +299,6 @@ func (a *Adapter) handleGatewayEvent(ctx context.Context, raw json.RawMessage) {
 		text := "运行中"
 		if envelope != nil {
 			if runtimeType := readString(envelope, "runtime_event_type"); runtimeType != "" {
-				text = fmt.Sprintf("运行进度：%s", runtimeType)
 				if strings.EqualFold(runtimeType, "permission_requested") {
 					requestID, reason := extractPermissionRequest(envelope)
 					if requestID != "" {
@@ -285,7 +309,15 @@ func (a *Adapter) handleGatewayEvent(ctx context.Context, raw json.RawMessage) {
 						return
 					}
 				}
+				if !a.shouldEmitProgress(sessionID, runID, runtimeType) {
+					return
+				}
+				text = fmt.Sprintf("运行进度：%s", runtimeType)
+			} else if !a.shouldEmitProgress(sessionID, runID, "progress") {
+				return
 			}
+		} else if !a.shouldEmitProgress(sessionID, runID, "progress") {
+			return
 		}
 		_ = a.messenger.SendText(ctx, chatID, text)
 	case "run_done":
@@ -371,7 +403,14 @@ func (a *Adapter) readAndVerifyRequest(writer http.ResponseWriter, request *http
 		http.Error(writer, "read request failed", http.StatusBadRequest)
 		return nil, false
 	}
-	if !verifyFeishuSignature(a.cfg.SigningSecret, defaultSignatureMaxSkew, request.Header, body, a.nowFn()) {
+	if !verifyFeishuSignature(
+		a.cfg.SigningSecret,
+		defaultSignatureMaxSkew,
+		request.Header,
+		body,
+		a.nowFn(),
+		a.cfg.InsecureSkipSignVerify,
+	) {
 		http.Error(writer, "invalid signature", http.StatusUnauthorized)
 		return nil, false
 	}
@@ -381,9 +420,6 @@ func (a *Adapter) readAndVerifyRequest(writer http.ResponseWriter, request *http
 // verifyCallbackToken 校验飞书回调 token，支持 body/header 双位置兼容。
 func (a *Adapter) verifyCallbackToken(rawToken string, headerToken string) bool {
 	expected := strings.TrimSpace(a.cfg.VerifyToken)
-	if expected == "" {
-		return true
-	}
 	candidates := []string{strings.TrimSpace(rawToken), strings.TrimSpace(headerToken)}
 	for _, candidate := range candidates {
 		if candidate == expected {
@@ -391,6 +427,36 @@ func (a *Adapter) verifyCallbackToken(rawToken string, headerToken string) bool 
 		}
 	}
 	return false
+}
+
+// shouldEmitProgress 控制普通运行进度消息推送频率，避免飞书侧刷屏。
+func (a *Adapter) shouldEmitProgress(sessionID string, runID string, runtimeEventType string) bool {
+	key := sessionID + "|" + runID + "|" + strings.TrimSpace(strings.ToLower(runtimeEventType))
+	now := a.nowFn()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	last, ok := a.lastProgressAt[key]
+	if ok && now.Sub(last) < defaultProgressNotifyInterval {
+		return false
+	}
+	a.lastProgressAt[key] = now
+	return true
+}
+
+// shouldHandleChatMessage 约束群聊场景仅在 @ 机器人时触发 run；私聊保持默认受理。
+func shouldHandleChatMessage(event inboundMessageEvent) bool {
+	chatType := strings.TrimSpace(strings.ToLower(event.Message.ChatType))
+	if chatType == "" {
+		chatType = strings.TrimSpace(strings.ToLower(event.ChatType))
+	}
+	if chatType != "group" {
+		return true
+	}
+	if len(event.Message.Mentions) > 0 {
+		return true
+	}
+	normalized := strings.ToLower(strings.TrimSpace(event.Message.Content))
+	return strings.Contains(normalized, "<at ")
 }
 
 // decodeMessageText 从飞书消息 content JSON 中提取文本内容。
