@@ -292,7 +292,7 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
       const payload = eventPayload as TodoEventPayload | undefined
       if (payload) {
         insightStore.addTodoEvent(payload)
-        if (payload.items || payload.summary) {
+        if (payload.items) {
           insightStore.setTodoSnapshot({ items: payload.items, summary: payload.summary })
         }
       }
@@ -303,7 +303,9 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
       const payload = eventPayload as TodoEventPayload | undefined
       if (payload) {
         insightStore.addTodoEvent(payload)
-        insightStore.setTodoSnapshot({ items: payload.items, summary: payload.summary })
+        if (payload.items) {
+          insightStore.applyTodoSnapshot({ items: payload.items, summary: payload.summary })
+        }
       }
       break
     }
@@ -314,7 +316,12 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
     case EventType.TodoConflict: {
       const payload = eventPayload as TodoEventPayload | undefined
       if (payload) insightStore.setTodoConflict(payload)
-      uiStore.showToast(`Todo 冲突: ${strField(eventPayload, 'reason')}`, 'error')
+      const reason = strField(eventPayload, 'reason')
+      // revision_conflict 是可恢复冲突，仅在面板显示，不弹全局 toast;
+      // 其余冲突降级为 info 避免打断聊天体验。
+      if (reason && reason !== 'revision_conflict') {
+        uiStore.showToast(`Todo 冲突: ${reason}`, 'info')
+      }
       break
     }
 
