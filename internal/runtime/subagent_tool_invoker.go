@@ -77,13 +77,21 @@ func (i runtimeSubAgentInvoker) Run(ctx context.Context, input tools.SubAgentRun
 		input.ParentCapabilityToken,
 		input.AllowedTools,
 		input.AllowedPaths,
+		input.ToolUseMode,
 		workdir,
 	)
 	if err != nil {
 		return tools.SubAgentRunResult{}, err
 	}
 
-	result, err := i.service.RunSubAgentTask(ctx, SubAgentTaskInput{
+	runCtx := ctx
+	cancel := func() {}
+	if input.Timeout > 0 {
+		runCtx, cancel = context.WithTimeout(ctx, input.Timeout)
+	}
+	defer cancel()
+
+	result, err := i.service.RunSubAgentTask(runCtx, SubAgentTaskInput{
 		RunID:     runID,
 		SessionID: sessionID,
 		AgentID:   callerID,
@@ -118,14 +126,20 @@ func resolveInlineSubAgentCapability(
 	parent *security.CapabilityToken,
 	requestedTools []string,
 	requestedPaths []string,
+	toolUseMode subagent.ToolUseMode,
 	workdir string,
 ) (subagent.Capability, error) {
 	requestedTools = normalizeAllowlistToList(requestedTools)
 	requestedPaths = normalizeRequestedPathsWithWorkdir(requestedPaths, workdir)
+	normalizedToolUseMode := subagent.ToolUseMode(strings.ToLower(strings.TrimSpace(string(toolUseMode))))
+	if normalizedToolUseMode != "" && !normalizedToolUseMode.Valid() {
+		return subagent.Capability{}, fmt.Errorf("runtime: inline subagent tool use mode %q is invalid", toolUseMode)
+	}
 	if parent == nil {
 		return subagent.Capability{
 			AllowedTools: requestedTools,
 			AllowedPaths: requestedPaths,
+			ToolUseMode:  normalizedToolUseMode,
 		}, nil
 	}
 
@@ -143,6 +157,7 @@ func resolveInlineSubAgentCapability(
 	return subagent.Capability{
 		AllowedTools:    toolsAllowed,
 		AllowedPaths:    pathsAllowed,
+		ToolUseMode:     normalizedToolUseMode,
 		CapabilityToken: &parentToken,
 	}, nil
 }
