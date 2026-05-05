@@ -21,6 +21,7 @@ var newFeishuMessenger = feishuadapter.NewFeishuMessenger
 var newFeishuAdapter = feishuadapter.New
 
 type feishuAdapterCommandOptions struct {
+	Ingress                string
 	Listen                 string
 	EventPath              string
 	CardPath               string
@@ -56,6 +57,7 @@ func newFeishuAdapterCommand() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&options.Listen, "listen", "", "feishu adapter listen address (e.g. 127.0.0.1:18080)")
+	cmd.Flags().StringVar(&options.Ingress, "ingress", "", "feishu ingress mode: webhook|sdk")
 	cmd.Flags().StringVar(&options.EventPath, "event-path", "", "feishu event callback path")
 	cmd.Flags().StringVar(&options.CardPath, "card-path", "", "feishu card callback path")
 	cmd.Flags().StringVar(&options.AppID, "app-id", "", "feishu app id")
@@ -106,6 +108,7 @@ func defaultFeishuAdapterCommandRunner(ctx context.Context, options feishuAdapte
 
 type mergedFeishuOptions struct {
 	Enabled                bool
+	Ingress                string
 	Listen                 string
 	EventPath              string
 	CardPath               string
@@ -132,6 +135,7 @@ func (o mergedFeishuOptions) Validate() error {
 // ToAdapterConfig 将 CLI/配置合并结果转换为适配器运行配置。
 func (o mergedFeishuOptions) ToAdapterConfig() feishuadapter.Config {
 	return feishuadapter.Config{
+		IngressMode:            o.Ingress,
 		ListenAddress:          o.Listen,
 		EventPath:              o.EventPath,
 		CardPath:               o.CardPath,
@@ -151,6 +155,7 @@ func (o mergedFeishuOptions) ToAdapterConfig() feishuadapter.Config {
 // mergeFeishuOptions 合并 config.yaml 与命令行参数，命令行优先。
 func mergeFeishuOptions(feishuCfg config.FeishuConfig, cliOptions feishuAdapterCommandOptions, gatewayCfg config.GatewayConfig) mergedFeishuOptions {
 	feishuCfg.ApplyDefaults(config.FeishuConfig{
+		Ingress: config.FeishuIngressWebhook,
 		Adapter: config.FeishuAdapterConfig{
 			Listen:   config.DefaultFeishuAdapterListen,
 			EventURI: config.DefaultFeishuAdapterEventPath,
@@ -164,6 +169,7 @@ func mergeFeishuOptions(feishuCfg config.FeishuConfig, cliOptions feishuAdapterC
 	})
 	merged := mergedFeishuOptions{
 		Enabled:                feishuCfg.Enabled,
+		Ingress:                strings.TrimSpace(strings.ToLower(feishuCfg.Ingress)),
 		Listen:                 strings.TrimSpace(feishuCfg.Adapter.Listen),
 		EventPath:              strings.TrimSpace(feishuCfg.Adapter.EventURI),
 		CardPath:               strings.TrimSpace(feishuCfg.Adapter.CardURI),
@@ -191,6 +197,9 @@ func mergeFeishuOptions(feishuCfg config.FeishuConfig, cliOptions feishuAdapterC
 
 	if value := strings.TrimSpace(cliOptions.Listen); value != "" {
 		merged.Listen = value
+	}
+	if value := strings.TrimSpace(strings.ToLower(cliOptions.Ingress)); value != "" {
+		merged.Ingress = value
 	}
 	if value := strings.TrimSpace(cliOptions.EventPath); value != "" {
 		merged.EventPath = value

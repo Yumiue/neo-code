@@ -19,6 +19,7 @@ func TestFeishuConfigValidateEnabledRequiresFields(t *testing.T) {
 func TestFeishuConfigValidateRequiresVerifyAndSigningSecretByDefault(t *testing.T) {
 	cfg := FeishuConfig{
 		Enabled:   true,
+		Ingress:   FeishuIngressWebhook,
 		AppID:     "app",
 		AppSecret: "secret",
 		Adapter: FeishuAdapterConfig{
@@ -40,6 +41,7 @@ func TestFeishuConfigValidateRequiresVerifyAndSigningSecretByDefault(t *testing.
 func TestFeishuConfigValidateAllowsInsecureSkipSignatureVerify(t *testing.T) {
 	cfg := FeishuConfig{
 		Enabled:                true,
+		Ingress:                FeishuIngressWebhook,
 		AppID:                  "app",
 		AppSecret:              "secret",
 		VerifyToken:            "verify",
@@ -57,6 +59,23 @@ func TestFeishuConfigValidateAllowsInsecureSkipSignatureVerify(t *testing.T) {
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("expected config to pass with insecure skip, got %v", err)
+	}
+}
+
+func TestFeishuConfigValidateSDKModeDoesNotRequireWebhookFields(t *testing.T) {
+	cfg := FeishuConfig{
+		Enabled:              true,
+		Ingress:              FeishuIngressSDK,
+		AppID:                "app",
+		AppSecret:            "secret",
+		RequestTimeoutSec:    8,
+		IdempotencyTTLSec:    600,
+		ReconnectBackoffMinM: 500,
+		ReconnectBackoffMaxM: 10000,
+		RebindIntervalSec:    15,
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected sdk ingress config to pass without webhook fields, got %v", err)
 	}
 }
 
@@ -84,6 +103,9 @@ func TestFeishuConfigApplyDefaults(t *testing.T) {
 
 func TestDefaultFeishuConfigProvidesRuntimeDefaults(t *testing.T) {
 	defaults := defaultFeishuConfig()
+	if defaults.Ingress != FeishuIngressWebhook {
+		t.Fatalf("default ingress = %q, want %q", defaults.Ingress, FeishuIngressWebhook)
+	}
 	if defaults.Adapter.Listen != DefaultFeishuAdapterListen {
 		t.Fatalf("default adapter listen = %q, want %q", defaults.Adapter.Listen, DefaultFeishuAdapterListen)
 	}

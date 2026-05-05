@@ -20,6 +20,7 @@ func TestNewFeishuAdapterCommandForwardsFlags(t *testing.T) {
 
 	cmd := newFeishuAdapterCommand()
 	cmd.SetArgs([]string{
+		"--ingress", "sdk",
 		"--listen", "127.0.0.1:19090",
 		"--event-path", "/event",
 		"--card-path", "/card",
@@ -34,6 +35,9 @@ func TestNewFeishuAdapterCommandForwardsFlags(t *testing.T) {
 	if captured.Listen != "127.0.0.1:19090" || captured.EventPath != "/event" || captured.CardPath != "/card" {
 		t.Fatalf("unexpected forwarded options: %#v", captured)
 	}
+	if captured.Ingress != "sdk" {
+		t.Fatalf("ingress = %q, want sdk", captured.Ingress)
+	}
 	if captured.AppID != "app" || captured.AppSecret != "secret" || captured.GatewayListen != "tcp://gateway" {
 		t.Fatalf("unexpected credential/gateway options: %#v", captured)
 	}
@@ -45,6 +49,7 @@ func TestNewFeishuAdapterCommandForwardsFlags(t *testing.T) {
 func TestMergeFeishuOptionsAppliesDefaultsAndOverrides(t *testing.T) {
 	merged := mergeFeishuOptions(config.FeishuConfig{}, feishuAdapterCommandOptions{
 		Listen:            "127.0.0.1:20000",
+		Ingress:           "sdk",
 		AppID:             "app-x",
 		AppSecret:         "secret-x",
 		RequestTimeoutSec: 20,
@@ -52,6 +57,9 @@ func TestMergeFeishuOptionsAppliesDefaultsAndOverrides(t *testing.T) {
 
 	if merged.Listen != "127.0.0.1:20000" {
 		t.Fatalf("listen = %q, want override", merged.Listen)
+	}
+	if merged.Ingress != "sdk" {
+		t.Fatalf("ingress = %q, want sdk", merged.Ingress)
 	}
 	if merged.AppID != "app-x" || merged.AppSecret != "secret-x" {
 		t.Fatalf("app credentials not applied: %#v", merged)

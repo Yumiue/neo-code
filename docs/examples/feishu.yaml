@@ -1,5 +1,6 @@
 feishu:
   enabled: true
+  ingress: "webhook" # webhook | sdk
   app_id: "cli_xxx"
   app_secret: "cli_secret_xxx"
   verify_token: "verify_token_xxx"
@@ -17,3 +18,18 @@ feishu:
   gateway:
     listen: "127.0.0.1:8080"
     token_file: "~/.neocode/auth.json"
+
+# SDK 本地模式最小示例（无需公网回调）：
+# feishu:
+#   enabled: true
+#   ingress: "sdk"
+#   app_id: "cli_xxx"
+#   app_secret: "cli_secret_xxx"
+#   request_timeout_sec: 8
+#   idempotency_ttl_sec: 600
+#   reconnect_backoff_min_ms: 500
+#   reconnect_backoff_max_ms: 10000
+#   rebind_interval_sec: 15
+#   gateway:
+#     listen: "127.0.0.1:8080"
+#     token_file: "~/.neocode/auth.json"

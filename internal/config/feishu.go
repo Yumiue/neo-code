@@ -6,6 +6,10 @@ import (
 )
 
 const (
+	// FeishuIngressWebhook 表示飞书回调 HTTP 入站模式。
+	FeishuIngressWebhook = "webhook"
+	// FeishuIngressSDK 表示飞书 SDK 长连接入站模式。
+	FeishuIngressSDK = "sdk"
 	// DefaultFeishuAdapterListen 定义飞书适配器默认监听地址。
 	DefaultFeishuAdapterListen = "127.0.0.1:18080"
 	// DefaultFeishuAdapterEventPath 定义飞书事件回调默认路径。
@@ -27,6 +31,7 @@ const (
 // FeishuConfig 表示飞书适配器配置。
 type FeishuConfig struct {
 	Enabled                bool                      `yaml:"enabled,omitempty"`
+	Ingress                string                    `yaml:"ingress,omitempty"`
 	AppID                  string                    `yaml:"app_id,omitempty"`
 	AppSecret              string                    `yaml:"app_secret,omitempty"`
 	VerifyToken            string                    `yaml:"verify_token,omitempty"`
@@ -57,6 +62,7 @@ type FeishuGatewayClientConfig struct {
 // defaultFeishuConfig 返回飞书配置默认值。
 func defaultFeishuConfig() FeishuConfig {
 	return FeishuConfig{
+		Ingress: FeishuIngressWebhook,
 		Adapter: FeishuAdapterConfig{
 			Listen:   DefaultFeishuAdapterListen,
 			EventURI: DefaultFeishuAdapterEventPath,
@@ -74,6 +80,9 @@ func defaultFeishuConfig() FeishuConfig {
 func (c *FeishuConfig) ApplyDefaults(defaults FeishuConfig) {
 	if c == nil {
 		return
+	}
+	if strings.TrimSpace(c.Ingress) == "" {
+		c.Ingress = defaults.Ingress
 	}
 	if strings.TrimSpace(c.Adapter.Listen) == "" {
 		c.Adapter.Listen = defaults.Adapter.Listen
@@ -111,26 +120,35 @@ func (c FeishuConfig) Validate() error {
 	if !c.Enabled {
 		return nil
 	}
+	ingress := strings.TrimSpace(strings.ToLower(c.Ingress))
+	if ingress == "" {
+		ingress = FeishuIngressWebhook
+	}
+	if ingress != FeishuIngressWebhook && ingress != FeishuIngressSDK {
+		return fmt.Errorf("ingress must be one of %q or %q", FeishuIngressWebhook, FeishuIngressSDK)
+	}
 	if strings.TrimSpace(c.AppID) == "" {
 		return fmt.Errorf("app_id is required when feishu.enabled=true")
 	}
 	if strings.TrimSpace(c.AppSecret) == "" {
 		return fmt.Errorf("app_secret is required when feishu.enabled=true")
 	}
-	if strings.TrimSpace(c.VerifyToken) == "" {
-		return fmt.Errorf("verify_token is required when feishu.enabled=true")
-	}
-	if !c.InsecureSkipSignVerify && strings.TrimSpace(c.SigningSecret) == "" {
-		return fmt.Errorf("signing_secret is required when feishu.enabled=true unless insecure_skip_signature_verify=true")
-	}
-	if strings.TrimSpace(c.Adapter.Listen) == "" {
-		return fmt.Errorf("adapter.listen is required when feishu.enabled=true")
-	}
-	if strings.TrimSpace(c.Adapter.EventURI) == "" {
-		return fmt.Errorf("adapter.event_path is required when feishu.enabled=true")
-	}
-	if strings.TrimSpace(c.Adapter.CardURI) == "" {
-		return fmt.Errorf("adapter.card_path is required when feishu.enabled=true")
+	if ingress == FeishuIngressWebhook {
+		if strings.TrimSpace(c.VerifyToken) == "" {
+			return fmt.Errorf("verify_token is required when feishu.enabled=true and ingress=webhook")
+		}
+		if !c.InsecureSkipSignVerify && strings.TrimSpace(c.SigningSecret) == "" {
+			return fmt.Errorf("signing_secret is required when feishu.enabled=true and ingress=webhook unless insecure_skip_signature_verify=true")
+		}
+		if strings.TrimSpace(c.Adapter.Listen) == "" {
+			return fmt.Errorf("adapter.listen is required when feishu.enabled=true and ingress=webhook")
+		}
+		if strings.TrimSpace(c.Adapter.EventURI) == "" {
+			return fmt.Errorf("adapter.event_path is required when feishu.enabled=true and ingress=webhook")
+		}
+		if strings.TrimSpace(c.Adapter.CardURI) == "" {
+			return fmt.Errorf("adapter.card_path is required when feishu.enabled=true and ingress=webhook")
+		}
 	}
 	if c.RequestTimeoutSec <= 0 {
 		return fmt.Errorf("request_timeout_sec must be greater than 0")
