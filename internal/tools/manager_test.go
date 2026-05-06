@@ -126,7 +126,11 @@ func TestDefaultManagerListAvailableSpecsReadOnlyFiltersWriteTools(t *testing.T)
 	if err != nil {
 		t.Fatalf("list specs: %v", err)
 	}
-	if len(specs) != 1 || specs[0].Name != ToolNameFilesystemReadFile {
+	gotNames := make(map[string]bool, len(specs))
+	for _, spec := range specs {
+		gotNames[spec.Name] = true
+	}
+	if len(specs) != 2 || !gotNames[ToolNameFilesystemReadFile] || !gotNames[ToolNameTodoWrite] {
 		t.Fatalf("unexpected read-only specs: %+v", specs)
 	}
 }
