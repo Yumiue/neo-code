@@ -320,7 +320,7 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
     }
 
     case EventType.Error: {
-      const errorMsg = (eventPayload as string) ?? '未知错误'
+      const errorMsg = (eventPayload as string) ?? 'Unknown error'
       uiStore.showToast(errorMsg, 'error')
       useChatStore.getState().resetGeneratingState()
       break
@@ -339,7 +339,7 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
 
     case EventType.RunCanceled: {
       useChatStore.getState().resetGeneratingState()
-      uiStore.showToast('运行已取消', 'info')
+      uiStore.showToast('Run cancelled', 'info')
       break
     }
 
@@ -347,45 +347,45 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
       break
 
     case EventType.CompactStart: {
-      uiStore.showToast('正在压缩上下文...', 'info')
+      uiStore.showToast('Compacting context...', 'info')
       break
     }
 
     case EventType.CompactApplied: {
-      uiStore.showToast('上下文压缩完成', 'success')
+      uiStore.showToast('Context compacted', 'success')
       break
     }
 
     case EventType.CompactError: {
-      uiStore.showToast((eventPayload as string) ?? '压缩失败', 'error')
+      uiStore.showToast((eventPayload as string) ?? 'Compaction failed', 'error')
       break
     }
 
     case EventType.SkillActivated: {
-      uiStore.showToast(`技能已激活: ${strField(eventPayload, 'skill_id')}`, 'success')
+      uiStore.showToast(`Skill activated: ${strField(eventPayload, 'skill_id')}`, 'success')
       break
     }
 
     case EventType.SkillDeactivated: {
-      uiStore.showToast(`技能已停用: ${strField(eventPayload, 'skill_id')}`, 'info')
+      uiStore.showToast(`Skill deactivated: ${strField(eventPayload, 'skill_id')}`, 'info')
       break
     }
 
     case EventType.SkillMissing: {
-      uiStore.showToast(`技能不可用: ${strField(eventPayload, 'skill_id')}`, 'error')
+      uiStore.showToast(`Skill unavailable: ${strField(eventPayload, 'skill_id')}`, 'error')
       break
     }
 
     case EventType.AssetSaved: {
       const assetPath = strField(eventPayload, 'path')
       if (assetPath) {
-        uiStore.showToast(`文件已保存: ${assetPath}`, 'success')
+        uiStore.showToast(`File saved: ${assetPath}`, 'success')
       }
       break
     }
 
     case EventType.AssetSaveFailed: {
-      uiStore.showToast(`文件保存失败: ${strField(eventPayload, 'path')}`, 'error')
+      uiStore.showToast(`Failed to save file: ${strField(eventPayload, 'path')}`, 'error')
       break
     }
 
@@ -422,7 +422,7 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
       // revision_conflict 是可恢复冲突，仅在面板显示，不弹全局 toast;
       // 其余冲突降级为 info 避免打断聊天体验。
       if (reason && reason !== 'revision_conflict') {
-        uiStore.showToast(`Todo 冲突: ${reason}`, 'info')
+        uiStore.showToast(`Todo conflict: ${reason}`, 'info')
       }
       break
     }
@@ -447,7 +447,7 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
         }
       }
       chatStore.setPhase('verification')
-      uiStore.showToast('验证开始', 'info')
+      uiStore.showToast('Verification started', 'info')
       break
     }
 
@@ -484,7 +484,7 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
         insightStore.failVerification(payload)
         syncLatestVerificationToChat()
       }
-      uiStore.showToast(strField(eventPayload, 'error_class') || '验证失败', 'error')
+      uiStore.showToast(strField(eventPayload, 'error_class') || 'Verification failed', 'error')
       break
     }
 
@@ -520,21 +520,21 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
     case EventType.CheckpointWarning: {
       const payload = eventPayload as CheckpointWarningPayload | undefined
       if (payload) insightStore.setCheckpointWarning(payload)
-      uiStore.showToast(`Checkpoint 告警: ${strField(eventPayload, 'phase')}`, 'info')
+      uiStore.showToast(`Checkpoint warning: ${strField(eventPayload, 'phase')}`, 'info')
       break
     }
 
     case EventType.CheckpointRestored: {
       const payload = eventPayload as CheckpointRestoredPayload | undefined
       if (payload) insightStore.addCheckpointEvent(payload)
-      uiStore.showToast('Checkpoint 已恢复', 'success')
+      uiStore.showToast('Checkpoint restored', 'success')
       break
     }
 
     case EventType.CheckpointUndoRestore: {
       const payload = eventPayload as CheckpointUndoRestorePayload | undefined
       if (payload) insightStore.addCheckpointEvent(payload)
-      uiStore.showToast('Checkpoint 恢复已撤销', 'success')
+      uiStore.showToast('Checkpoint restore undone', 'success')
       break
     }
 

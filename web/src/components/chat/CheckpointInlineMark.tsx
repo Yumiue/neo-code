@@ -36,7 +36,7 @@ export default function CheckpointInlineMark({ checkpointId, status = 'available
   async function handleRestore() {
     if (!gatewayAPI || !sessionId || localStatus !== 'available') return
     const ok = window.confirm(
-      `确认撤回到 checkpoint ${checkpointId.slice(0, 8)}?\n这会回滚此后所有文件改动。`,
+      `Restore to checkpoint ${checkpointId.slice(0, 8)}?\nThis will roll back all later file changes.`,
     )
     if (!ok) return
     setLocalStatus('restoring')

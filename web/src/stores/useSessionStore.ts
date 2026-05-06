@@ -207,7 +207,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
     // 生成中拒绝切换会话
     if (useChatStore.getState().isGenerating) {
-      useUIStore.getState().showToast('生成中无法切换会话，请先停止当前对话', 'info')
+      useUIStore.getState().showToast('Cannot switch session while generating; stop the current run first.', 'info')
       return
     }
 
@@ -270,7 +270,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   createSession: () => {
     if (useChatStore.getState().isGenerating) {
-      useUIStore.getState().showToast('生成中无法新建会话，请先停止当前对话', 'info')
+      useUIStore.getState().showToast('Cannot start a new session while generating; stop the current run first.', 'info')
       return
     }
     useChatStore.getState().clearMessages()
@@ -288,14 +288,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         set({ _initialBindDone: true })
       } catch (err) {
         console.error('initializeActiveSession bindStream failed:', err)
-        useUIStore.getState().showToast('事件流绑定失败，可能无法接收实时消息', 'error')
+        useUIStore.getState().showToast('Failed to bind event stream; real-time messages may not arrive.', 'error')
       }
     }
   },
 
   prepareNewChat: () => {
     if (useChatStore.getState().isGenerating) {
-      useUIStore.getState().showToast('生成中无法新建会话，请先停止当前对话', 'info')
+      useUIStore.getState().showToast('Cannot start a new session while generating; stop the current run first.', 'info')
       return
     }
     useChatStore.getState().clearMessages()
@@ -348,7 +348,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             useChatStore.getState().setAgentMode(restoredMode)
           } catch (err) {
             console.error('Auto bindStream or loadSession failed:', err)
-            useUIStore.getState().showToast('会话加载失败', 'error')
+            useUIStore.getState().showToast('Failed to load session', 'error')
           }
         }
       } catch (err) {

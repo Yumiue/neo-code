@@ -77,7 +77,7 @@ function UserMessage({ message }: { message: ChatMessage }) {
     if (!checkpointId || !gatewayAPI) return
     const sessionId = useSessionStore.getState().currentSessionId
     if (!sessionId) {
-      useUIStore.getState().showToast('未绑定会话，无法回退', 'error')
+      useUIStore.getState().showToast('No session bound; cannot revert', 'error')
       return
     }
     setReverting(true)
@@ -88,8 +88,8 @@ function UserMessage({ message }: { message: ChatMessage }) {
       truncateFromMessage(message.id)
       // 截断后本组件会被卸载，setReverting(false) 不会落到已卸载实例
     } catch (err) {
-      const msg = err instanceof Error ? err.message : '回退失败'
-      useUIStore.getState().showToast('回退失败: ' + msg, 'error')
+      const msg = err instanceof Error ? err.message : 'Revert failed'
+      useUIStore.getState().showToast('Revert failed: ' + msg, 'error')
       setReverting(false)
     }
   }
@@ -120,10 +120,10 @@ function UserMessage({ message }: { message: ChatMessage }) {
       </div>
       {confirming && (
         <ConfirmDialog
-          title="回退到此处"
-          description="工作区文件将恢复到该消息发送时的状态，此条及之后的对话内容会从界面移除，原消息会回填到输入框以便重新编辑。"
+          title="Revert to this point"
+          description="Workspace files will be restored to the state when this message was sent. This and later messages will be removed from the view, and the original message will be placed back in the input box for editing."
           variant="warning"
-          confirmLabel="回退"
+          confirmLabel="Revert"
           onConfirm={handleConfirm}
           onCancel={() => setConfirming(false)}
         />

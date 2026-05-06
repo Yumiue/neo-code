@@ -50,7 +50,7 @@ export default function ModelSelector() {
       })
       .catch((err) => {
         if (cancelled) return
-        setError(err instanceof Error ? err.message : '加载模型列表失败')
+        setError(err instanceof Error ? err.message : 'Failed to load model list')
         console.error('listModels failed:', err)
       })
       .finally(() => {
@@ -64,7 +64,7 @@ export default function ModelSelector() {
     setOpen(false)
     if (isGenerating) {
       setPendingModelChange(m)
-      useUIStore.getState().showToast('模型切换将在下一轮对话生效', 'info')
+      useUIStore.getState().showToast('Model change will apply on the next turn', 'info')
       return
     }
     if (currentSessionId && gatewayAPI) {

@@ -81,7 +81,7 @@ function FileChangeItem({
       return
     }
     const confirmed = window.confirm(
-      `将恢复到更改前的状态，该操作会回退该轮所有文件变更，是否继续？\n\n文件：${change.path}`
+      `This will restore files to their pre-change state and revert all file changes from this turn. Continue?\n\nFile: ${change.path}`
     )
     if (!confirmed) return
 
@@ -92,11 +92,11 @@ function FileChangeItem({
       })
       if (result?.payload) {
         useUIStore.getState().clearFileChanges()
-        useUIStore.getState().showToast('已恢复到更改前的状态', 'success')
+        useUIStore.getState().showToast('Restored to pre-change state', 'success')
       }
     } catch (e) {
       console.warn('[FileChangePanel] restoreCheckpoint failed:', e)
-      useUIStore.getState().showToast('恢复失败', 'error')
+      useUIStore.getState().showToast('Restore failed', 'error')
     }
   }
 
