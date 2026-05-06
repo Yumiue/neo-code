@@ -1691,7 +1691,7 @@ func TestConsumeDiagSignalsAndBannerPaths(t *testing.T) {
 		autoState := &autoRuntimeState{}
 		autoState.Enabled.Store(true)
 
-		consumeDiagSignals(ctx, nil, jobCh, output, NewUTF8RingBuffer(1024), ManualShellOptions{}, "/tmp/diag.sock", autoState, nil)
+		consumeDiagSignals(ctx, nil, jobCh, output, NewUTF8RingBuffer(1024), ManualShellOptions{}, "/tmp/diag.sock", autoState, nil, nil)
 		select {
 		case response := <-doneCh:
 			if !response.OK {
@@ -1752,6 +1752,7 @@ func TestConsumeDiagSignalsAndBannerPaths(t *testing.T) {
 			"/tmp/diag.sock",
 			autoState,
 			func(err error) { callbackTriggered <- err },
+			nil,
 		)
 
 		select {
@@ -1865,7 +1866,7 @@ func TestConsumeDiagSignalsClosedChannelReturns(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		consumeDiagSignals(ctx, nil, jobCh, &bytes.Buffer{}, NewUTF8RingBuffer(1024), ManualShellOptions{}, "/tmp/diag.sock", &autoRuntimeState{}, nil)
+		consumeDiagSignals(ctx, nil, jobCh, &bytes.Buffer{}, NewUTF8RingBuffer(1024), ManualShellOptions{}, "/tmp/diag.sock", &autoRuntimeState{}, nil, nil)
 	}()
 
 	select {
