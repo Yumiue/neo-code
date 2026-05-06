@@ -16,7 +16,7 @@ function LoadingScreen({ message }: { message?: string }) {
       color: 'var(--text-tertiary)',
       fontSize: 14,
     }}>
-      {message || '正在连接 Gateway...'}
+      {message || 'Connecting to Gateway...'}
     </div>
   )
 }
@@ -35,7 +35,7 @@ function ElectronErrorScreen({ error, onRetry }: { error: string; onRetry: () =>
       gap: 16,
       padding: 32,
     }}>
-      <div style={{ fontSize: 16, fontWeight: 600 }}>Gateway 连接失败</div>
+      <div style={{ fontSize: 16, fontWeight: 600 }}>Gateway connection failed</div>
       <div style={{
         fontSize: 13,
         color: 'var(--text-tertiary)',
@@ -43,7 +43,7 @@ function ElectronErrorScreen({ error, onRetry }: { error: string; onRetry: () =>
         textAlign: 'center',
         wordBreak: 'break-word',
       }}>
-        {error || '无法连接到 Gateway 服务'}
+        {error || 'Unable to connect to the Gateway service'}
       </div>
       <button
         onClick={onRetry}
@@ -59,7 +59,7 @@ function ElectronErrorScreen({ error, onRetry }: { error: string; onRetry: () =>
           cursor: 'pointer',
         }}
       >
-        重试连接
+        Retry connection
       </button>
     </div>
   )
@@ -77,7 +77,7 @@ function AppRoutes() {
   }
 
   if (status === 'connecting') {
-    return <LoadingScreen message="正在连接 Gateway..." />
+    return <LoadingScreen message="Connecting to Gateway..." />
   }
 
   if (status === 'error' && mode === 'browser') {
@@ -89,7 +89,7 @@ function AppRoutes() {
   }
 
   if (status !== 'connected') {
-    return <LoadingScreen message="等待连接..." />
+    return <LoadingScreen message="Waiting for connection..." />
   }
 
   return (

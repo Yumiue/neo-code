@@ -39,6 +39,7 @@ type BudgetCheckedPayload struct {
 	PromptBudget         int    `json:"prompt_budget"`
 	EstimateSource       string `json:"estimate_source,omitempty"`
 	EstimateGatePolicy   string `json:"estimate_gate_policy,omitempty"`
+	ContextWindow        int    `json:"context_window,omitempty"`
 }
 
 // BudgetEstimateFailedPayload 描述预算估算失败时的降级诊断信息。
@@ -125,6 +126,7 @@ func newBudgetCheckedPayload(decision controlplane.TurnBudgetDecision) BudgetChe
 		PromptBudget:         decision.PromptBudget,
 		EstimateSource:       decision.EstimateSource,
 		EstimateGatePolicy:   decision.EstimateGatePolicy,
+		ContextWindow:        decision.ContextWindow,
 	}
 }
 
@@ -476,10 +478,12 @@ type FileChange struct {
 }
 
 // FileDiffEntry 描述单个文件的精确 diff（多文件工具下使用）。
+// Kind 字段指示变更类型("added"/"modified"/"deleted")，向后兼容旧消费方（缺失时由 WasNew 折算）。
 type FileDiffEntry struct {
 	Path   string `json:"path"`
 	Diff   string `json:"diff,omitempty"`
 	WasNew bool   `json:"was_new,omitempty"`
+	Kind   string `json:"kind,omitempty"`
 }
 
 // ToolDiffPayload 描述写工具修改了哪些文件。
@@ -502,6 +506,3 @@ type BashSideEffectPayload struct {
 	PreemptivelyCapturedPaths []string     `json:"preemptively_captured_paths,omitempty"`
 	UncoveredPaths            []string     `json:"uncovered_paths,omitempty"`
 }
-
-
-
