@@ -363,6 +363,12 @@ function setupAutoUpdater(): void {
 		return
 	}
 
+	const isPortable = !!process.env.PORTABLE_EXECUTABLE_DIR
+	if (isPortable) {
+		console.log('[Updater] Skipped in portable mode')
+		return
+	}
+
 	autoUpdater.logger = console
 	autoUpdater.autoDownload = true
 	autoUpdater.autoInstallOnAppQuit = false
