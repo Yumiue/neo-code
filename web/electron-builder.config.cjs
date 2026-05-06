@@ -59,6 +59,12 @@ const config = {
 		],
 		artifactName: '${productName}-${version}.${ext}',
 	},
+	publish: {
+		provider: 'github',
+		owner: '1024XEngineer',
+		repo: 'neo-code',
+		releaseType: 'release',
+	},
 }
 
 module.exports = config
