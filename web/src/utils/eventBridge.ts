@@ -352,8 +352,13 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
     }
 
     case EventType.StopReasonDecided: {
-      useChatStore.getState().setStopReason(strField(eventPayload, 'reason'))
+      const reason = strField(eventPayload, 'reason')
+      const detail = strField(eventPayload, 'detail')
+      useChatStore.getState().setStopReason(reason)
       useChatStore.getState().setGenerating(false)
+      if (reason === 'fatal_error') {
+        uiStore.showToast(detail || '模型调用失败，请检查配置', 'error')
+      }
       break
     }
 
