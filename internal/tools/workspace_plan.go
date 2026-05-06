@@ -16,7 +16,7 @@ func ResolveEffectiveRoot(defaultRoot string, workdir string) (string, error) {
 	if base == "" {
 		return defaultRoot, nil
 	}
-	resolved, _, err := security.ResolveWorkspacePath(defaultRoot, base)
+	_, resolved, err := security.ResolveWorkspacePath(defaultRoot, base)
 	return resolved, err
 }
 
