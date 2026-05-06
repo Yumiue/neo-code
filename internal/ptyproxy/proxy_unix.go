@@ -1301,6 +1301,7 @@ func streamPTYOutputWithIDM(
 		return
 	}
 	parser := &OSC133Parser{}
+	altScreen := newAltScreenState(IsAltScreenGuardEnabledFromEnv())
 	collectingCommand := false
 	pendingTrigger := (*diagnoseTrigger)(nil)
 	fallbackCommandBuffer := NewUTF8RingBuffer(DefaultRingBufferCapacity / 2)
@@ -1309,6 +1310,7 @@ func streamPTYOutputWithIDM(
 	for {
 		readBytes, err := ptyReader.Read(buffer)
 		if readBytes > 0 {
+			altScreen.Observe(buffer[:readBytes])
 			cleanOutput, events := parser.Feed(buffer[:readBytes])
 			if idm != nil && len(cleanOutput) > 0 {
 				cleanOutput = idm.FilterPTYOutput(cleanOutput)
@@ -1328,6 +1330,11 @@ func streamPTYOutputWithIDM(
 				case ShellEventPromptReady:
 					autoState.OSCReady.Store(true)
 					if pendingTrigger != nil && autoState.Enabled.Load() {
+						if altScreen.ShouldSuppressAutoTrigger(true) {
+							pendingTrigger = nil
+							fallbackCommandBuffer.Reset()
+							continue
+						}
 						select {
 						case autoTriggerCh <- *pendingTrigger:
 						default:
@@ -1351,6 +1358,10 @@ func streamPTYOutputWithIDM(
 						outputText = fallbackCommandBuffer.SnapshotString()
 					}
 					if ShouldTriggerAutoDiagnosis(event.ExitCode, commandText, outputText) {
+						if altScreen.ShouldSuppressAutoTrigger(true) {
+							pendingTrigger = nil
+							continue
+						}
 						pendingTrigger = &diagnoseTrigger{
 							CommandText: commandText,
 							ExitCode:    event.ExitCode,
