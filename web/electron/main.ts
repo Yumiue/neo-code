@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url'
 import { existsSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { autoUpdater } from 'electron-updater'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -346,6 +347,59 @@ ipcMain.handle('window:maximize', () => {
 })
 ipcMain.handle('window:close', () => mainWindow?.close())
 
+// ---- Auto Updater ----
+
+/** 安全发送更新事件到渲染进程 */
+function sendUpdaterEvent(channel: string, data: unknown): void {
+	if (isQuitting) return
+	if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return
+	mainWindow.webContents.send(channel, data)
+}
+
+/** 配置并启动自动更新检查 */
+function setupAutoUpdater(): void {
+	if (is.dev) {
+		console.log('[Updater] Skipped in development mode')
+		return
+	}
+
+	autoUpdater.logger = console
+	autoUpdater.autoDownload = true
+	autoUpdater.autoInstallOnAppQuit = false
+
+	autoUpdater.on('update-available', (info) => {
+		console.log('[Updater] Update available:', info.version)
+		sendUpdaterEvent('updater:available', {
+			version: info.version,
+			releaseNotes: info.releaseNotes,
+		})
+	})
+
+	autoUpdater.on('update-downloaded', (info) => {
+		console.log('[Updater] Update downloaded:', info.version)
+		sendUpdaterEvent('updater:downloaded', {
+			version: info.version,
+		})
+	})
+
+	autoUpdater.on('error', (err) => {
+		console.error('[Updater] Error:', err.message)
+	})
+
+	// 延迟 30 秒检查更新，避免干扰启动流程
+	setTimeout(() => {
+		autoUpdater.checkForUpdates().catch((err) => {
+			console.error('[Updater] Failed to check for updates:', err.message)
+		})
+	}, 30000)
+}
+
+/** IPC: 退出并安装更新 */
+ipcMain.handle('updater:quitAndInstall', () => {
+	console.log('[Updater] Quit and install')
+	autoUpdater.quitAndInstall(false, true)
+})
+
 // ---- App 生命周期 ----
 
 app.whenReady().then(async () => {
@@ -357,6 +411,7 @@ app.whenReady().then(async () => {
 
 	await startGateway()
 	createWindow()
+	setupAutoUpdater()
 
 	app.on('activate', () => {
 		if (BrowserWindow.getAllWindows().length === 0) createWindow()
