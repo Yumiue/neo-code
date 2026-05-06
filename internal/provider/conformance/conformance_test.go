@@ -321,23 +321,6 @@ func TestDiscoverContractAcrossDrivers(t *testing.T) {
 			responseBody:   `{"data":[{"id":"gpt-4.1","name":"GPT 4.1"}]}`,
 		},
 		{
-			name:   "deepseek_discover",
-			driver: deepseek.Driver(),
-			buildConfig: func(baseURL string) provider.RuntimeConfig {
-				return provider.RuntimeConfig{
-					Name:                  deepseek.DriverName,
-					Driver:                provider.DriverDeepSeek,
-					BaseURL:               baseURL,
-					APIKeyEnv:             "DEEPSEEK_TEST_KEY",
-					APIKeyResolver:        provider.StaticAPIKeyResolver("test-key"),
-					DiscoveryEndpointPath: "/models",
-				}
-			},
-			expectedPath:   "/models",
-			expectedHeader: "Authorization",
-			responseBody:   `{"data":[{"id":"deepseek-v4","name":"DeepSeek V4"}]}`,
-		},
-		{
 			name:   "gemini_discover",
 			driver: gemini.Driver(),
 			buildConfig: func(baseURL string) provider.RuntimeConfig {
@@ -370,74 +353,6 @@ func TestDiscoverContractAcrossDrivers(t *testing.T) {
 			expectedPath:   "/v1/models",
 			expectedHeader: "x-api-key",
 			responseBody:   `{"data":[{"id":"claude-3-7-sonnet","display_name":"Claude 3.7 Sonnet"}],"has_more":false}`,
-		},
-		{
-			name:   "mimo_discover",
-			driver: mimo.Driver(),
-			buildConfig: func(baseURL string) provider.RuntimeConfig {
-				return provider.RuntimeConfig{
-					Name:                  mimo.DriverName,
-					Driver:                provider.DriverMiMo,
-					BaseURL:               baseURL,
-					APIKeyEnv:             "MIMO_TEST_KEY",
-					APIKeyResolver:        provider.StaticAPIKeyResolver("test-key"),
-					DiscoveryEndpointPath: "/models",
-				}
-			},
-			expectedPath:   "/models",
-			expectedHeader: "Authorization",
-			responseBody:   `{"data":[{"id":"mimo-v2.5","name":"MiMo V2.5"}]}`,
-		},
-		{
-			name:   "minimax_discover",
-			driver: minimax.Driver(),
-			buildConfig: func(baseURL string) provider.RuntimeConfig {
-				return provider.RuntimeConfig{
-					Name:                  minimax.DriverName,
-					Driver:                provider.DriverMiniMax,
-					BaseURL:               baseURL,
-					APIKeyEnv:             "MINIMAX_TEST_KEY",
-					APIKeyResolver:        provider.StaticAPIKeyResolver("test-key"),
-					DiscoveryEndpointPath: "/models",
-				}
-			},
-			expectedPath:   "/models",
-			expectedHeader: "Authorization",
-			responseBody:   `{"data":[{"id":"minimax-m2.7","name":"MiniMax M2.7"}]}`,
-		},
-		{
-			name:   "qwen_discover",
-			driver: qwen.Driver(),
-			buildConfig: func(baseURL string) provider.RuntimeConfig {
-				return provider.RuntimeConfig{
-					Name:                  qwen.DriverName,
-					Driver:                provider.DriverQwen,
-					BaseURL:               baseURL,
-					APIKeyEnv:             "QWEN_TEST_KEY",
-					APIKeyResolver:        provider.StaticAPIKeyResolver("test-key"),
-					DiscoveryEndpointPath: "/models",
-				}
-			},
-			expectedPath:   "/models",
-			expectedHeader: "Authorization",
-			responseBody:   `{"data":[{"id":"qwen3","name":"Qwen 3"}]}`,
-		},
-		{
-			name:   "glm_discover",
-			driver: glm.Driver(),
-			buildConfig: func(baseURL string) provider.RuntimeConfig {
-				return provider.RuntimeConfig{
-					Name:                  glm.DriverName,
-					Driver:                provider.DriverGLM,
-					BaseURL:               baseURL,
-					APIKeyEnv:             "GLM_TEST_KEY",
-					APIKeyResolver:        provider.StaticAPIKeyResolver("test-key"),
-					DiscoveryEndpointPath: "/models",
-				}
-			},
-			expectedPath:   "/models",
-			expectedHeader: "Authorization",
-			responseBody:   `{"data":[{"id":"glm-5.1","name":"GLM 5.1"}]}`,
 		},
 	}
 

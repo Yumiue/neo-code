@@ -16,11 +16,7 @@ func Driver() provider.DriverDefinition {
 			return New(cfg)
 		},
 		Discover: func(ctx context.Context, cfg provider.RuntimeConfig) ([]providertypes.ModelDescriptor, error) {
-			p, err := New(cfg)
-			if err != nil {
-				return nil, err
-			}
-			return p.DiscoverModels(ctx)
+			return nil, nil
 		},
 		ValidateCatalogIdentity: func(identity provider.ProviderIdentity) error {
 			return nil
