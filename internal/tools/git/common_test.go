@@ -1,19 +1,31 @@
 package git
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"neo-code/internal/tools"
 )
 
 func TestGitCommonHelpers(t *testing.T) {
 	t.Parallel()
 
-	if got := effectiveRoot("/workspace/root", " "); got != "/workspace/root" {
+	root := t.TempDir()
+	child := filepath.Join(root, "nested", "repo")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	if got, err := tools.ResolveEffectiveRoot(root, " "); err != nil || got != root {
 		t.Fatalf("effectiveRoot(default) = %q", got)
 	}
-	if got := effectiveRoot("/workspace/root", "/tmp/repo"); got != "/tmp/repo" {
+	if got, err := tools.ResolveEffectiveRoot(root, "nested/repo"); err != nil || got != child {
 		t.Fatalf("effectiveRoot(custom) = %q", got)
+	}
+	if _, err := tools.ResolveEffectiveRoot(root, "../escape"); err == nil {
+		t.Fatal("ResolveEffectiveRoot should reject escaping workdir")
 	}
 
 	formatted := formatFileList([]fileEntry{
