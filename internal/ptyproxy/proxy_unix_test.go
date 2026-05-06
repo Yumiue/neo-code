@@ -1183,13 +1183,8 @@ drainLoop:
 func TestStreamPTYOutputAltScreenGuardDisabledByEnv(t *testing.T) {
 	t.Setenv(DiagAltScreenGuardDisableEnv, "true")
 
-	payload := strings.NewReader(
-		"\x1b[?1049h" +
-			"\x1b]133;C\x07" +
-			"fatal: guard disabled should still trigger\n" +
-			"\x1b]133;D;1\x07" +
-			"\x1b]133;A\x07",
-	)
+	payloadReader, payloadWriter := io.Pipe()
+	defer payloadReader.Close()
 	output := &bytes.Buffer{}
 	commandLog := NewUTF8RingBuffer(1024)
 	tracker := &commandTracker{}
@@ -1198,15 +1193,32 @@ func TestStreamPTYOutputAltScreenGuardDisabledByEnv(t *testing.T) {
 	autoState := &autoRuntimeState{}
 	autoState.Enabled.Store(true)
 
-	streamPTYOutput(payload, output, commandLog, tracker, autoTriggers, autoState)
+	streamDone := make(chan struct{})
+	go func() {
+		defer close(streamDone)
+		streamPTYOutput(payloadReader, output, commandLog, tracker, autoTriggers, autoState)
+	}()
+	go func() {
+		_, _ = payloadWriter.Write([]byte("\x1b[?1049h"))
+		_, _ = payloadWriter.Write([]byte("\x1b]133;C\x07"))
+		_, _ = payloadWriter.Write([]byte("fatal: guard disabled should still trigger\n"))
+		_, _ = payloadWriter.Write([]byte("\x1b]133;D;1\x07"))
+		_, _ = payloadWriter.Write([]byte("\x1b]133;A\x07"))
+		_ = payloadWriter.Close()
+	}()
 
 	select {
 	case trigger := <-autoTriggers:
 		if !strings.Contains(trigger.OutputText, "guard disabled should still trigger") {
 			t.Fatalf("trigger output = %q, want guard-disabled failure text", trigger.OutputText)
 		}
-	default:
+	case <-time.After(time.Second):
 		t.Fatal("expected trigger when alt-screen guard is disabled by env")
+	}
+	select {
+	case <-streamDone:
+	case <-time.After(time.Second):
+		t.Fatal("streamPTYOutput did not finish")
 	}
 	if !strings.Contains(output.String(), "guard disabled should still trigger") {
 		t.Fatalf("output = %q, want contains failure text", output.String())

@@ -692,7 +692,8 @@ func TestIDMControllerPhase4RunModeAndAckFailures(t *testing.T) {
 		if err := controller.waitRunStream(ctx, "session-fallback", "run-fallback"); err != nil {
 			t.Fatalf("waitRunStream() error = %v", err)
 		}
-		if !strings.Contains(output.String(), "done payload fallback") {
+		visibleOutput := normalizeWhitespace(stripANSI(output.String()))
+		if !strings.Contains(visibleOutput, "done payload fallback") {
 			t.Fatalf("output = %q, want done payload fallback", output.String())
 		}
 	})

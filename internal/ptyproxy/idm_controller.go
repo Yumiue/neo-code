@@ -584,7 +584,7 @@ func (c *idmController) sendAIMessage(question string) error {
 		return errors.New("idm session id is empty")
 	}
 
-	streamCtx, streamCancel := context.WithTimeout(context.Background(), diagnoseCallTimeout)
+	streamCtx, streamCancel := context.WithCancel(context.Background())
 	c.mu.Lock()
 	if !c.active {
 		c.mu.Unlock()

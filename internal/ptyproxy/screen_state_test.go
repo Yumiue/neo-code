@@ -42,6 +42,18 @@ func TestAltScreenStateSupportsChunkedCSISequence(t *testing.T) {
 	}
 }
 
+func TestAltScreenStateSupportsChunkedBareEscapeCSISequence(t *testing.T) {
+	state := newAltScreenState(true)
+	state.Observe([]byte("\x1b"))
+	if state.inAltScreen {
+		t.Fatal("inAltScreen should remain false before CSI prefix is complete")
+	}
+	state.Observe([]byte("[?1049h"))
+	if !state.inAltScreen {
+		t.Fatal("expected inAltScreen=true after bare ESC and CSI suffix")
+	}
+}
+
 func TestAltScreenStateSupportsMode47And1047(t *testing.T) {
 	state := newAltScreenState(true)
 	state.Observe([]byte("\x1b[?47h"))
@@ -77,6 +89,18 @@ func TestAltScreenStateSupportsTmuxPassthrough(t *testing.T) {
 	}
 	if !state.ShouldSuppressAutoTrigger(false) {
 		t.Fatal("expected suppress window after tmux passthrough exit")
+	}
+}
+
+func TestAltScreenStateSupportsChunkedTmuxPassthroughPrefix(t *testing.T) {
+	state := newAltScreenState(true)
+	state.Observe([]byte("\x1bPtm"))
+	if state.inAltScreen {
+		t.Fatal("inAltScreen should remain false before tmux prefix is complete")
+	}
+	state.Observe([]byte("ux;\x1b\x1b[?1049h\x1b\\"))
+	if !state.inAltScreen {
+		t.Fatal("expected chunked tmux passthrough enter sequence to be recognized")
 	}
 }
 

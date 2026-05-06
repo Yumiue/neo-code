@@ -471,6 +471,38 @@ func TestDefaultManagerExecuteBlocksWriteToolInReadOnlyMode(t *testing.T) {
 	}
 }
 
+func TestDefaultManagerExecuteAllowsTodoWriteInReadOnlyMode(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	todoTool := &managerStubTool{name: ToolNameTodoWrite, content: "ok"}
+	registry.Register(todoTool)
+
+	manager, err := NewManager(registry, mustAllowEngine(t), nil)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+
+	result, execErr := manager.Execute(context.Background(), ToolCallInput{
+		ID:        "call-readonly-todo-write",
+		Name:      ToolNameTodoWrite,
+		Arguments: []byte(`{"id":"todo-1","action":"update"}`),
+		ReadOnly:  true,
+	})
+	if execErr != nil {
+		t.Fatalf("expected todo_write to execute in read-only mode, got %v", execErr)
+	}
+	if result.Content != "ok" {
+		t.Fatalf("result.Content = %q, want ok", result.Content)
+	}
+	if todoTool.callCount != 1 {
+		t.Fatalf("expected todo_write to execute once, got %d", todoTool.callCount)
+	}
+	if !todoTool.lastCall.ReadOnly {
+		t.Fatal("expected read-only flag to be preserved on todo_write call")
+	}
+}
+
 func TestDefaultManagerSandboxOutsideWriteSessionMemory(t *testing.T) {
 	t.Parallel()
 

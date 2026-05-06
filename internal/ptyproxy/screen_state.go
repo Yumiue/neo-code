@@ -48,6 +48,7 @@ func (s *altScreenState) Observe(payload []byte) {
 		}
 		index++
 	}
+	s.leftover = trailingAltScreenPrefix(buffer)
 }
 
 // ShouldSuppressAutoTrigger 判断当前是否应屏蔽自动诊断，并按需消耗一次性退出保护窗口。
@@ -177,4 +178,27 @@ func keepAltScreenLeftover(raw []byte) []byte {
 		return append([]byte(nil), raw...)
 	}
 	return append([]byte(nil), raw[len(raw)-maxAltScreenLeftover:]...)
+}
+
+// trailingAltScreenPrefix 保留跨 PTY read 被切开的备用屏幕控制序列前缀。
+func trailingAltScreenPrefix(buffer []byte) []byte {
+	maxPrefixLength := len(tmuxDCSOpen) - 1
+	if len(buffer) < maxPrefixLength {
+		maxPrefixLength = len(buffer)
+	}
+	for length := maxPrefixLength; length > 0; length-- {
+		suffix := buffer[len(buffer)-length:]
+		if isPartialAltScreenPrefix(suffix) {
+			return keepAltScreenLeftover(suffix)
+		}
+	}
+	return nil
+}
+
+// isPartialAltScreenPrefix 判断尾部字节是否可能是下一次 read 才补齐的控制序列前缀。
+func isPartialAltScreenPrefix(candidate []byte) bool {
+	if len(candidate) == 0 {
+		return false
+	}
+	return strings.HasPrefix(tmuxDCSOpen, string(candidate)) || strings.HasPrefix("\x1b[", string(candidate))
 }
