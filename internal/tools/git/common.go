@@ -5,14 +5,6 @@ import (
 	"strings"
 )
 
-func effectiveRoot(defaultRoot string, workdir string) string {
-	base := strings.TrimSpace(workdir)
-	if base == "" {
-		base = defaultRoot
-	}
-	return base
-}
-
 func formatFileList(files []fileEntry, totalCount int, truncated bool) string {
 	var b strings.Builder
 	b.WriteString("returned_count: ")

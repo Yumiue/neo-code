@@ -12,11 +12,12 @@ import (
 // SearchTextTool implements the codebase_search_text tool.
 type SearchTextTool struct {
 	root string
+	svc  *repository.Service
 }
 
 // NewSearchText creates a new codebase_search_text tool.
-func NewSearchText(root string) *SearchTextTool {
-	return &SearchTextTool{root: root}
+func NewSearchText(svc *repository.Service, root string) *SearchTextTool {
+	return &SearchTextTool{root: root, svc: svc}
 }
 
 func (t *SearchTextTool) Name() string {
@@ -58,10 +59,10 @@ func (t *SearchTextTool) MicroCompactPolicy() tools.MicroCompactPolicy {
 
 func (t *SearchTextTool) Execute(ctx context.Context, call tools.ToolCallInput) (tools.ToolResult, error) {
 	var in struct {
-		Query     string `json:"query"`
-		ScopeDir  string `json:"scope_dir,omitempty"`
-		Limit     int    `json:"limit,omitempty"`
-		Workdir   string `json:"workdir,omitempty"`
+		Query    string `json:"query"`
+		ScopeDir string `json:"scope_dir,omitempty"`
+		Limit    int    `json:"limit,omitempty"`
+		Workdir  string `json:"workdir,omitempty"`
 	}
 	if err := json.Unmarshal(call.Arguments, &in); err != nil {
 		return tools.NewErrorResult(t.Name(), "invalid arguments", err.Error(), nil), err
@@ -70,13 +71,15 @@ func (t *SearchTextTool) Execute(ctx context.Context, call tools.ToolCallInput) 
 		return tools.NewErrorResult(t.Name(), "missing required argument: query", "", nil), nil
 	}
 
-	root := effectiveRoot(t.root, in.Workdir)
-	svc := repository.NewService()
+	root, err := tools.ResolveEffectiveRoot(t.root, in.Workdir)
+	if err != nil {
+		return tools.NewErrorResult(t.Name(), "invalid workdir", err.Error(), nil), err
+	}
 	opts := repository.SearchOptions{
 		ScopeDir: in.ScopeDir,
 		Limit:    in.Limit,
 	}
-	result, err := svc.SearchText(ctx, root, in.Query, opts)
+	result, err := t.svc.SearchText(ctx, root, in.Query, opts)
 	if err != nil {
 		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}

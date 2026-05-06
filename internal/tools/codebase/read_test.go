@@ -7,13 +7,14 @@ import (
 	"strings"
 	"testing"
 
+	"neo-code/internal/repository"
 	"neo-code/internal/tools"
 )
 
 func TestReadToolMetadata(t *testing.T) {
 	t.Parallel()
 
-	tool := NewRead("/workspace")
+	tool := NewRead(repository.NewService(), "/workspace")
 	if tool.Name() != "codebase_read" {
 		t.Fatalf("Name() = %q, want %q", tool.Name(), "codebase_read")
 	}
@@ -39,7 +40,7 @@ func TestReadToolMetadata(t *testing.T) {
 func TestReadToolInvalidJSON(t *testing.T) {
 	t.Parallel()
 
-	tool := NewRead("/workspace")
+	tool := NewRead(repository.NewService(), "/workspace")
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
 		Name:      tool.Name(),
 		Arguments: []byte(`{invalid`),
@@ -55,7 +56,7 @@ func TestReadToolInvalidJSON(t *testing.T) {
 func TestReadToolMissingPath(t *testing.T) {
 	t.Parallel()
 
-	tool := NewRead("/workspace")
+	tool := NewRead(repository.NewService(), "/workspace")
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
 		Name:      tool.Name(),
 		Arguments: mustArgs(t, map[string]any{}),
@@ -72,7 +73,7 @@ func TestReadToolFileNotFound(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	tool := NewRead(workspace)
+	tool := NewRead(repository.NewService(), workspace)
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
 		Name:      tool.Name(),
 		Arguments: mustArgs(t, map[string]any{"path": "nonexistent.go"}),
@@ -94,7 +95,7 @@ func TestReadToolReadsFileContent(t *testing.T) {
 		t.Fatalf("write file: %v", err)
 	}
 
-	tool := NewRead(workspace)
+	tool := NewRead(repository.NewService(), workspace)
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
 		Name:      tool.Name(),
 		Arguments: mustArgs(t, map[string]any{"path": "main.go"}),
@@ -115,7 +116,7 @@ func TestReadToolPathTraversalRejected(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	tool := NewRead(workspace)
+	tool := NewRead(repository.NewService(), workspace)
 	_, err := tool.Execute(context.Background(), tools.ToolCallInput{
 		Name:      tool.Name(),
 		Arguments: mustArgs(t, map[string]any{"path": "../../etc/passwd"}),
@@ -140,7 +141,7 @@ func TestReadToolFileInSubdirectory(t *testing.T) {
 		t.Fatalf("write file: %v", err)
 	}
 
-	tool := NewRead(workspace)
+	tool := NewRead(repository.NewService(), workspace)
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
 		Name:      tool.Name(),
 		Arguments: mustArgs(t, map[string]any{"path": "sub/nested.go"}),

@@ -1,18 +1,5 @@
 package codebase
 
-import (
-	"path/filepath"
-	"strings"
-)
-
-func effectiveRoot(defaultRoot string, workdir string) string {
-	base := strings.TrimSpace(workdir)
-	if base == "" {
-		base = defaultRoot
-	}
-	return base
-}
-
 func itoa(i int) string {
 	if i == 0 {
 		return "0"
@@ -40,11 +27,4 @@ func boolToString(v bool) string {
 		return "true"
 	}
 	return "false"
-}
-
-func filepathSlashClean(path string) string {
-	if path == "" {
-		return ""
-	}
-	return filepath.Clean(filepath.FromSlash(path))
 }

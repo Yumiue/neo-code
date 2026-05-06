@@ -11,11 +11,12 @@ import (
 // ChangedSnippetsTool implements the git_changed_snippets tool.
 type ChangedSnippetsTool struct {
 	root string
+	svc  *repository.Service
 }
 
 // NewChangedSnippets creates a new git_changed_snippets tool.
-func NewChangedSnippets(root string) *ChangedSnippetsTool {
-	return &ChangedSnippetsTool{root: root}
+func NewChangedSnippets(svc *repository.Service, root string) *ChangedSnippetsTool {
+	return &ChangedSnippetsTool{root: root, svc: svc}
 }
 
 func (t *ChangedSnippetsTool) Name() string {
@@ -52,22 +53,24 @@ func (t *ChangedSnippetsTool) MicroCompactPolicy() tools.MicroCompactPolicy {
 
 func (t *ChangedSnippetsTool) Execute(ctx context.Context, call tools.ToolCallInput) (tools.ToolResult, error) {
 	var in struct {
-		Workdir                string `json:"workdir,omitempty"`
-		Limit                  int    `json:"limit,omitempty"`
-		SnippetFileCountLimit  int    `json:"snippet_file_count_limit,omitempty"`
+		Workdir               string `json:"workdir,omitempty"`
+		Limit                 int    `json:"limit,omitempty"`
+		SnippetFileCountLimit int    `json:"snippet_file_count_limit,omitempty"`
 	}
 	if err := json.Unmarshal(call.Arguments, &in); err != nil {
 		return tools.NewErrorResult(t.Name(), "invalid arguments", err.Error(), nil), err
 	}
 
-	root := effectiveRoot(t.root, in.Workdir)
-	svc := repository.NewService()
+	root, err := tools.ResolveEffectiveRoot(t.root, in.Workdir)
+	if err != nil {
+		return tools.NewErrorResult(t.Name(), "invalid workdir", err.Error(), nil), err
+	}
 	opts := repository.ChangedFilesOptions{
 		Limit:                 in.Limit,
 		IncludeSnippets:       true,
 		SnippetFileCountLimit: in.SnippetFileCountLimit,
 	}
-	result, err := svc.ChangedFiles(ctx, root, opts)
+	result, err := t.svc.ChangedFiles(ctx, root, opts)
 	if err != nil {
 		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}

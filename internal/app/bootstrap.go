@@ -21,6 +21,7 @@ import (
 	"neo-code/internal/provider/builtin"
 	providercatalog "neo-code/internal/provider/catalog"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/repository"
 	agentruntime "neo-code/internal/runtime"
 	"neo-code/internal/security"
 	agentsession "neo-code/internal/session"
@@ -462,12 +463,13 @@ func buildToolRegistry(cfg config.Config) (*tools.Registry, func() error, error)
 	}))
 	toolRegistry.Register(todo.New())
 	toolRegistry.Register(spawnsubagent.New())
-	toolRegistry.Register(git.NewSummary(cfg.Workdir))
-	toolRegistry.Register(git.NewChangedFiles(cfg.Workdir))
-	toolRegistry.Register(git.NewChangedSnippets(cfg.Workdir))
-	toolRegistry.Register(codebase.NewRead(cfg.Workdir))
-	toolRegistry.Register(codebase.NewSearchText(cfg.Workdir))
-	toolRegistry.Register(codebase.NewSearchSymbol(cfg.Workdir))
+	repoSvc := repository.NewService()
+	toolRegistry.Register(git.NewSummary(repoSvc, cfg.Workdir))
+	toolRegistry.Register(git.NewChangedFiles(repoSvc, cfg.Workdir))
+	toolRegistry.Register(git.NewChangedSnippets(repoSvc, cfg.Workdir))
+	toolRegistry.Register(codebase.NewRead(repoSvc, cfg.Workdir))
+	toolRegistry.Register(codebase.NewSearchText(repoSvc, cfg.Workdir))
+	toolRegistry.Register(codebase.NewSearchSymbol(repoSvc, cfg.Workdir))
 	mcpRegistry, err := BuildMCPRegistry(cfg)
 	if err != nil {
 		return nil, nil, err

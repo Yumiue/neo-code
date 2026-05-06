@@ -7,13 +7,14 @@ import (
 	"strings"
 	"testing"
 
+	"neo-code/internal/repository"
 	"neo-code/internal/tools"
 )
 
 func TestSearchSymbolToolMetadata(t *testing.T) {
 	t.Parallel()
 
-	tool := NewSearchSymbol("/workspace")
+	tool := NewSearchSymbol(repository.NewService(), "/workspace")
 	if tool.Name() != "codebase_search_symbol" {
 		t.Fatalf("Name() = %q, want %q", tool.Name(), "codebase_search_symbol")
 	}
@@ -39,7 +40,7 @@ func TestSearchSymbolToolMetadata(t *testing.T) {
 func TestSearchSymbolToolInvalidJSON(t *testing.T) {
 	t.Parallel()
 
-	tool := NewSearchSymbol("/workspace")
+	tool := NewSearchSymbol(repository.NewService(), "/workspace")
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
 		Name:      tool.Name(),
 		Arguments: []byte(`{invalid`),
@@ -55,7 +56,7 @@ func TestSearchSymbolToolInvalidJSON(t *testing.T) {
 func TestSearchSymbolToolMissingSymbol(t *testing.T) {
 	t.Parallel()
 
-	tool := NewSearchSymbol("/workspace")
+	tool := NewSearchSymbol(repository.NewService(), "/workspace")
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
 		Name:      tool.Name(),
 		Arguments: mustArgs(t, map[string]any{}),
@@ -89,7 +90,7 @@ type MyStruct struct {
 		t.Fatalf("write file: %v", err)
 	}
 
-	tool := NewSearchSymbol(workspace)
+	tool := NewSearchSymbol(repository.NewService(), workspace)
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
 		Name:      tool.Name(),
 		Arguments: mustArgs(t, map[string]any{"symbol": "Hello"}),
@@ -116,7 +117,7 @@ func TestSearchSymbolToolNoResults(t *testing.T) {
 		t.Fatalf("write file: %v", err)
 	}
 
-	tool := NewSearchSymbol(workspace)
+	tool := NewSearchSymbol(repository.NewService(), workspace)
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
 		Name:      tool.Name(),
 		Arguments: mustArgs(t, map[string]any{"symbol": "NonExistent"}),
@@ -144,7 +145,7 @@ func longFunction(a string, b int, c float64) string {
 		t.Fatalf("write file: %v", err)
 	}
 
-	tool := NewSearchSymbol(workspace)
+	tool := NewSearchSymbol(repository.NewService(), workspace)
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
 		Name:      tool.Name(),
 		Arguments: mustArgs(t, map[string]any{"symbol": "longFunction"}),

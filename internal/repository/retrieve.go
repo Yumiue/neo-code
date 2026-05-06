@@ -142,6 +142,11 @@ func (s *Service) SearchText(ctx context.Context, workdir string, query string, 
 		effectiveLimit = defaultRetrievalLimit + 1
 	}
 
+	var wholeWordRe *regexp.Regexp
+	if opts.WholeWord {
+		wholeWordRe = regexp.MustCompile(`\b` + regexp.QuoteMeta(query) + `\b`)
+	}
+
 	hits := make([]TextSearchHit, 0, effectiveLimit)
 	truncated := false
 
@@ -163,7 +168,11 @@ func (s *Service) SearchText(ctx context.Context, workdir string, query string, 
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}
-			if strings.Contains(line, query) {
+			matched := strings.Contains(line, query)
+			if wholeWordRe != nil {
+				matched = wholeWordRe.MatchString(line)
+			}
+			if matched {
 				matchCount++
 				if firstLine == 0 {
 					firstLine = index + 1
@@ -315,7 +324,9 @@ func (s *Service) SearchSymbol(ctx context.Context, workdir string, symbol strin
 	}
 
 	// Fallback: whole-word text search (all file types).
-	textResult, err := s.SearchText(ctx, workdir, symbol, opts)
+	fallbackOpts := opts
+	fallbackOpts.WholeWord = true
+	textResult, err := s.SearchText(ctx, workdir, symbol, fallbackOpts)
 	if err != nil {
 		return SymbolSearchResult{}, err
 	}

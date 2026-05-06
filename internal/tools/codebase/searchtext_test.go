@@ -8,13 +8,14 @@ import (
 	"strings"
 	"testing"
 
+	"neo-code/internal/repository"
 	"neo-code/internal/tools"
 )
 
 func TestSearchTextToolMetadata(t *testing.T) {
 	t.Parallel()
 
-	tool := NewSearchText("/workspace")
+	tool := NewSearchText(repository.NewService(), "/workspace")
 	if tool.Name() != "codebase_search_text" {
 		t.Fatalf("Name() = %q, want %q", tool.Name(), "codebase_search_text")
 	}
@@ -40,7 +41,7 @@ func TestSearchTextToolMetadata(t *testing.T) {
 func TestSearchTextToolInvalidJSON(t *testing.T) {
 	t.Parallel()
 
-	tool := NewSearchText("/workspace")
+	tool := NewSearchText(repository.NewService(), "/workspace")
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
 		Name:      tool.Name(),
 		Arguments: []byte(`{invalid`),
@@ -56,7 +57,7 @@ func TestSearchTextToolInvalidJSON(t *testing.T) {
 func TestSearchTextToolMissingQuery(t *testing.T) {
 	t.Parallel()
 
-	tool := NewSearchText("/workspace")
+	tool := NewSearchText(repository.NewService(), "/workspace")
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
 		Name:      tool.Name(),
 		Arguments: mustArgs(t, map[string]any{}),
@@ -83,7 +84,7 @@ func TestSearchTextToolFindsMatches(t *testing.T) {
 		t.Fatalf("write file: %v", err)
 	}
 
-	tool := NewSearchText(workspace)
+	tool := NewSearchText(repository.NewService(), workspace)
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
 		Name:      tool.Name(),
 		Arguments: mustArgs(t, map[string]any{"query": "Hello"}),
@@ -107,7 +108,7 @@ func TestSearchTextToolNoMatches(t *testing.T) {
 		t.Fatalf("write file: %v", err)
 	}
 
-	tool := NewSearchText(workspace)
+	tool := NewSearchText(repository.NewService(), workspace)
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
 		Name:      tool.Name(),
 		Arguments: mustArgs(t, map[string]any{"query": "NonExistentSymbol"}),
@@ -135,7 +136,7 @@ func TestSearchTextToolRespectsScopeDir(t *testing.T) {
 		t.Fatalf("write file: %v", err)
 	}
 
-	tool := NewSearchText(workspace)
+	tool := NewSearchText(repository.NewService(), workspace)
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
 		Name:      tool.Name(),
 		Arguments: mustArgs(t, map[string]any{"query": "found", "scope_dir": "sub"}),

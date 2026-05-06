@@ -11,11 +11,12 @@ import (
 // ChangedFilesTool implements the git_changed_files tool.
 type ChangedFilesTool struct {
 	root string
+	svc  *repository.Service
 }
 
 // NewChangedFiles creates a new git_changed_files tool.
-func NewChangedFiles(root string) *ChangedFilesTool {
-	return &ChangedFilesTool{root: root}
+func NewChangedFiles(svc *repository.Service, root string) *ChangedFilesTool {
+	return &ChangedFilesTool{root: root, svc: svc}
 }
 
 func (t *ChangedFilesTool) Name() string {
@@ -55,12 +56,14 @@ func (t *ChangedFilesTool) Execute(ctx context.Context, call tools.ToolCallInput
 		return tools.NewErrorResult(t.Name(), "invalid arguments", err.Error(), nil), err
 	}
 
-	root := effectiveRoot(t.root, in.Workdir)
-	svc := repository.NewService()
+	root, err := tools.ResolveEffectiveRoot(t.root, in.Workdir)
+	if err != nil {
+		return tools.NewErrorResult(t.Name(), "invalid workdir", err.Error(), nil), err
+	}
 	opts := repository.ChangedFilesOptions{
 		Limit: in.Limit,
 	}
-	result, err := svc.ChangedFiles(ctx, root, opts)
+	result, err := t.svc.ChangedFiles(ctx, root, opts)
 	if err != nil {
 		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}

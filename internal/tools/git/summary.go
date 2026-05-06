@@ -12,11 +12,12 @@ import (
 // SummaryTool implements the git_summary tool.
 type SummaryTool struct {
 	root string
+	svc  *repository.Service
 }
 
 // NewSummary creates a new git_summary tool.
-func NewSummary(root string) *SummaryTool {
-	return &SummaryTool{root: root}
+func NewSummary(svc *repository.Service, root string) *SummaryTool {
+	return &SummaryTool{root: root, svc: svc}
 }
 
 func (t *SummaryTool) Name() string {
@@ -51,9 +52,11 @@ func (t *SummaryTool) Execute(ctx context.Context, call tools.ToolCallInput) (to
 		return tools.NewErrorResult(t.Name(), "invalid arguments", err.Error(), nil), err
 	}
 
-	root := effectiveRoot(t.root, in.Workdir)
-	svc := repository.NewService()
-	summary, err := svc.Summary(ctx, root)
+	root, err := tools.ResolveEffectiveRoot(t.root, in.Workdir)
+	if err != nil {
+		return tools.NewErrorResult(t.Name(), "invalid workdir", err.Error(), nil), err
+	}
+	summary, err := t.svc.Summary(ctx, root)
 	if err != nil {
 		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}

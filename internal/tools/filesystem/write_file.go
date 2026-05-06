@@ -79,7 +79,10 @@ func (t *WriteFileTool) Execute(ctx context.Context, input tools.ToolCallInput) 
 		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
-	base := effectiveRoot(t.root, input.Workdir)
+	base, err := tools.ResolveEffectiveRoot(t.root, input.Workdir)
+	if err != nil {
+		return tools.NewErrorResult(t.Name(), "invalid workdir", err.Error(), nil), err
+	}
 
 	_, target, err := tools.ResolveWorkspaceTarget(
 		input,

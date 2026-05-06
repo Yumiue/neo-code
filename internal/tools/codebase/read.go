@@ -12,11 +12,12 @@ import (
 // ReadTool implements the codebase_read tool.
 type ReadTool struct {
 	root string
+	svc  *repository.Service
 }
 
 // NewRead creates a new codebase_read tool.
-func NewRead(root string) *ReadTool {
-	return &ReadTool{root: root}
+func NewRead(svc *repository.Service, root string) *ReadTool {
+	return &ReadTool{root: root, svc: svc}
 }
 
 func (t *ReadTool) Name() string {
@@ -66,9 +67,11 @@ func (t *ReadTool) Execute(ctx context.Context, call tools.ToolCallInput) (tools
 		return tools.NewErrorResult(t.Name(), "missing required argument: path", "", nil), err
 	}
 
-	root := effectiveRoot(t.root, in.Workdir)
-	svc := repository.NewService()
-	result, err := svc.Read(ctx, root, in.Path, repository.ReadOptions{MaxBytes: in.MaxBytes})
+	root, err := tools.ResolveEffectiveRoot(t.root, in.Workdir)
+	if err != nil {
+		return tools.NewErrorResult(t.Name(), "invalid workdir", err.Error(), nil), err
+	}
+	result, err := t.svc.Read(ctx, root, in.Path, repository.ReadOptions{MaxBytes: in.MaxBytes})
 	if err != nil {
 		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}

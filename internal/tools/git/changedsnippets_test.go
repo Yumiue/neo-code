@@ -5,13 +5,14 @@ import (
 	"strings"
 	"testing"
 
+	"neo-code/internal/repository"
 	"neo-code/internal/tools"
 )
 
 func TestChangedSnippetsToolMetadata(t *testing.T) {
 	t.Parallel()
 
-	tool := NewChangedSnippets("/nonexistent")
+	tool := NewChangedSnippets(repository.NewService(), "/nonexistent")
 	if tool.Name() != "git_changed_snippets" {
 		t.Fatalf("Name() = %q, want %q", tool.Name(), "git_changed_snippets")
 	}
@@ -29,7 +30,7 @@ func TestChangedSnippetsToolMetadata(t *testing.T) {
 func TestChangedSnippetsToolInvalidJSON(t *testing.T) {
 	t.Parallel()
 
-	tool := NewChangedSnippets("/nonexistent")
+	tool := NewChangedSnippets(repository.NewService(), "/nonexistent")
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
 		Name:      tool.Name(),
 		Arguments: []byte(`{invalid`),
@@ -46,7 +47,7 @@ func TestChangedSnippetsToolNonGitDirectory(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	tool := NewChangedSnippets(workspace)
+	tool := NewChangedSnippets(repository.NewService(), workspace)
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
 		Name:      tool.Name(),
 		Arguments: mustArgs(t, map[string]any{}),

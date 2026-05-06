@@ -127,8 +127,9 @@ type ReadResult struct {
 
 // SearchOptions 控制文本/符号搜索的裁剪策略。
 type SearchOptions struct {
-	ScopeDir string
-	Limit    int
+	ScopeDir  string
+	Limit     int
+	WholeWord bool
 }
 
 // TextSearchHit 表示文本搜索的单文件命中（硬约束：不返回代码内容）。

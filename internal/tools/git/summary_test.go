@@ -6,13 +6,14 @@ import (
 	"strings"
 	"testing"
 
+	"neo-code/internal/repository"
 	"neo-code/internal/tools"
 )
 
 func TestSummaryToolMetadata(t *testing.T) {
 	t.Parallel()
 
-	tool := NewSummary("/nonexistent")
+	tool := NewSummary(repository.NewService(), "/nonexistent")
 	if tool.Name() != "git_summary" {
 		t.Fatalf("Name() = %q, want %q", tool.Name(), "git_summary")
 	}
@@ -30,7 +31,7 @@ func TestSummaryToolMetadata(t *testing.T) {
 func TestSummaryToolInvalidJSON(t *testing.T) {
 	t.Parallel()
 
-	tool := NewSummary("/nonexistent")
+	tool := NewSummary(repository.NewService(), "/nonexistent")
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
 		Name:      tool.Name(),
 		Arguments: []byte(`{invalid`),
@@ -50,7 +51,7 @@ func TestSummaryToolNonGitDirectory(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	tool := NewSummary(workspace)
+	tool := NewSummary(repository.NewService(), workspace)
 	args := mustArgs(t, map[string]any{})
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
 		Name:      tool.Name(),

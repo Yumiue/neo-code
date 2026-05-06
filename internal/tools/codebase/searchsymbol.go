@@ -12,11 +12,12 @@ import (
 // SearchSymbolTool implements the codebase_search_symbol tool.
 type SearchSymbolTool struct {
 	root string
+	svc  *repository.Service
 }
 
 // NewSearchSymbol creates a new codebase_search_symbol tool.
-func NewSearchSymbol(root string) *SearchSymbolTool {
-	return &SearchSymbolTool{root: root}
+func NewSearchSymbol(svc *repository.Service, root string) *SearchSymbolTool {
+	return &SearchSymbolTool{root: root, svc: svc}
 }
 
 func (t *SearchSymbolTool) Name() string {
@@ -70,13 +71,15 @@ func (t *SearchSymbolTool) Execute(ctx context.Context, call tools.ToolCallInput
 		return tools.NewErrorResult(t.Name(), "missing required argument: symbol", "", nil), nil
 	}
 
-	root := effectiveRoot(t.root, in.Workdir)
-	svc := repository.NewService()
+	root, err := tools.ResolveEffectiveRoot(t.root, in.Workdir)
+	if err != nil {
+		return tools.NewErrorResult(t.Name(), "invalid workdir", err.Error(), nil), err
+	}
 	opts := repository.SearchOptions{
 		ScopeDir: in.ScopeDir,
 		Limit:    in.Limit,
 	}
-	result, err := svc.SearchSymbol(ctx, root, in.Symbol, opts)
+	result, err := t.svc.SearchSymbol(ctx, root, in.Symbol, opts)
 	if err != nil {
 		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
