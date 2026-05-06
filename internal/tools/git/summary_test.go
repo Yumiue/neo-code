@@ -65,6 +65,35 @@ func TestSummaryToolNonGitDirectory(t *testing.T) {
 	}
 }
 
+func TestFormatSummaryWithRepositoryDetails(t *testing.T) {
+	t.Parallel()
+
+	content := formatSummary(repository.Summary{
+		InGitRepo:                  true,
+		Branch:                     "main",
+		Dirty:                      true,
+		Ahead:                      2,
+		Behind:                     1,
+		ChangedFileCount:           3,
+		RepresentativeChangedFiles: []string{"a.go", "b.go"},
+	})
+	for _, want := range []string{
+		"in_git_repo: true",
+		"branch: main",
+		"dirty: true",
+		"ahead: 2",
+		"behind: 1",
+		"changed_file_count: 3",
+		"representative_changed_files:",
+		"- a.go",
+		"- b.go",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("formatSummary() missing %q in %q", want, content)
+		}
+	}
+}
+
 func mustArgs(t *testing.T, v map[string]any) []byte {
 	t.Helper()
 	b, err := json.Marshal(v)
