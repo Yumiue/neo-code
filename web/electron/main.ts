@@ -62,8 +62,9 @@ function createWindow(): void {
 		const devUrl = process.env['ELECTRON_RENDERER_URL'] ?? ''
 		const isDevServer = is.dev && devUrl !== '' && url.startsWith(devUrl)
 		const isFileProtocol = url.startsWith('file://')
+		const isGatewayLocalhost = /^http:\/\/127\.0\.0\.1:\d+\//.test(url)
 
-		if (isDevServer || isFileProtocol) {
+		if (isDevServer || isFileProtocol || isGatewayLocalhost) {
 			return // allow
 		}
 
@@ -78,11 +79,22 @@ function createWindow(): void {
 		}
 	})
 
-	// 开发模式加载 Vite dev server，生产模式加载打包文件
+	// 开发模式加载 Vite dev server，生产模式从 Gateway HTTP 服务加载前端
 	if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
 		mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+	} else if (gatewayReady && gatewayAddress) {
+		const url = gatewayToken
+			? `http://${gatewayAddress}/?token=${encodeURIComponent(gatewayToken)}`
+			: `http://${gatewayAddress}/`
+		console.log(`[Electron] Loading from Gateway: ${url.replace(gatewayToken, '[TOKEN]')}`)
+		mainWindow.loadURL(url)
 	} else {
-		mainWindow.loadFile(join(__dirname, '../dist/index.html'))
+		// Gateway 未就绪时的兜底页面
+		mainWindow.loadURL(
+			`data:text/html,${encodeURIComponent(
+				'<html><head><style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#0f0f23;color:#e6e6e6;}</style></head><body><div><h1>NeoCode</h1><p>Gateway failed to start. Please restart the application.</p></div></body></html>'
+			)}`
+		)
 	}
 }
 
