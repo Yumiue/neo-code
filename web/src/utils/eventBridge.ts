@@ -572,13 +572,14 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
     case EventType.CheckpointWarning: {
       const payload = eventPayload as CheckpointWarningPayload | undefined
       if (payload) insightStore.setCheckpointWarning(payload)
-      uiStore.showToast(`Checkpoint warning: ${strField(eventPayload, 'phase')}`, 'info')
+      uiStore.showToast(`Checkpoint warning: ${payload?.error ?? 'unknown error'}`, 'info')
       break
     }
 
     case EventType.CheckpointRestored: {
       const payload = eventPayload as CheckpointRestoredPayload | undefined
       if (payload) insightStore.addCheckpointEvent(payload)
+      chatStore.markAllCheckpointsRestored()
       uiStore.showToast('Checkpoint restored', 'success')
       break
     }
@@ -586,6 +587,7 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
     case EventType.CheckpointUndoRestore: {
       const payload = eventPayload as CheckpointUndoRestorePayload | undefined
       if (payload) insightStore.addCheckpointEvent(payload)
+      chatStore.markAllCheckpointsAvailable()
       uiStore.showToast('Checkpoint restore undone', 'success')
       break
     }

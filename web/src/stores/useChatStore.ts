@@ -82,6 +82,10 @@ interface ChatState {
   attachCheckpointToToolCall: (toolCallId: string, checkpointId: string) => void
   /** 更新某条已挂 checkpoint 的 tool_call 消息的撤回状态 */
   setCheckpointStatus: (toolCallId: string, status: NonNullable<ChatMessage['checkpointStatus']>) => void
+  /** 将所有 available 的 checkpoint 标记为 restored */
+  markAllCheckpointsRestored: () => void
+  /** 将所有 restored 的 checkpoint 标记回 available */
+  markAllCheckpointsAvailable: () => void
   /** 更新一条 verification 消息的 data(verification 进行中持续更新同一条消息) */
   updateVerificationMessage: (messageId: string, data: VerificationRunRecord) => void
   setGenerating: (v: boolean) => void
@@ -287,6 +291,24 @@ export const useChatStore = create<ChatState>((set) => ({
       messages: s.messages.map((m) =>
         m.toolCallId === toolCallId && m.type === 'tool_call'
           ? { ...m, checkpointStatus: status }
+          : m
+      ),
+    })),
+
+  markAllCheckpointsRestored: () =>
+    set((s) => ({
+      messages: s.messages.map((m) =>
+        m.checkpointStatus === 'available'
+          ? { ...m, checkpointStatus: 'restored' as const }
+          : m
+      ),
+    })),
+
+  markAllCheckpointsAvailable: () =>
+    set((s) => ({
+      messages: s.messages.map((m) =>
+        m.checkpointStatus === 'restored'
+          ? { ...m, checkpointStatus: 'available' as const }
           : m
       ),
     })),

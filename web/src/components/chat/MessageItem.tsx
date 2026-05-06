@@ -1,7 +1,7 @@
 import { memo, useState } from 'react'
 import { useChatStore, type ChatMessage } from '@/stores/useChatStore'
 import { useComposerStore } from '@/stores/useComposerStore'
-import { useSessionStore } from '@/stores/useSessionStore'
+import { useSessionStore, loadSessionWithInsights, mapHistoryMessages, type BackendMessage } from '@/stores/useSessionStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useGatewayAPI } from '@/context/RuntimeProvider'
 import { findCheckpointBeforeMessage } from '@/utils/findCheckpointBeforeMessage'
@@ -68,7 +68,6 @@ function UserMessage({ message }: { message: ChatMessage }) {
     (s) => findCheckpointBeforeMessage(s.messages, message.id)?.checkpointId ?? null,
   )
   const setComposerText = useComposerStore((s) => s.setComposerText)
-  const truncateFromMessage = useChatStore((s) => s.truncateFromMessage)
   const [confirming, setConfirming] = useState(false)
   const [reverting, setReverting] = useState(false)
 
@@ -85,8 +84,14 @@ function UserMessage({ message }: { message: ChatMessage }) {
       await gatewayAPI.restoreCheckpoint({ session_id: sessionId, checkpoint_id: checkpointId })
       setComposerText(message.content)
       resetEventBridgeCursors()
-      truncateFromMessage(message.id)
-      // 截断后本组件会被卸载，setReverting(false) 不会落到已卸载实例
+      // Reload session from backend to ensure consistency
+      const sessionFrame = await loadSessionWithInsights(gatewayAPI, sessionId)
+      const sessionData = sessionFrame.payload as { messages?: BackendMessage[]; agent_mode?: string }
+      if (sessionData?.messages) {
+        useChatStore.getState().clearMessages()
+        const mapped = mapHistoryMessages(sessionData.messages)
+        for (const msg of mapped) useChatStore.getState().addMessage(msg)
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Revert failed'
       useUIStore.getState().showToast('Revert failed: ' + msg, 'error')
