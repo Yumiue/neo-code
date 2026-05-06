@@ -382,6 +382,39 @@ func TestDiscoverContractAcrossDrivers(t *testing.T) {
 	}
 }
 
+func TestDiscoverUnsupportedDrivers(t *testing.T) {
+	testCases := []struct {
+		name   string
+		driver provider.DriverDefinition
+	}{
+		{name: "deepseek_discover_unsupported", driver: deepseek.Driver()},
+		{name: "minimax_discover_unsupported", driver: minimax.Driver()},
+		{name: "qwen_discover_unsupported", driver: qwen.Driver()},
+		{name: "glm_discover_unsupported", driver: glm.Driver()},
+		{name: "mimo_discover_unsupported", driver: mimo.Driver()},
+	}
+
+	for _, tt := range testCases {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			reg := provider.NewRegistry()
+			if err := reg.Register(tt.driver); err != nil {
+				t.Fatalf("Register() error = %v", err)
+			}
+			if reg.SupportsDiscovery(tt.driver.Name) {
+				t.Fatalf("expected driver %q to not support discovery", tt.driver.Name)
+			}
+			_, err := reg.DiscoverModels(context.Background(), provider.RuntimeConfig{Driver: tt.driver.Name})
+			if err == nil {
+				t.Fatal("expected discovery unsupported error, got nil")
+			}
+			if !provider.IsDiscoveryConfigError(err) {
+				t.Fatalf("expected discovery config error, got %T: %v", err, err)
+			}
+		})
+	}
+}
+
 func TestGenerateErrorClassificationAcrossDrivers(t *testing.T) {
 	testCases := []struct {
 		name        string

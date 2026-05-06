@@ -28,12 +28,8 @@ func TestDriverBuildAndDiscover(t *testing.T) {
 	if _, err := driver.Build(context.Background(), cfg); err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	models, err := driver.Discover(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("Discover() error = %v", err)
-	}
-	if len(models) != 0 {
-		t.Fatalf("expected empty models, got: %+v", models)
+	if driver.Discover != nil {
+		t.Fatal("expected Discover to be nil for built-in driver")
 	}
 	if err := driver.ValidateCatalogIdentity(provider.ProviderIdentity{}); err != nil {
 		t.Fatalf("ValidateCatalogIdentity() error = %v", err)

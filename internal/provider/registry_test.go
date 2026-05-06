@@ -243,25 +243,6 @@ func TestRegistryRegisterErrors(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
-
-	t.Run("nil discover function", func(t *testing.T) {
-		t.Parallel()
-
-		registry := provider.NewRegistry()
-		err := registry.Register(provider.DriverDefinition{
-			Name: "test",
-			Build: func(ctx context.Context, cfg provider.RuntimeConfig) (provider.Provider, error) {
-				return nil, nil
-			},
-			Discover: nil,
-		})
-		if err == nil {
-			t.Fatal("expected error for nil discover function")
-		}
-		if err.Error() != `provider: driver "test" discover func is nil` {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
 }
 
 func TestRegistryDriverWithNilMap(t *testing.T) {
