@@ -161,7 +161,12 @@ function AIMessage({ message, isLast, children, groupedWithPrev = false }: { mes
 }
 
 function ThinkingMessage({ message, groupedWithPrev = false }: { message: ChatMessage; groupedWithPrev?: boolean }) {
-  const [expanded, setExpanded] = useState(false)
+  const collapsed = message.thinkingData?.collapsed ?? false
+  const isStreaming = message.streaming === true
+  const [manualExpanded, setManualExpanded] = useState<boolean | null>(null)
+
+  // streaming 时展开，collapsed 且无手动覆盖时折叠
+  const expanded = manualExpanded !== null ? manualExpanded : (isStreaming || !collapsed)
 
   return (
     <div style={groupedWithPrev ? styles.aiRowGrouped : styles.aiRow} className="animate-fade-in">
@@ -173,11 +178,14 @@ function ThinkingMessage({ message, groupedWithPrev = false }: { message: ChatMe
         </div>
       )}
       <div style={styles.aiContent}>
-        <button style={styles.thinkingToggle} onClick={() => setExpanded(!expanded)}>
+        <button style={styles.thinkingToggle} onClick={() => setManualExpanded(!expanded)}>
           <span style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.2s', display: 'flex' }}>
             <ChevronRight size={14} />
           </span>
-          <span style={styles.thinkingLabel}>AI 思考过程</span>
+          <span style={styles.thinkingLabel}>
+            {isStreaming ? 'AI 正在思考...' : 'AI 思考过程'}
+          </span>
+          {isStreaming && <Loader2 size={12} className="animate-spin" style={{ marginLeft: 4 }} />}
         </button>
         {expanded && (
           <div style={styles.thinkingContent}>

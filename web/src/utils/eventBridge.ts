@@ -228,7 +228,21 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
   }
 
   switch (eventType) {
+    case EventType.ThinkingDelta: {
+      const text = eventPayload as string | undefined
+      if (!text) break
+      if (!chatStore.streamingThinkingMessageId) {
+        useChatStore.getState().startThinkingMessage()
+      }
+      useChatStore.getState().appendThinkingChunk(text)
+      break
+    }
+
     case EventType.AgentChunk: {
+      // 终结 thinking 消息
+      if (chatStore.streamingThinkingMessageId) {
+        chatStore.finalizeThinkingMessage()
+      }
       const text = eventPayload as string | undefined
       if (!text) break
       if (!chatStore.streamingMessageId) {
@@ -239,6 +253,9 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
     }
 
     case EventType.AgentDone: {
+      if (chatStore.streamingThinkingMessageId) {
+        chatStore.finalizeThinkingMessage()
+      }
       if (chatStore.streamingMessageId) {
         const parts = (eventPayload as { parts?: { text?: string }[] } | undefined)?.parts
         const content = parts && Array.isArray(parts)
