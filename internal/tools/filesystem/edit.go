@@ -130,5 +130,6 @@ func (t *EditTool) Execute(ctx context.Context, input tools.ToolCallInput) (tool
 			"search_length":      len(args.SearchString),
 			"replacement_length": len(args.ReplaceString),
 		},
+		Facts: tools.ToolExecutionFacts{WorkspaceWrite: true},
 	}, nil
 }

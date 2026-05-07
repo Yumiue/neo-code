@@ -141,6 +141,7 @@ func (t *WriteFileTool) Execute(ctx context.Context, input tools.ToolCallInput) 
 			"noop_write":        false,
 			"content_unchanged": false,
 		},
+		Facts: tools.ToolExecutionFacts{WorkspaceWrite: true},
 	}
 	if token, ok := compactWriteVerificationToken(args.Content); ok {
 		result.Metadata["written_content"] = token
