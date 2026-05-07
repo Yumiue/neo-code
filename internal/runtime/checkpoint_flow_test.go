@@ -680,8 +680,8 @@ func TestCheckpointDiffSelectsLatestCodeCheckpointAndRejectsSessionOnlyTarget(t 
 	if err := os.WriteFile(target, []byte("two\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(cp1 next) error = %v", err)
 	}
-	if _, err := perEditStore.Finalize("cp-1"); err != nil {
-		t.Fatalf("Finalize(cp-1) error = %v", err)
+	if _, err := perEditStore.FinalizeWithExactState("cp-1"); err != nil {
+		t.Fatalf("FinalizeWithExactState(cp-1) error = %v", err)
 	}
 	perEditStore.Reset()
 
@@ -691,10 +691,14 @@ func TestCheckpointDiffSelectsLatestCodeCheckpointAndRejectsSessionOnlyTarget(t 
 	if err := os.WriteFile(target, []byte("three\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(cp2 next) error = %v", err)
 	}
-	if _, err := perEditStore.Finalize("cp-2"); err != nil {
-		t.Fatalf("Finalize(cp-2) error = %v", err)
+	if _, err := perEditStore.FinalizeWithExactState("cp-2"); err != nil {
+		t.Fatalf("FinalizeWithExactState(cp-2) error = %v", err)
 	}
 	perEditStore.Reset()
+
+	if err := os.WriteFile(target, []byte("four\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(four) error = %v", err)
+	}
 
 	spy := &checkpointStoreSpy{
 		listRecords: []agentsession.CheckpointRecord{
@@ -773,6 +777,87 @@ func TestCheckpointDiffRejectsMissingStateAndReturnsEmptyWhenNoPreviousSnapshot(
 	}
 	if result.CheckpointID != "cp-only" || result.PrevCheckpointID != "" || result.Patch != "" {
 		t.Fatalf("CheckpointDiff() = %#v, want latest checkpoint without previous diff", result)
+	}
+}
+
+func TestCheckpointDiffRunScopeAggregatesCurrentRun(t *testing.T) {
+	now := time.Now().UTC()
+	workdir := t.TempDir()
+	projectDir := t.TempDir()
+	perEditStore := checkpoint.NewPerEditSnapshotStore(projectDir, workdir)
+	target := filepath.Join(workdir, "tracked.txt")
+	if err := os.WriteFile(target, []byte("one\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(base) error = %v", err)
+	}
+	if _, err := perEditStore.CapturePreWrite(target); err != nil {
+		t.Fatalf("CapturePreWrite(cp1) error = %v", err)
+	}
+	if err := os.WriteFile(target, []byte("two\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(two) error = %v", err)
+	}
+	if _, err := perEditStore.Finalize("cp-1"); err != nil {
+		t.Fatalf("Finalize(cp-1) error = %v", err)
+	}
+	perEditStore.Reset()
+
+	if _, err := perEditStore.CapturePreWrite(target); err != nil {
+		t.Fatalf("CapturePreWrite(cp2) error = %v", err)
+	}
+	if err := os.WriteFile(target, []byte("three\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(three) error = %v", err)
+	}
+	if _, err := perEditStore.Finalize("cp-2"); err != nil {
+		t.Fatalf("Finalize(cp-2) error = %v", err)
+	}
+	perEditStore.Reset()
+
+	spy := &checkpointStoreSpy{
+		listRecords: []agentsession.CheckpointRecord{
+			{
+				CheckpointID:      "cp-other",
+				SessionID:         "session-1",
+				RunID:             "run-other",
+				CreatedAt:         now.Add(3 * time.Second),
+				CodeCheckpointRef: checkpoint.RefForPerEditCheckpoint("cp-other"),
+			},
+			{
+				CheckpointID:      "cp-2",
+				SessionID:         "session-1",
+				RunID:             "run-1",
+				CreatedAt:         now.Add(2 * time.Second),
+				CodeCheckpointRef: checkpoint.RefForPerEditCheckpoint("cp-2"),
+			},
+			{
+				CheckpointID:      "cp-1",
+				SessionID:         "session-1",
+				RunID:             "run-1",
+				CreatedAt:         now.Add(time.Second),
+				CodeCheckpointRef: checkpoint.RefForPerEditCheckpoint("cp-1"),
+			},
+		},
+	}
+	service := &Service{
+		checkpointStore: spy,
+		perEditStore:    perEditStore,
+	}
+
+	result, err := service.CheckpointDiff(context.Background(), CheckpointDiffInput{
+		SessionID:    "session-1",
+		CheckpointID: "cp-2",
+		RunID:        "run-1",
+		Scope:        "run",
+	})
+	if err != nil {
+		t.Fatalf("CheckpointDiff(run) error = %v", err)
+	}
+	if result.CheckpointID != "cp-2" {
+		t.Fatalf("CheckpointID = %q, want cp-2", result.CheckpointID)
+	}
+	if len(result.Files.Modified) != 1 || result.Files.Modified[0] != "tracked.txt" {
+		t.Fatalf("modified files = %+v, want tracked.txt", result.Files.Modified)
+	}
+	if !strings.Contains(result.Patch, "-one") || !strings.Contains(result.Patch, "+three") || strings.Contains(result.Patch, "-two") || strings.Contains(result.Patch, "+four") {
+		t.Fatalf("run patch should compare one to three only, got:\n%s", result.Patch)
 	}
 }
 
