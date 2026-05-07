@@ -157,7 +157,7 @@ func (w *WebhookIngress) handleCardCallback(handler IngressHandler) http.Handler
 			RequestID: requestID,
 			Decision:  decision,
 		}); err != nil {
-			writeJSON(writer, http.StatusOK, map[string]any{"toast": map[string]string{"type": "error", "content": "审批提交失败"}})
+			http.Error(writer, "card action failed", http.StatusInternalServerError)
 			return
 		}
 		writeJSON(writer, http.StatusOK, map[string]any{"toast": map[string]string{"type": "success", "content": "审批已提交"}})

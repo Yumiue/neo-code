@@ -89,7 +89,7 @@ SDK 模式下不要求公网回调地址，不要求 `adapter.listen/event_path/
   - `审批`：`none / pending / approved / rejected`
   - `结果`：`pending / success / failure`
 - `permission_requested`、`hook_notification(async_rewake)`、`run_done`、`run_error` 都会更新同一张卡片，不额外刷多条进度文本。
-- 最终完成/失败仍会回传一条用户可读文本，卡片则保留结构化状态摘要，便于下一轮继续追踪。
+- 最终完成/失败仅更新卡片结果与摘要区，不额外回传独立文本消息。
 
 ## 7. 审批能力边界
 

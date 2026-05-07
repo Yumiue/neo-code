@@ -661,7 +661,7 @@ func TestCardCallbackDedupeResolveOnce(t *testing.T) {
 	}
 }
 
-func TestCardCallbackResolveFailureKeepsHTTP200(t *testing.T) {
+func TestCardCallbackResolveFailureReturns500(t *testing.T) {
 	adapter := newTestAdapter(t)
 	gateway := adapterTestGateway(adapter)
 	gateway.mu.Lock()
@@ -672,11 +672,8 @@ func TestCardCallbackResolveFailureKeepsHTTP200(t *testing.T) {
 	request := signedRequest(t, adapter.cfg.SigningSecret, body)
 	recorder := httptest.NewRecorder()
 	adapter.handleCardCallback(recorder, request)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", recorder.Code)
-	}
-	if !strings.Contains(recorder.Body.String(), "审批提交失败") {
-		t.Fatalf("response = %s, want failure toast", recorder.Body.String())
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", recorder.Code)
 	}
 }
 
