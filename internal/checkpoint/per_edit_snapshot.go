@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/pmezard/go-difflib/difflib"
+
+	"neo-code/internal/repository"
 )
 
 const (
@@ -497,20 +499,17 @@ func (s *PerEditSnapshotStore) HasPending() bool {
 	return len(s.pending) > 0
 }
 
-// FileChangeKind 表示两个 checkpoint 之间单个 path 的变更类别。
-type FileChangeKind string
+// FileChangeKind 是 repository.FileChangeKind 的别名，保留以维持向后兼容。
+type FileChangeKind = repository.FileChangeKind
 
 const (
-	FileChangeAdded    FileChangeKind = "added"
-	FileChangeDeleted  FileChangeKind = "deleted"
-	FileChangeModified FileChangeKind = "modified"
+	FileChangeAdded    = repository.FileChangeAdded
+	FileChangeDeleted  = repository.FileChangeDeleted
+	FileChangeModified = repository.FileChangeModified
 )
 
-// FileChangeEntry 描述端到端 diff 中单个 path 的变更。
-type FileChangeEntry struct {
-	Path string
-	Kind FileChangeKind
-}
+// FileChangeEntry 是 repository.FileChangeEntry 的别名，保留以维持向后兼容。
+type FileChangeEntry = repository.FileChangeEntry
 
 // DiffCheckpointsToWorkdir 按多个 checkpoint 的首次触碰版本作为基线，对比当前工作区最终状态。
 func (s *PerEditSnapshotStore) DiffCheckpointsToWorkdir(ctx context.Context, checkpointIDs []string) (string, []FileChangeEntry, error) {
